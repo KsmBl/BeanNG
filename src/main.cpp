@@ -18,7 +18,7 @@ namespace {
 constexpr double kPhysDt = 1.0 / 2000.0;
 constexpr int kMaxStepsPerSlice = 80;  // never spiral: if we fall behind, time simply slows down
 
-const V3 kSpawn{-90, 0, 0};
+V3 kSpawn{-90, 0, 0};
 
 // Everything the input thread hands to the physics thread.
 struct SharedInput {
@@ -81,6 +81,8 @@ struct Game {
     s.events.insert(s.events.end(), sim.events.begin(), sim.events.end());
     if (s.events.size() > 2000) s.events.clear();
     sim.events.clear();
+    if (s.scrapes.size() < 2000) s.scrapes.insert(s.scrapes.end(), sim.scrapes.begin(), sim.scrapes.end());
+    sim.scrapes.clear();
     s.carCog = car.cog;
     s.carFwd = car.fwd;
     s.carUp = car.up;
@@ -329,6 +331,10 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--shots") && i + 1 < argc) shotDir = argv[++i];
     if (!strcmp(argv[i], "--script") && i + 1 < argc) scriptMode = atoi(argv[++i]);
+    if (!strcmp(argv[i], "--spawn") && i + 2 < argc) {
+      kSpawn.x = atof(argv[++i]);
+      kSpawn.y = atof(argv[++i]);
+    }
     if (!strcmp(argv[i], "--help")) {
       printf("beanng [--shots DIR --script N]\n");
       return 0;
@@ -623,6 +629,7 @@ int main(int argc, char** argv) {
     // Scripted runs for automated screenshots.
     bool scripted = false;
     bool scriptHand = false;
+    double scriptBrake = 0;
     double scriptGas = 0, scriptSteer = 0;
     if (scriptMode > 0) {
       scripted = true;
@@ -669,6 +676,16 @@ int main(int argc, char** argv) {
           G.input.c.handbrake = 0;
           scriptHand = tNow > 6.0 && tNow < 8.0;
           break;
+        case 14:
+        case 13:  // scrape the left flank along a wall, then show it
+          rig.mode = CAM_ORBIT;
+          rig.dist = 4.6;
+          rig.pitch = 0.10;
+          rig.yaw = 1.75;
+          scriptGas = scriptMode == 14 ? 0.0 : (view.speedKmh < 40 && view.carCog.x < 93 ? 0.6 : 0.0);
+          scriptSteer = view.carCog.x < 91 ? 0.012 : 0.0;
+          scriptBrake = scriptMode == 14 || view.carCog.x > 93 ? 1.0 : 0.0;
+          break;
         case 10:  // close look at a tyre going flat and a dented rim
           rig.mode = CAM_ORBIT;
           rig.dist = 2.6;
@@ -709,7 +726,7 @@ int main(int argc, char** argv) {
       Controls& c = G.input.c;
       c.steer = scripted && !scriptPad ? scriptSteer : steer;
       c.throttle = scripted && !scriptPad ? scriptGas : gas;
-      c.brake = scripted && !scriptPad ? 0.0 : brake;
+      c.brake = scripted && !scriptPad ? scriptBrake : brake;
       c.handbrake = scriptHand ? 1.0 : hb;
       c.shiftUp |= sendC.shiftUp;
       c.shiftDown |= sendC.shiftDown;
@@ -739,6 +756,8 @@ int main(int argc, char** argv) {
       }
       view.events = std::move(G.snap.events);
       G.snap.events.clear();
+      view.scrapes = std::move(G.snap.scrapes);
+      G.snap.scrapes.clear();
       view.carCog = G.snap.carCog;
       view.carFwd = G.snap.carFwd;
       view.carUp = G.snap.carUp;
@@ -786,6 +805,12 @@ int main(int argc, char** argv) {
       view.timeScale = G.snap.timeScale;
     }
 
+    if (scriptMode == 14) {
+      // Visual test: strokes along the left flank, as if dragged along a wall at two heights.
+      for (double z : {0.62, 0.72, 0.48})
+        for (double xd = -1.2; xd <= 1.2; xd += 0.3)
+          view.scrapes.push_back({kSpawn + V3{xd, 0.87, z}, V3{1, 0, 0}, 1.f});
+    }
     if (lmb && grabNode >= 0) {
       int w, h;
       SDL_GetWindowSizeInPixels(window, &w, &h);
@@ -802,6 +827,10 @@ int main(int argc, char** argv) {
     if (scriptMode == 10) {  // close-up of the front left wheel
       cam.target = view.wheels[0].hub + V3{0, 0, -0.05};
       cam.eye = cam.target + V3{0.55, 1.15, 0.12};
+    }
+    if (scriptMode == 13 || scriptMode == 14) {  // close look along the left flank
+      cam.target = view.carCog + view.carFwd * -0.2 + view.carUp * 0.05;
+      cam.eye = cam.target + view.carLeft * 2.7 + view.carFwd * 0.5 + view.carUp * 0.25;
     }
     if (scriptMode == 11) {  // close-up of a rear corner
       const V3 corner = view.carCog + view.carFwd * -2.25 + view.carLeft * 0.55 + view.carUp * 0.5;
@@ -820,12 +849,14 @@ int main(int argc, char** argv) {
         char path[512];
         snprintf(path, sizeof path, "%s/shot_%02d.png", shotDir.c_str(), shotCount++);
         renderer.savePng(path, w, h);
-        if (shotCount == 1) printf("fps %.0f gpu %s\n", hud.fps, hud.gpuName.c_str());
+        printf("fps %.0f ", hud.fps);
         printf("t=%.1f v=%.0f km/h x=%.1f z=%.2f steer=%+.2f gear=%d gas=%.2f br=%.2f plastic=%.1f kJ awake=%d load=%.0f%% pad=%d\n", tNow, view.speedKmh, view.carCog.x, view.carCog.z, view.steer, view.gear, view.throttle, view.brake, view.plastic / 1e3, view.awake, view.physLoad * 100, hud.gamepad);
         const bool burst = scriptMode == 7 || scriptMode == 8;
         nextShot += burst ? 0.0 : 1.0;
         if (burst && nextShot < 6.0) nextShot = 6.0;
         if (shotCount >= (burst ? 6 : (scriptMode == 9 ? 7 : (scriptMode == 12 ? 13 : 19)))) quit = true;
+        if (scriptMode == 14 && tNow > 6.0) quit = true;
+        if (scriptMode == 13 && view.carCog.x > 93 && std::fabs(view.speedKmh) < 2) quit = true;
       }
     }
     if (wantShot) {
@@ -835,7 +866,14 @@ int main(int argc, char** argv) {
       printf("Screenshot: %s\n", path);
       wantShot = false;
     }
-    SDL_GL_SwapWindow(window);
+    {
+      auto ts = std::chrono::steady_clock::now();
+      SDL_GL_SwapWindow(window);
+      if (getenv("BEANNG_PROFILE")) {
+        static int n = 0;
+        if (++n % 30 == 0) fprintf(stderr, "swap %.1f ms, whole frame %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ts).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - now).count());
+      }
+    }
   }
 
   G.running = false;

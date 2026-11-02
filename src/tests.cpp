@@ -1101,6 +1101,38 @@ void testSplit() {
     printf("  gauntlet: %zu objects in the end, peak awake %zu, %.0f %% of real time, guard %llu, sane %d\n", b.sim.objs.size(), peak, wall / 16.0 * 100, (unsigned long long)b.sim.clampedSteps, b.sane());
   }
   {
+    // Worst case for the visible mesh: the body cut in two through the middle.
+    Bench b;
+    CarMesh mesh;
+    mesh.load("assets/xantia.mesh");
+    mesh.bind(b.sim.rest, b.skin.groups, {-90, 0, 0});
+    const double cut = -90.0 + 2.26 - 2.2;
+    for (u32 bi : std::vector<u32>(b.sim.objs[0].beamList)) {
+      Beam& B = b.sim.beams[bi];
+      if ((b.sim.rest[B.a].x < cut) != (b.sim.rest[B.b].x < cut)) B.flags |= BF_BROKEN;
+    }
+    b.sim.objs[0].dirty = true;
+    b.run(1.5, [](double, Controls&) {});
+    const size_t changed = mesh.rebindAfterTear(b.sim.rest, b.skin.groups, {-90, 0, 0}, b.sim.nodeObj);
+    std::string worst;
+    const double err = mesh.restError(b.sim.rest, {-90, 0, 0}, &worst);
+    size_t straddle = 0;
+    constexpr int K = CarMesh::kK;
+    for (size_t v = 0; v < mesh.restPos.size() / 3; v++) {
+      u16 first = 0xffff;
+      for (int k = 0; k < K; k++)
+        if (mesh.bindWeight[v * K + k] != 0.f) {
+          const u16 o = b.sim.nodeObj[mesh.bindNode[v * K + k]];
+          if (first == 0xffff) first = o;
+          else if (o != first) {
+            straddle++;
+            break;
+          }
+        }
+    }
+    printf("  body cut in two: %zu objects, %zu vertices re-bound, %zu still straddling, max rest error %.1f mm (%s), guard %llu, sane %d\n", b.sim.objs.size(), changed, straddle, err * 1000, worst.c_str(), (unsigned long long)b.sim.clampedSteps, b.sane());
+  }
+  {
     // Crash hard enough to lose parts of the car.
     Bench b({60, -30, 0}, 0);
     CarMesh mesh;
@@ -1115,6 +1147,30 @@ void testSplit() {
     const double err = mesh.restError(b.sim.rest, {60, -30, 0}, &worst);
     printf("  wall at 170 km/h: car split into %zu objects, %zu nodes came off, %zu mesh vertices re-bound, mesh rest error %.2f mm (%s), sane %d, guard %llu\n", b.sim.objs.size(), detached, changed, err * 1000, worst.c_str(), b.sane(), (unsigned long long)b.sim.clampedSteps);
   }
+}
+
+void testWinding() {
+  CarMesh m;
+  m.load("assets/xantia.mesh");
+  printf("== Triangle winding against stored normals, outer parts ==\n");
+  int bad = 0;
+  for (const MeshPart& p : m.parts) {
+    double area = 0, wrongArea = 0;
+    for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++) {
+      const u32 ia = m.tris[t * 3], ib = m.tris[t * 3 + 1], ic = m.tris[t * 3 + 2];
+      auto P = [&](u32 v) { return V3{m.restPos[v * 3], m.restPos[v * 3 + 1], m.restPos[v * 3 + 2]}; };
+      auto N = [&](u32 v) { return V3{m.restNormal[v * 3], m.restNormal[v * 3 + 1], m.restNormal[v * 3 + 2]}; };
+      const V3 fn = cross(P(ib) - P(ia), P(ic) - P(ia));
+      const double A = len(fn);
+      area += A;
+      if (dot(fn, N(ia) + N(ib) + N(ic)) < 0) wrongArea += A;
+    }
+    if (wrongArea > 0.02 * area) {
+      bad++;
+      printf("  %-20s group %-10s mat %2d: %.0f %% of its area wound against its normals\n", p.name.c_str(), p.group.c_str(), p.mat, 100 * wrongArea / area);
+    }
+  }
+  printf("  %d of %zu parts wrong\n", bad, m.parts.size());
 }
 
 void testTorn() {
@@ -1263,6 +1319,10 @@ int main(int argc, char** argv) {
     testWheelStrike();
   }
   if (want("compliance")) testCompliance();
+  if (argc > 1 && !strcmp(argv[1], "winding")) {
+    testWinding();
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "split")) {
     testSplit();
     return 0;

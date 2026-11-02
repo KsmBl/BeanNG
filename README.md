@@ -54,6 +54,8 @@ und Bordsteine (y = 70 bis 100) sowie die Landstraße rund um die Fläche.
     ./build/beanng-test                    # alles
     ./build/beanng-test crash skidpad      # einzelne Tests
 
+Einzelne Sondertests: `split`, `torn`, `slow`, `winding`. `BEANNG_PROFILE=1 ./run.sh` zeigt die Zeit pro Bild.
+
 Tests: `statics bounce accel brake skidpad crash rough jitter response compliance wheel powertrain rest props perf`
 
 Die Fahrzeugdaten sind angenäherte Werte, keine Herstellerdaten.

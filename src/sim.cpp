@@ -570,6 +570,19 @@ void Sim::collidePairs(double dt) {
     force[t.c] -= F * h.w2;
 
     if (std::fabs(vn) > 6.0 && fn > 5000.0) event(EV_SPARK, pos[pr.node], vel[pr.node], float(std::fabs(vn)));
+
+    // Scratches, purely visual. Whichever side of the contact is the car gets marked.
+    if (((stepCount + pr.node) & 7) == 0 && scrapes.size() < 400) {
+      const bool nodeCar = objs[nodeObj[pr.node]].root == 0, triCar = objs[t.obj].root == 0;
+      if (nodeCar != triCar) {
+        const V3 slide = vrel - h.n * vn;
+        const double sp = len(slide);
+        if (sp > 1.0 && fn > 150.0) {
+          const V3 at = nodeCar ? rest[pr.node] : rest[t.a] * h.w0 + rest[t.b] * h.w1 + rest[t.c] * h.w2;
+          scrapes.push_back({at, slide / sp, float(clampd(fn / 4000.0, 0.15, 1.0))});
+        }
+      }
+    }
   }
 
   for (const BlockHit& h : blockHits) {
@@ -621,6 +634,8 @@ void Sim::collideWorld(double dt) {
       force[i] += c.n * fn + ff;
 
       const double vt2 = len2(vel[i]) - vn * vn;
+      if (((stepCount + i) & 7) == 0 && !(fl & NF_WHEEL) && vt2 > 1.0 && fn > 150.0 && objs[oi].root == 0 && scrapes.size() < 400)
+        scrapes.push_back({rest[i], norm(vel[i] - c.n * vn), float(clampd(fn / 4000.0, 0.15, 1.0))});
       if (vt2 > 16.0 && fn > 300.0 && (stepCount & 15) == 0) {
         const bool soft = c.surface == SURF_GRASS || c.surface == SURF_GRAVEL;
         event(soft ? EV_DUST : EV_SPARK, pos[i], vel[i], float(std::sqrt(vt2)));

@@ -24,6 +24,7 @@ struct Snapshot {
   std::vector<float> beamForce;  // 0 means broken, for the debug overlay
   WheelView wheels[4];
   std::vector<SimEvent> events;
+  std::vector<Scrape> scrapes;
   V3 carCog, carFwd{1, 0, 0}, carUp{0, 0, 1}, carLeft{0, 1, 0}, carVel;
   u32 headNode = 0;
   u32 splitGeneration = 0;

@@ -1,6 +1,8 @@
 #include "render.h"
 #include <epoxy/gl.h>
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <random>
@@ -92,11 +94,15 @@ const char* kMeshVS = R"(#version 330 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
 layout(location=2) in vec4 aCol;
+layout(location=3) in vec3 aRest;
+layout(location=4) in vec4 aScratch;
 uniform mat4 uVP;
 uniform mat4 uModel;
 uniform mat4 uShadowVP;
-out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow;
+out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow; out vec3 vRest; out vec4 vScratch;
 void main(){
+  vRest = aRest;
+  vScratch = aScratch;
   vec4 w = uModel * vec4(aPos,1.0);
   vPos = w.xyz;
   vNrm = mat3(uModel) * aNrm;
@@ -107,7 +113,7 @@ void main(){
 
 // aCol.a encodes the material: <0.5 matte, 0.5..0.9 paint with sky reflection, 1 = opaque glossy
 const char* kMeshFS = R"(#version 330 core
-in vec3 vPos; in vec3 vNrm; in vec4 vCol; in vec4 vShadow;
+in vec3 vPos; in vec3 vNrm; in vec4 vCol; in vec4 vShadow; in vec3 vRest; in vec4 vScratch;
 uniform vec3 uEye;
 uniform vec3 uSun;
 uniform sampler2DShadow uShadow;
@@ -119,6 +125,27 @@ vec3 sky(vec3 d){
   if(d.z<0.0) c = mix(vec3(0.33,0.32,0.28), c, clamp(1.0+d.z*6.0,0.0,1.0));
   c += vec3(1.0,0.9,0.75)*pow(max(dot(d,uSun),0.0),180.0)*2.5;
   return c;
+}
+float hash1(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// Long thin grooves running along the direction of the scrape, in the car's own coordinates.
+float grooves(vec3 q, vec3 dir, float amount){
+  vec3 d = normalize(dir);
+  vec3 a = normalize(cross(d, vec3(0.31, 0.53, 0.79)));
+  vec3 b = cross(d, a);
+  float along = dot(q, d);
+  float across = dot(q, a) + 0.7*dot(q, b);
+  float result = 0.0;
+  for(int i = 0; i < 3; i++){
+    float f = 160.0 + float(i)*170.0;
+    float line = floor(across*f);
+    float seg = along*(2.5 + float(i)*2.0) + hash1(vec2(line, float(i)))*9.0;
+    float cell = floor(seg);
+    float t = fract(seg);
+    float present = step(1.0 - amount*0.42, hash1(vec2(line, cell + float(i)*17.0)));
+    float taper = smoothstep(0.0, 0.15, t)*(1.0 - smoothstep(0.8, 1.0, t));
+    result = max(result, present*taper*(0.35 + 0.65*hash1(vec2(line*3.1, 7.0))));
+  }
+  return result;
 }
 float shadow(){
   vec3 p = vShadow.xyz/vShadow.w*0.5+0.5;
@@ -132,10 +159,25 @@ void main(){
   vec3 N = normalize(vNrm);
   vec3 V = normalize(uEye - vPos);
   float gloss = vCol.a;
+  vec3 albedo = vCol.rgb;
+  float flash = 0.0;
   if(dot(N,V)<0.0){ N=-N; if(gloss>0.05) gloss=0.0; }
+  else if(vScratch.w > 0.01){
+    // Through the clear coat to the primer, and in the deepest grooves to bare steel.
+    float g = grooves(vRest, vScratch.xyz + vec3(1e-4), clamp(vScratch.w, 0.0, 1.0));
+    if(g > 0.0){
+      vec3 bare = g > 0.85 ? vec3(0.60,0.61,0.63) : vec3(0.34,0.31,0.29);
+      albedo = mix(albedo, bare, g);
+      gloss *= 1.0 - g;
+      flash = g > 0.85 ? 0.2*g : 0.0;
+    }
+    // Dull scuffing around the grooves.
+    gloss *= 1.0 - 0.45*clamp(vScratch.w*1.4, 0.0, 1.0);
+    albedo = mix(albedo, albedo*0.85 + vec3(0.05), clamp(vScratch.w, 0.0, 1.0)*0.5);
+  }
   float diff = max(dot(N,uSun),0.0)*shadow();
   vec3 amb = mix(vec3(0.20,0.19,0.17), vec3(0.34,0.40,0.50), N.z*0.5+0.5);
-  vec3 c = vCol.rgb*(amb + diff*vec3(1.05,1.0,0.92));
+  vec3 c = albedo*(amb + diff*vec3(1.05,1.0,0.92)) + flash*diff*vec3(1.0);
   if(gloss>0.05){
     vec3 R = reflect(-V,N);
     float fres = pow(1.0-max(dot(N,V),0.0),4.0);
@@ -168,9 +210,11 @@ uniform vec2 uRunout;
 uniform vec3 uPlaneN;     // towards the road, wheel frame
 uniform float uPlaneD;    // hub to road
 uniform float uDeflate;
-out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow;
+out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow; out vec3 vRest; out vec4 vScratch;
 const float PI = 3.14159265;
 void main(){
+  vRest = vec3(0.0);
+  vScratch = vec4(0.0);
   vec3 p = aPos;
   vec3 n = aNrm;
   if(uMode > 0){
@@ -316,7 +360,7 @@ struct MatDef {
   float r, g, b, gloss;
 };
 const MatDef kMats[MM_COUNT] = {
-    {0.24f, 0.014f, 0.026f, 0.92f},  // paint: Citroen dark metallic red
+    {0.26f, 0.012f, 0.022f, 0.70f},  // paint: Citroen dark metallic red
     {0.012f, 0.02f, 0.024f, 0.90f},  // glass
     {0.016f, 0.016f, 0.017f, 0.18f}, // black plastic
     {0.012f, 0.012f, 0.012f, 0.0f},  // liner
@@ -399,6 +443,95 @@ struct Renderer::Impl {
 
   GLuint propVao = 0, propVbo = 0;
   std::vector<Vtx> propVerts;
+
+  // Scratches: per-vertex groove direction and depth, in the car's own frame.
+  GLuint carRestVbo = 0, carScratchVbo = 0;
+  std::vector<float> scratch;
+  std::vector<std::vector<u32>> scratchGrid;
+  static constexpr double kScratchCell = 0.30;
+  static constexpr int kGridX = 18, kGridY = 8, kGridZ = 6;
+  bool scratchDirty = false;
+  size_t scrapeTotal = 0;
+  static int gridIndex(double x, double y, double z) {
+    const int ix = std::clamp(int(x / kScratchCell) + 1, 0, kGridX - 1);
+    const int iy = std::clamp(int((y + 1.2) / kScratchCell), 0, kGridY - 1);
+    const int iz = std::clamp(int(z / kScratchCell), 0, kGridZ - 1);
+    return (iz * kGridY + iy) * kGridX + ix;
+  }
+  void buildScratchData() {
+    const CarMesh& M = *mesh;
+    const size_t nv = M.restPos.size() / 3;
+    scratch.assign(nv * 4, 0.f);
+    scratchGrid.assign(size_t(kGridX) * kGridY * kGridZ, {});
+    for (const MeshPart& p : M.parts) {
+      if (!p.bound) continue;
+      // Only the outer skin takes scratches. Glass, lenses and everything inside stay as they are.
+      const bool skin = p.mat == MM_PAINT || p.mat == MM_BLACK || p.mat == MM_DARK || p.mat == MM_CHROME;
+      const bool outer = p.group != "frame" && p.group != "engine" && p.group != "gearbox" && p.group != "radiator" && p.group != "battery" && p.group != "tank";
+      if (!skin || !outer) continue;
+      for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++)
+        scratchGrid[size_t(gridIndex(M.restPos[v * 3], M.restPos[v * 3 + 1], M.restPos[v * 3 + 2]))].push_back(v);
+    }
+    glGenBuffers(1, &carRestVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, carRestVbo);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(M.restPos.size() * sizeof(float)), M.restPos.data(), GL_STATIC_DRAW);
+    glGenBuffers(1, &carScratchVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, carScratchVbo);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(scratch.size() * sizeof(float)), scratch.data(), GL_DYNAMIC_DRAW);
+    for (GLuint vao : {carVao, carGlassVao, lensVao}) {
+      glBindVertexArray(vao);
+      glBindBuffer(GL_ARRAY_BUFFER, carRestVbo);
+      glEnableVertexAttribArray(3);
+      glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+      glBindBuffer(GL_ARRAY_BUFFER, carScratchVbo);
+      glEnableVertexAttribArray(4);
+      glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+    }
+    // Everything else in the world reads the attribute's constant value: no scratches.
+    glBindVertexArray(0);
+    glVertexAttrib4f(4, 0.f, 0.f, 0.f, 0.f);
+    glVertexAttrib3f(3, 0.f, 0.f, 0.f);
+  }
+  void applyScrapes(const Snapshot& s) {
+    const CarMesh& M = *mesh;
+    scrapeTotal += s.scrapes.size();
+    for (const Scrape& sc : s.scrapes) {
+      // To the design frame the mesh was modelled in.
+      const double px = 2.26 - (sc.restPoint.x - spawn.x), py = sc.restPoint.y - spawn.y, pz = sc.restPoint.z - spawn.z;
+      const V3 d{-dot(sc.dir, s.carFwd), dot(sc.dir, s.carLeft), dot(sc.dir, s.carUp)};
+      // The node is only where the structure touches. The skin slides past the obstacle all around
+      // it, so the mark is a long narrow stroke along the direction of travel, not a round spot.
+      constexpr double kAlong = 0.55, kAcross = 0.09;
+      const V3 dn = norm(d);
+      for (int dz = -2; dz <= 2; dz++)
+        for (int dy = -2; dy <= 2; dy++)
+          for (int dx = -2; dx <= 2; dx++) {
+            const double qx = px + dx * kScratchCell, qy = py + dy * kScratchCell, qz = pz + dz * kScratchCell;
+            if (qx < -kScratchCell || qy < -1.2 || qz < 0) continue;
+            for (u32 v : scratchGrid[size_t(gridIndex(qx, qy, qz))]) {
+              const V3 r{M.restPos[v * 3] - px, M.restPos[v * 3 + 1] - py, M.restPos[v * 3 + 2] - pz};
+              const double al = dot(r, dn);
+              const double ac2 = len2(r) - al * al;
+              const double fall = 1.0 - al * al / (kAlong * kAlong) - ac2 / (kAcross * kAcross);
+              if (fall <= 0) continue;
+              const float add = float((0.3 + 0.7 * sc.strength) * fall * 0.06);
+              float* o = &scratch[size_t(v) * 4];
+              // The newest scrape dominates the direction as it goes deeper.
+              const float w = add / (o[3] + add + 1e-4f);
+              o[0] += (float(dn.x) - o[0]) * w;
+              o[1] += (float(dn.y) - o[1]) * w;
+              o[2] += (float(dn.z) - o[2]) * w;
+              o[3] = std::min(1.f, o[3] + add);
+              scratchDirty = true;
+            }
+          }
+    }
+    if (scratchDirty) {
+      glBindBuffer(GL_ARRAY_BUFFER, carScratchVbo);
+      glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(scratch.size() * sizeof(float)), scratch.data());
+      scratchDirty = false;
+    }
+  }
 
   GLuint partVao = 0, partVbo = 0;
   std::vector<Particle> particles;
@@ -719,7 +852,9 @@ struct Renderer::Impl {
         } else if (l1 > kTear * rest[0] + 1e-4f || l2 > kTear * rest[1] + 1e-4f || l3 > kTear * rest[2] + 1e-4f) {
           continue;
         }
-        const float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+        // The mesh is modelled with x running rearwards, the world with x forwards: that mirror turns
+        // the winding around, so the outward normal is the negative of this cross product.
+        const float nx = e1z * e2y - e1y * e2z, ny = e1x * e2z - e1z * e2x, nz = e1y * e2x - e1x * e2y;
         for (u32 q : {a, b, c}) {
           nrmAccum[q * 3] += nx;
           nrmAccum[q * 3 + 1] += ny;
@@ -1249,6 +1384,8 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   glBindVertexArray(d->lensVao);
   d->setupVtxAttribs();
 
+  d->buildScratchData();
+
   glGenVertexArrays(1, &d->propVao);
   glGenBuffers(1, &d->propVbo);
   glBindVertexArray(d->propVao);
@@ -1306,13 +1443,17 @@ void Renderer::clearSkidMarks() {
 
 void Renderer::resetDamage() {
   std::fill(d->partHidden.begin(), d->partHidden.end(), u8(0));
+  std::fill(d->scratch.begin(), d->scratch.end(), 0.f);
+  d->scratchDirty = true;
   d->particles.clear();
 }
 
 void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt) {
   Impl& D = *d;
   D.origin = {};  // positions stay within +-512 m, which is fine for float vertex data
+  auto tp0 = std::chrono::steady_clock::now();
   D.handleEvents(s);
+  D.applyScrapes(s);
   D.xrayNow = hud.xray;
   if (s.splitGeneration != D.seenSplit) {
     if (s.splitGeneration < D.seenSplit) {
@@ -1324,11 +1465,15 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     }
     D.seenSplit = s.splitGeneration;
   }
+  auto tp1 = std::chrono::steady_clock::now();
   D.updateCar(s);
+  auto tp2 = std::chrono::steady_clock::now();
   D.updateProps(s, cam.eye);
+  auto tp3 = std::chrono::steady_clock::now();
   D.stepParticles(dt);
   D.addSkidMarks(s);
   D.buildHud(s, hud, w, h);
+  auto tp4 = std::chrono::steady_clock::now();
 
   // Eye-relative view would be more precise, but +-500 m with 1 mm float steps is good enough.
   const Mat4 view = lookAt(cam.eye, cam.target, cam.up);
@@ -1514,6 +1659,12 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glDisable(GL_BLEND);
   glEnable(GL_DEPTH_TEST);
   glBindVertexArray(0);
+  if (getenv("BEANNG_PROFILE")) {
+    auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    static int n = 0;
+    if (++n % 30 == 0)
+      fprintf(stderr, "scrapes so far %zu, verts >2%% %d, >30%% %d, >80%% %d\n", D.scrapeTotal, [&] { int c = 0; for (size_t i = 3; i < D.scratch.size(); i += 4) c += D.scratch[i] > 0.02f; return c; }(), [&] { int c = 0; for (size_t i = 3; i < D.scratch.size(); i += 4) c += D.scratch[i] > 0.3f; return c; }(), [&] { int c = 0; for (size_t i = 3; i < D.scratch.size(); i += 4) c += D.scratch[i] > 0.8f; return c; }()), fprintf(stderr, "frame: scrapes %.1f car %.1f props %.1f misc %.1f gl %.1f ms\n", ms(tp0, tp1), ms(tp1, tp2), ms(tp2, tp3), ms(tp3, tp4), ms(tp4, std::chrono::steady_clock::now()));
+  }
 }
 
 int Renderer::pickNode(const Snapshot& s, const Camera& cam, int w, int h, double mx, double my, double maxPx) const {

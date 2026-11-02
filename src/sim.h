@@ -93,6 +93,12 @@ struct SimEvent {
   EventKind kind;
 };
 
+// Purely visual: the car touched something here, in its as-built position, moving this way.
+struct Scrape {
+  V3 restPoint, dir;
+  float strength;
+};
+
 struct Grab {  // mouse "node grabber"
   int node = -1;
   V3 target;
@@ -113,6 +119,7 @@ class Sim {
   std::vector<Obj> objs;
   std::vector<u32> active;  // indices of awake objects
   std::vector<SimEvent> events;
+  std::vector<Scrape> scrapes;
 
   const World* world = nullptr;
   Grab grab;
