@@ -1035,6 +1035,85 @@ void testResponse() {
   }
 }
 
+void testFreeFall() {
+  // A stone dropped from 20 m must land after about 2 s, at about 20 m/s.
+  Bench b({-90, 0, 0}, 0, true);
+  u32 blockObj = b.sim.nodeObj[b.sim.blocks[0].n[0]];
+  b.sim.wake(u16(blockObj));
+  const u32 n0 = b.sim.blocks[0].n[0];
+  for (u32 oi = b.sim.objs[blockObj].nodeStart, e = oi + b.sim.objs[blockObj].nodeCount; oi < e; oi++) b.sim.pos[oi].z += 20.0;
+  double maxV = 0, t = 0;
+  while (t < 3.0 && b.sim.pos[n0].z > 1.0) {
+    b.run(0.01, [](double, Controls&) {});
+    t += 0.01;
+    maxV = std::max(maxV, -b.sim.vel[n0].z);
+  }
+  printf("== Free fall from 20 m: hit after %.2f s at %.1f m/s (ideal 2.02 s, 19.8 m/s) ==\n", t, maxV);
+}
+
+void testTorn() {
+  printf("== Parts torn off and thrown far away ==\n");
+  Bench b({-90, 0, 0}, 0, true);
+  auto measure = [&](const char* label) {
+    auto t0 = std::chrono::steady_clock::now();
+    b.run(0.25, [](double, Controls&) {});
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    printf("  %-34s load %6.0f %%  tripairs %6zu awake %zu\n", label, wall / 0.25 * 100, b.sim.statTriPairs, b.sim.active.size());
+  };
+  measure("intact");
+  // Throw everything light from the front and rear of the car away, as a big crash does.
+  const Obj& o = b.sim.objs[b.car.obj];
+  for (u32 i = o.beamStart; i < o.beamStart + o.beamCount; i++) {
+    Beam& B = b.sim.beams[i];
+    const bool aHood = b.sim.mass[B.a] < 1.35, bHood = b.sim.mass[B.b] < 1.35;
+    if (aHood != bHood) B.flags |= BF_BROKEN;
+  }
+  int thrown = 0;
+  for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++)
+    if (b.sim.mass[i] < 1.35) {
+      b.sim.pos[i] += V3{35.0, 25.0, 3.0};
+      thrown++;
+    }
+  printf("  threw %d panel nodes 40 m away\n", thrown);
+  measure("panels thrown");
+  measure("panels thrown, later");
+  for (u32 oi = 1; oi < b.sim.objs.size(); oi++) b.sim.wake(u16(oi));
+  measure("everything awake");
+  b.sim.vel[o.nodeStart + 300] = V3{240, 0, 0};
+  measure("one node at 240 m/s");
+  for (int i = 0; i < 6; i++) b.run(1.0, [](double, Controls&) {});
+  measure("after 6 s of settling");
+  for (int i = 0; i < 10; i++) b.run(1.0, [](double, Controls&) {});
+  measure("after 16 s of settling");
+}
+
+void testSlow() {
+  printf("== Cost per simulated second in violent scenes (100 %% = real time) ==\n");
+  struct Case { const char* name; V3 pos; double kmh; };
+  const Case cases[] = {{"gauntlet 140 km/h", {-90, 0, 0}, 140}, {"wall 180 km/h", {60, -30, 0}, 180}, {"ramp into wall 160 km/h", {-30, 40, 0}, 160}};
+  for (const Case& cs : cases) {
+    Bench b(cs.pos, 0, true);
+    b.launchAt(cs.kmh / 3.6, 4);
+    printf("  %s\n", cs.name);
+    for (int sec = 0; sec < 8; sec++) {
+      auto t0 = std::chrono::steady_clock::now();
+      b.run(1.0, [&](double, Controls& c) { c.throttle = sec < 5 ? 1.0 : 0.0; });
+      const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      double vmax = 0, zmax = 0, far = 0;
+      for (size_t i = 0; i < b.sim.pos.size(); i++) {
+        vmax = std::max(vmax, len(b.sim.vel[i]));
+        zmax = std::max(zmax, b.sim.pos[i].z);
+        far = std::max(far, std::fabs(b.sim.pos[i].x));
+      }
+      printf("   t=%d load %5.0f %%  awake %3zu  tripairs %6zu blockpairs %6zu  vmax %5.1f zmax %6.1f farx %6.0f broken %5u  guard %llu  v %.0f\n", sec + 1, wall * 100, b.sim.active.size(), b.sim.statTriPairs, b.sim.statBlockPairs, vmax, zmax, far, b.sim.brokenBeams, (unsigned long long)b.sim.clampedSteps, b.car.speed * 3.6);
+      if (wall > 6.0) {
+        printf("   (too slow, stopping this case)\n");
+        break;
+      }
+    }
+  }
+}
+
 void testPropRest() {
   // Regression: every prop, woken with nothing touching it, must simply stay standing.
   Bench b({-90, 0, 0}, 0, true);
@@ -1118,6 +1197,15 @@ int main(int argc, char** argv) {
     testWheelStrike();
   }
   if (want("compliance")) testCompliance();
+  if (argc > 1 && !strcmp(argv[1], "torn")) {
+    testFreeFall();
+    testTorn();
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "slow")) {
+    testSlow();
+    return 0;
+  }
   if (want("response")) testResponse();
   if (want("powertrain")) testPowertrain();
   if (want("rough")) testRough();

@@ -1085,8 +1085,8 @@ struct Renderer::Impl {
     };
     snprintf(buf, sizeof buf, "%3.0F FPS  %s", o.fps, o.gpuName.c_str());
     rtext(buf, .75f, .85f, .75f);
-    snprintf(buf, sizeof buf, "PHYSIK %3.0F%%  WACH %d", s.physLoad * 100.0, s.awake);
-    rtext(buf, .75f, .85f, .75f);
+    snprintf(buf, sizeof buf, "PHYSIK %3.0F%%  ECHTZEIT %3.0F%%  WACH %d", s.physLoad * 100.0, s.realtime * 100.0, s.awake);
+    rtext(buf, s.realtime < s.timeScale * 0.9 ? 1.f : .75f, s.realtime < s.timeScale * 0.9 ? .35f : .85f, .75f);
     rtext(o.gamepad ? "CONTROLLER AKTIV" : "TASTATUR/MAUS", .75f, .75f, .75f);
     snprintf(buf, sizeof buf, "KAMERA %s", o.cameraName.c_str());
     rtext(buf, .75f, .75f, .75f);

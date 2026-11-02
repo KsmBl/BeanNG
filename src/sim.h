@@ -144,6 +144,9 @@ class Sim {
   std::vector<BlockHit> blockHits;
   std::vector<float> contactLoad;
   std::vector<u32> touched;
+  std::vector<V3> blockCentre;
+  std::vector<double> blockRad2;
+  std::vector<u64> blockStep;
   std::vector<Pair> triPairs, blockPairs;
   std::vector<int> hashHead;
   struct HashEntry { u32 prim; int next; };

@@ -177,7 +177,18 @@ void Sim::forces(double dt) {
   const V3 gv{0, 0, -g};
   for (u32 oi : active) {
     const Obj& o = objs[oi];
-    for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) force[i] = gv * mass[i];
+    if (o.kind == OBJ_PROP) {
+      // Loose objects lose energy to internal friction, and so come to rest instead of humming on
+      // their springs for ever, which is what lets them go back to sleep. It acts on slow motion
+      // only: anything really flying or falling must not be held back.
+      for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) {
+        force[i] = gv * mass[i];
+        const double v2 = len2(vel[i]);
+        if (v2 < 1.5 * 1.5) force[i] -= vel[i] * (mass[i] * 4.0 * (1.0 - v2 / (1.5 * 1.5)));
+      }
+    } else {
+      for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) force[i] = gv * mass[i];
+    }
   }
 
   double plastic = 0;
@@ -271,13 +282,6 @@ void Sim::event(EventKind k, V3 p, V3 v, float s) {
 
 bool Sim::triPairAllowed(u32 node, const Tri& t) const {
   if (node == t.a || node == t.b || node == t.c) return false;
-  // A surface whose beams have torn is no longer a surface: without this, a stretched triangle
-  // between a flung piece and its anchor would act as an invisible wall.
-  constexpr double kTear2 = 1.5 * 1.5;
-  if (len2(pos[t.b] - pos[t.a]) > kTear2 * len2(rest[t.b] - rest[t.a]) ||
-      len2(pos[t.c] - pos[t.b]) > kTear2 * len2(rest[t.c] - rest[t.b]) ||
-      len2(pos[t.a] - pos[t.c]) > kTear2 * len2(rest[t.a] - rest[t.c]))
-    return false;
   if (nodeObj[node] != t.obj) return !(t.flags & TF_HARD);  // others only touch the outer skin
   // Self-collision: only bulkhead-type surfaces, and only for nodes that started out on the
   // front side of the surface. One-sided surfaces would otherwise "pull through" everything
@@ -303,7 +307,8 @@ void Sim::rebuildPairs(double dt) {
       vmax = std::max(vmax, len2(vel[i]));
   }
   vmax = std::sqrt(vmax);
-  pairMargin = 0.05 + 2.2 * vmax * dt * kPairInterval;
+  // Capped: one fragment thrown off at speed must not inflate the search for everything else.
+  pairMargin = std::min(0.05 + 2.2 * vmax * dt * kPairInterval, 0.45);
 
   auto insertBox = [&](u32 prim, V3 mn, V3 mx) {
     const int x0 = cellOf(mn.x - pairMargin), x1 = cellOf(mx.x + pairMargin);
@@ -325,6 +330,12 @@ void Sim::rebuildPairs(double dt) {
     const V3& a = pos[t.a];
     const V3& b = pos[t.b];
     const V3& c = pos[t.c];
+    // A triangle whose corners have been torn apart is no surface any more. It must not even reach
+    // the grid: spanning tens of metres, it would land in tens of thousands of cells at every rebuild.
+    constexpr double kTear2 = 1.5 * 1.5;
+    if (len2(b - a) > kTear2 * len2(rest[t.b] - rest[t.a]) || len2(c - b) > kTear2 * len2(rest[t.c] - rest[t.b]) ||
+        len2(a - c) > kTear2 * len2(rest[t.a] - rest[t.c]))
+      continue;
     insertBox(i,
               {std::min({a.x, b.x, c.x}), std::min({a.y, b.y, c.y}), std::min({a.z, b.z, c.z})},
               {std::max({a.x, b.x, c.x}), std::max({a.y, b.y, c.y}), std::max({a.z, b.z, c.z})});
@@ -450,20 +461,28 @@ void Sim::collidePairs(double dt) {
     addLoad(t.c, float(std::max(w2, 0.0)));
   }
 
+  // Most block pairs do not touch. Corners sit on the block's diagonal sphere, so a cheap check
+  // against a centre computed once per step throws them out before any further work.
+  if (blockCentre.size() != blocks.size()) {
+    blockCentre.resize(blocks.size());
+    blockRad2.resize(blocks.size());
+    blockStep.assign(blocks.size(), 0);
+  }
   for (u32 pi = 0; pi < blockPairs.size(); pi++) {
     const Pair& pr = blockPairs[pi];
     const Block& b = blocks[pr.prim];
     const V3& p = pos[pr.node];
-    V3 cs[8];
-    V3 c{};
-    for (int i = 0; i < 8; i++) {
-      cs[i] = pos[b.n[i]];
-      c += cs[i];
+    if (blockStep[pr.prim] != stepCount) {
+      V3 cc{};
+      for (int i = 0; i < 8; i++) cc += pos[b.n[i]];
+      blockCentre[pr.prim] = cc * 0.125;
+      blockRad2[pr.prim] = len2(pos[b.n[7]] - pos[b.n[0]]) * 0.25;
+      blockStep[pr.prim] = stepCount;
     }
-    c = c * 0.125;
-    // Reject before doing any normalisation, the vast majority of pairs are not touching.
-    const double rough = len2(cs[7] - cs[0]) * 0.25;
-    if (len2(p - c) > rough) continue;
+    if (len2(p - blockCentre[pr.prim]) > blockRad2[pr.prim]) continue;
+    V3 cs[8];
+    const V3 c = blockCentre[pr.prim];
+    for (int i = 0; i < 8; i++) cs[i] = pos[b.n[i]];
 
     V3 ex = ((cs[1] + cs[3] + cs[5] + cs[7]) - (cs[0] + cs[2] + cs[4] + cs[6])) * 0.25;
     V3 ey = ((cs[2] + cs[3] + cs[6] + cs[7]) - (cs[0] + cs[1] + cs[4] + cs[5])) * 0.25;
@@ -615,7 +634,7 @@ void Sim::integrate(double dt) {
 }
 
 void Sim::sleepWake() {
-  constexpr double kSleepSpeed2 = 0.05 * 0.05;
+  constexpr double kSleepSpeed2 = 0.20 * 0.20;
   constexpr double kPeriod = 64.0 / 2000.0;
 
   // Wake sleepers touched by anything that is actually moving. A resting prop next to another
@@ -653,12 +672,16 @@ void Sim::sleepWake() {
 
     if (o.alwaysAwake) continue;
     o.sleepTimer = vmax2 < kSleepSpeed2 ? o.sleepTimer + float(kPeriod) : 0.f;
+    // Debris lying about far from the car is not worth simulating unless something big is happening.
+    const Obj& car = objs[0];
+    const bool farAway = o.bbMin.x > car.bbMax.x + 25.0 || o.bbMax.x < car.bbMin.x - 25.0 || o.bbMin.y > car.bbMax.y + 25.0 || o.bbMax.y < car.bbMin.y - 25.0;
+    if (farAway && vmax2 < 2.0 * 2.0) o.sleepTimer += float(kPeriod) * 3.0f;
   }
 
   // Put settled props to sleep (done separately because wake() above may grow the active list).
   for (size_t ai = 0; ai < active.size();) {
     Obj& o = objs[active[ai]];
-    if (!o.alwaysAwake && o.sleepTimer > 1.5f) {
+    if (!o.alwaysAwake && o.sleepTimer > 1.0f) {
       for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) vel[i] = {};
       o.awake = false;
       active[ai] = active.back();

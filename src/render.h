@@ -37,6 +37,7 @@ struct Snapshot {
   bool radiator = false, hydraulics = false, mount = false, steering = false, seized = false;
   bool flat[4] = {};
   double timeScale = 1;
+  double realtime = 1;   // simulated seconds per real second
   bool paused = false;
   std::string damageMsg;
   double damageAge = 100;

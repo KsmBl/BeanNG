@@ -45,6 +45,7 @@ struct Game {
   std::atomic<bool> running{true};
   std::atomic<bool> resetVisuals{false};
   std::atomic<bool> debugWheel{false};
+  double realtimeFactor = 1;
 
   void applyRepair() {
     // Restore the pristine car, keeping position and heading.
@@ -145,13 +146,13 @@ struct Game {
     using Clock = std::chrono::steady_clock;
     auto last = Clock::now();
     double accumulator = 0;
-    double busy = 0, window = 0, load = 0;
+    double busy = 0, window = 0, load = 0, simWindow = 0;
     constexpr double kSlice = 1.0 / 250.0;
     while (running.load(std::memory_order_relaxed)) {
       auto now = Clock::now();
-      double elapsed = std::chrono::duration<double>(now - last).count();
+      const double wallElapsed = std::chrono::duration<double>(now - last).count();
       last = now;
-      elapsed = std::min(elapsed, 0.05);
+      const double elapsed = std::min(wallElapsed, 0.05);
 
       SharedInput in;
       {
@@ -196,12 +197,21 @@ struct Game {
       }
       if (steps == kMaxStepsPerSlice) accumulator = std::min(accumulator, kPhysDt * kMaxStepsPerSlice);
       busy += std::chrono::duration<double>(Clock::now() - t0).count();
-      window += elapsed;
+      // Load is the share of wall time spent stepping, measured over the real time that passed.
+      // Also report how far simulated time keeps up, which is what the driver actually feels.
+      window += wallElapsed;
+      simWindow += steps * kPhysDt;
       if (window > 0.25) {
+        realtimeFactor = simWindow / window;
+        simWindow = 0;
         load = busy / window;
         busy = window = 0;
       }
       fillSnapshot(load);
+      {
+        std::lock_guard<std::mutex> lock(snapMutex);
+        snap.realtime = realtimeFactor;
+      }
       {
         std::lock_guard<std::mutex> lock(snapMutex);
         snap.paused = in.paused;
@@ -762,6 +772,7 @@ int main(int argc, char** argv) {
       view.damageMsg = G.snap.damageMsg;
       view.damageAge = G.snap.damageAge;
       view.physLoad = G.snap.physLoad;
+      view.realtime = G.snap.realtime;
       view.awake = G.snap.awake;
       view.paused = G.snap.paused;
       view.timeScale = G.snap.timeScale;
