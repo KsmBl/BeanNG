@@ -807,7 +807,7 @@ void Vehicle::updateBodyFrame(Sim& sim, double dt) {
   const Obj& o = sim.objs[obj];
   V3 c{}, vm{};
   double m = 0;
-  for (u32 i = o.nodeStart, e = i + o.nodeCount; i < e; i++) {
+  for (u32 i : o.nodes) {
     c += sim.pos[i] * sim.mass[i];
     vm += sim.vel[i] * sim.mass[i];
     m += sim.mass[i];
@@ -967,6 +967,11 @@ void Vehicle::updateDamage(Sim& sim, double dt) {
 void Vehicle::shapeDamping(Sim& sim, double dt) {
   double M = 0;
   V3 c{}, V{};
+  if (lastSplit_ != sim.splitGeneration) {
+    // Pieces that have torn off are on their own now.
+    lastSplit_ = sim.splitGeneration;
+    structureNodes.erase(std::remove_if(structureNodes.begin(), structureNodes.end(), [&](u32 n) { return sim.nodeObj[n] != obj; }), structureNodes.end());
+  }
   for (u32 n : structureNodes) {
     const double m = sim.mass[n];
     M += m;
@@ -1046,8 +1051,7 @@ void Vehicle::update(Sim& sim, const Controls& in, double dt) {
     const V3 Fa = vCog * (-0.5 * kAirDensity * dragArea * std::sqrt(v2));
     const double perKg = 1.0 / totalMass;
     const Obj& o = sim.objs[obj];
-    for (u32 i = o.nodeStart, e = i + o.nodeCount; i < e; i++)
-      sim.force[i] += Fa * (sim.mass[i] * perKg);
+    for (u32 i : o.nodes) sim.force[i] += Fa * (sim.mass[i] * perKg);
   }
 
   updateDrivetrain(sim, in, dt);

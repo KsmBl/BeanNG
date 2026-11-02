@@ -164,6 +164,7 @@ class Vehicle {
  private:
   V3 prevV_, prevFwd_{1, 0, 0};
   V3 omegaFit_;
+  u32 lastSplit_ = 0;
   double yawRate_ = 0;
   double prevThrottle_ = 0, prevSteer_ = 0;
   double ramCmd_ = 0, ramTrim_ = 0;

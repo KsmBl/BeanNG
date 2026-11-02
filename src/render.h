@@ -26,6 +26,9 @@ struct Snapshot {
   std::vector<SimEvent> events;
   V3 carCog, carFwd{1, 0, 0}, carUp{0, 0, 1}, carLeft{0, 1, 0}, carVel;
   u32 headNode = 0;
+  u32 splitGeneration = 0;
+  std::vector<u16> nodeObj;
+  int objectCount = 0;
 
   // HUD values.
   double speedKmh = 0, rpm = 0, throttle = 0, brake = 0, steer = 0, coolant = 0, accum = 0;
@@ -56,7 +59,7 @@ struct HudOptions {
 
 class Renderer {
  public:
-  bool init(const World& world, const Sim& sim, const CarRig& rig, const CarMesh& mesh);
+  bool init(const World& world, const Sim& sim, const CarRig& rig, CarMesh& mesh, V3 spawn);
   void resetDamage();
   void clearSkidMarks();
   void draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt);

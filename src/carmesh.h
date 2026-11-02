@@ -43,6 +43,9 @@ struct CarMesh {
   bool load(const std::string& path);
   // Computes the weights. toWorld maps a design position to the world position at rest.
   void bind(const std::vector<V3>& restNodes, const std::vector<NodeGroup>& groups, V3 spawn);
+  // After a tear: each vertex that follows nodes of several pieces is re-fitted to one of them, so the
+  // mesh parts cleanly along the tear. Returns the number of vertices changed.
+  size_t rebindAfterTear(const std::vector<V3>& restNodes, const std::vector<NodeGroup>& groups, V3 spawn, const std::vector<u16>& nodeObj);
   // Largest error of the bound mesh at rest, in metres (should be essentially zero).
   double restError(const std::vector<V3>& restNodes, V3 spawn, std::string* worst = nullptr) const;
 };

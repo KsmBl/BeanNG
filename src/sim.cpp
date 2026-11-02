@@ -39,6 +39,11 @@ void Sim::endObj() {
   Obj& o = objs.back();
   o.nodeCount = u32(pos.size()) - o.nodeStart;
   o.beamCount = u32(beams.size()) - o.beamStart;
+  o.root = u16(objs.size() - 1);
+  o.nodes.resize(o.nodeCount);
+  for (u32 i = 0; i < o.nodeCount; i++) o.nodes[i] = o.nodeStart + i;
+  o.beamList.resize(o.beamCount);
+  for (u32 i = 0; i < o.beamCount; i++) o.beamList[i] = o.beamStart + i;
   computeBounds(o);
 }
 
@@ -117,7 +122,7 @@ void Sim::finalize() {
 
 void Sim::computeBounds(Obj& o) {
   V3 mn{1e30, 1e30, 1e30}, mx{-1e30, -1e30, -1e30};
-  for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) {
+  for (u32 i : o.nodes) {
     const V3& p = pos[i];
     mn = {std::min(mn.x, p.x), std::min(mn.y, p.y), std::min(mn.z, p.z)};
     mx = {std::max(mx.x, p.x), std::max(mx.y, p.y), std::max(mx.z, p.z)};
@@ -181,13 +186,13 @@ void Sim::forces(double dt) {
       // Loose objects lose energy to internal friction, and so come to rest instead of humming on
       // their springs for ever, which is what lets them go back to sleep. It acts on slow motion
       // only: anything really flying or falling must not be held back.
-      for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) {
+      for (u32 i : o.nodes) {
         force[i] = gv * mass[i];
         const double v2 = len2(vel[i]);
         if (v2 < 1.5 * 1.5) force[i] -= vel[i] * (mass[i] * 4.0 * (1.0 - v2 / (1.5 * 1.5)));
       }
     } else {
-      for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) force[i] = gv * mass[i];
+      for (u32 i : o.nodes) force[i] = gv * mass[i];
     }
   }
 
@@ -196,7 +201,7 @@ void Sim::forces(double dt) {
     const Obj& o = objs[oi];
     const bool isCar = o.kind == OBJ_CAR;
     double objPlastic = 0;
-    for (u32 bi = o.beamStart, be = o.beamStart + o.beamCount; bi < be; bi++) {
+    for (u32 bi : o.beamList) {
       Beam& b = beams[bi];
       if (b.flags & BF_BROKEN) continue;
       const V3 d = pos[b.b] - pos[b.a];
@@ -215,9 +220,7 @@ void Sim::forces(double dt) {
         b.yT += b.hard * dl / b.Lorig;
         f = b.yT;
         if (b.maxStrain > 0 && strain > b.maxStrain) {
-          b.flags |= BF_BROKEN;
-          brokenBeams++;
-          if (isCar) event(EV_CRUNCH, pos[b.a], vel[b.a], float(f));
+          breakBeam(b, isCar, f);
           continue;
         }
       } else if (f < -b.yC && b.yC > 0) {
@@ -238,9 +241,7 @@ void Sim::forces(double dt) {
       }
 
       if (b.fBreak > 0 && std::fabs(f) > b.fBreak) {
-        b.flags |= BF_BROKEN;
-        brokenBeams++;
-        if (isCar) event(EV_CRUNCH, pos[b.a], vel[b.a], float(std::fabs(f)));
+        breakBeam(b, isCar, std::fabs(f));
         continue;
       }
 
@@ -267,6 +268,13 @@ void Sim::forces(double dt) {
   }
 }
 
+void Sim::breakBeam(Beam& b, bool notify, double f) {
+  b.flags |= BF_BROKEN;
+  brokenBeams++;
+  objs[nodeObj[b.a]].dirty = true;
+  if (notify) event(EV_CRUNCH, pos[b.a], vel[b.a], float(f));
+}
+
 void Sim::finish(double dt) {
   stepCount++;
   if (stepCount % kPairInterval == 1) rebuildPairs(dt);
@@ -282,7 +290,17 @@ void Sim::event(EventKind k, V3 p, V3 v, float s) {
 
 bool Sim::triPairAllowed(u32 node, const Tri& t) const {
   if (node == t.a || node == t.b || node == t.c) return false;
-  if (nodeObj[node] != t.obj) return !(t.flags & TF_HARD);  // others only touch the outer skin
+  const u16 nodeO = nodeObj[node];
+  if (nodeO != t.obj) {
+    if (t.flags & TF_HARD) return false;  // others only touch the outer skin
+    // Two pieces of the same object were neighbours until a moment ago. Where they parted they still
+    // overlap, and that must not fire them apart. Everywhere else they are simply two objects.
+    if (objs[nodeO].root == objs[t.obj].root) {
+      const V3 c = (rest[t.a] + rest[t.b] + rest[t.c]) * (1.0 / 3.0);
+      if (len2(rest[node] - c) < 0.30 * 0.30) return false;
+    }
+    return true;
+  }
   // Self-collision: only bulkhead-type surfaces, and only for nodes that started out on the
   // front side of the surface. One-sided surfaces would otherwise "pull through" everything
   // that merely sits behind them, such as the whole cabin behind the firewall.
@@ -303,8 +321,7 @@ void Sim::rebuildPairs(double dt) {
   double vmax = 0;
   for (u32 oi : active) {
     const Obj& o = objs[oi];
-    for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i += 7)
-      vmax = std::max(vmax, len2(vel[i]));
+    for (size_t k = 0; k < o.nodes.size(); k += 7) vmax = std::max(vmax, len2(vel[o.nodes[k]]));
   }
   vmax = std::sqrt(vmax);
   // Capped: one fragment thrown off at speed must not inflate the search for everything else.
@@ -354,7 +371,7 @@ void Sim::rebuildPairs(double dt) {
 
   for (u32 oi : active) {
     const Obj& o = objs[oi];
-    for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) {
+    for (u32 i : o.nodes) {
       if (!(flags[i] & NF_COLLIDE)) continue;
       const V3& p = pos[i];
       const u32 h = cellHash(cellOf(p.x), cellOf(p.y), cellOf(p.z));
@@ -588,7 +605,7 @@ void Sim::collidePairs(double dt) {
 void Sim::collideWorld(double dt) {
   for (u32 oi : active) {
     const Obj& o = objs[oi];
-    for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) {
+    for (u32 i : o.nodes) {
       const u8 fl = flags[i];
       if ((fl & NF_FIXED) || !(fl & NF_COLLIDE)) continue;
       Contact c;
@@ -615,7 +632,7 @@ void Sim::collideWorld(double dt) {
 void Sim::integrate(double dt) {
   for (u32 oi : active) {
     const Obj& o = objs[oi];
-    for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) {
+    for (u32 i : o.nodes) {
       V3 dv = force[i] * (invMass[i] * dt);
       // Last line of defence: no legitimate force changes a node's speed this much in 0.5 ms. It
       // keeps one numerically bad contact from running away and taking the whole car with it.
@@ -633,7 +650,139 @@ void Sim::integrate(double dt) {
   }
 }
 
+// Finds out whether a damaged object still hangs together. If it has come apart, every separate piece
+// becomes an object of its own, with its own sleep state and full collision against the others.
+void Sim::splitObjects() {
+  std::vector<int> parent;
+  auto find = [&](int x) {
+    while (parent[size_t(x)] != x) {
+      parent[size_t(x)] = parent[size_t(parent[size_t(x)])];
+      x = parent[size_t(x)];
+    }
+    return x;
+  };
+  const size_t nActive = active.size();
+  for (size_t ai = 0; ai < nActive; ai++) {
+    const u32 oid = active[ai];
+    if (!objs[oid].dirty) continue;
+    objs[oid].dirty = false;
+
+    // Node ids are global: a scratch map from node id to its slot in this object.
+    if (nodeSlot.size() != pos.size()) nodeSlot.assign(pos.size(), -1);
+    const size_t n = objs[oid].nodes.size();
+    parent.resize(n);
+    for (size_t i = 0; i < n; i++) {
+      parent[i] = int(i);
+      nodeSlot[objs[oid].nodes[i]] = int(i);
+    }
+    for (u32 bi : objs[oid].beamList) {
+      const Beam& b = beams[bi];
+      if (b.flags & BF_BROKEN) continue;
+      // The ground does not hold things together: two posts anchored to it are separate objects.
+      if ((flags[b.a] | flags[b.b]) & NF_FIXED) continue;
+      const int ia = nodeSlot[b.a], ib = nodeSlot[b.b];
+      if (ia < 0 || ib < 0) continue;
+      const int ra = find(ia), rb = find(ib);
+      if (ra != rb) parent[size_t(ra)] = rb;
+    }
+
+    // Collect the pieces. Anchored nodes join the piece they still have a beam to.
+    std::vector<std::vector<u32>> pieces;
+    std::vector<int> pieceOf(n, -1);
+    std::vector<int> rootPiece(n, -1);
+    for (size_t i = 0; i < n; i++) {
+      if (flags[objs[oid].nodes[i]] & NF_FIXED) continue;
+      const int r = find(int(i));
+      if (rootPiece[size_t(r)] < 0) {
+        rootPiece[size_t(r)] = int(pieces.size());
+        pieces.emplace_back();
+      }
+      pieces[size_t(rootPiece[size_t(r)])].push_back(objs[oid].nodes[i]);
+      pieceOf[i] = rootPiece[size_t(r)];
+    }
+    for (u32 bi : objs[oid].beamList) {
+      const Beam& b = beams[bi];
+      if (b.flags & BF_BROKEN) continue;
+      for (int e = 0; e < 2; e++) {
+        const u32 fixedN = e ? b.b : b.a, otherN = e ? b.a : b.b;
+        if (!(flags[fixedN] & NF_FIXED) || (flags[otherN] & NF_FIXED)) continue;
+        const int si = nodeSlot[fixedN], oi = nodeSlot[otherN];
+        if (si >= 0 && oi >= 0 && pieceOf[size_t(si)] < 0 && pieceOf[size_t(oi)] >= 0) {
+          pieceOf[size_t(si)] = pieceOf[size_t(oi)];
+          pieces[size_t(pieceOf[size_t(oi)])].push_back(fixedN);
+        }
+      }
+    }
+    // Anchors with nothing left simply stay behind in the main piece.
+    for (u32 v : objs[oid].nodes) nodeSlot[v] = -1;
+    if (pieces.size() < 2) continue;
+
+    // The heaviest piece keeps the identity of the object: for the car, that is the car.
+    size_t keep = 0;
+    double best = -1;
+    for (size_t k = 0; k < pieces.size(); k++) {
+      double m = 0;
+      for (u32 v : pieces[k]) m += mass[v];
+      if (m > best) {
+        best = m;
+        keep = k;
+      }
+    }
+    std::vector<u32> leftovers;
+    for (size_t i = 0; i < n; i++)
+      if (pieceOf[i] < 0) leftovers.push_back(objs[oid].nodes[i]);
+
+    std::vector<u16> pieceObj(pieces.size());
+    for (size_t k = 0; k < pieces.size(); k++) {
+      if (k == keep) {
+        pieceObj[k] = u16(oid);
+        continue;
+      }
+      Obj no;
+      no.kind = OBJ_PROP;
+      no.awake = true;
+      no.root = objs[oid].root;
+      no.nodes = pieces[k];
+      objs.push_back(std::move(no));
+      pieceObj[k] = u16(objs.size() - 1);
+      active.push_back(u32(objs.size() - 1));
+      for (u32 v : pieces[k]) nodeObj[v] = pieceObj[k];
+    }
+    // Beams go with their nodes; broken ones are of no more use to anyone.
+    std::vector<u32> keptBeams;
+    const std::vector<u32> oldBeams = std::move(objs[oid].beamList);
+    for (u32 bi : oldBeams) {
+      const Beam& b = beams[bi];
+      if (b.flags & BF_BROKEN) continue;
+      u16 target = nodeObj[b.a];
+      if (flags[b.a] & NF_FIXED) target = nodeObj[b.b];
+      if (target == oid)
+        keptBeams.push_back(bi);
+      else
+        objs[target].beamList.push_back(bi);
+    }
+    objs[oid].beamList = std::move(keptBeams);
+    objs[oid].nodes = pieces[keep];
+    objs[oid].nodes.insert(objs[oid].nodes.end(), leftovers.begin(), leftovers.end());
+    for (size_t k = 0; k < pieces.size(); k++) computeBounds(objs[pieceObj[k]]);
+    triObjDirty = true;
+    splitGeneration++;
+  }
+
+  if (triObjDirty) {
+    triObjDirty = false;
+    for (Tri& t : tris) {
+      const u16 oa = nodeObj[t.a];
+      t.obj = (flags[t.a] & NF_FIXED) ? nodeObj[t.b] : oa;
+    }
+    for (Block& b : blocks) b.obj = nodeObj[b.n[0]];
+    stamp.assign(tris.size() + blocks.size(), 0xffffffffu);
+  }
+}
+
 void Sim::sleepWake() {
+  splitObjects();
+
   constexpr double kSleepSpeed2 = 0.20 * 0.20;
   constexpr double kPeriod = 64.0 / 2000.0;
 
@@ -644,8 +793,7 @@ void Sim::sleepWake() {
     Obj& o = objs[active[ai]];
     computeBounds(o);
     double vmax2 = 0;
-    for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++)
-      vmax2 = std::max(vmax2, len2(vel[i]));
+    for (u32 i : o.nodes) vmax2 = std::max(vmax2, len2(vel[i]));
 
     if (vmax2 > 0.1 * 0.1) {
       // Test individual moving nodes: one splinter flying off must not stretch a bounding box
@@ -658,7 +806,7 @@ void Sim::sleepWake() {
             s.bbMin.y > o.bbMax.y + kMargin || s.bbMax.y < o.bbMin.y - kMargin ||
             s.bbMin.z > o.bbMax.z + kMargin || s.bbMax.z < o.bbMin.z - kMargin)
           continue;
-        for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) {
+        for (u32 i : o.nodes) {
           if (len2(vel[i]) < 0.1 * 0.1) continue;
           const V3& p = pos[i];
           if (p.x > s.bbMin.x - kMargin && p.x < s.bbMax.x + kMargin && p.y > s.bbMin.y - kMargin &&
@@ -682,7 +830,7 @@ void Sim::sleepWake() {
   for (size_t ai = 0; ai < active.size();) {
     Obj& o = objs[active[ai]];
     if (!o.alwaysAwake && o.sleepTimer > 1.0f) {
-      for (u32 i = o.nodeStart, e = o.nodeStart + o.nodeCount; i < e; i++) vel[i] = {};
+      for (u32 i : o.nodes) vel[i] = {};
       o.awake = false;
       active[ai] = active.back();
       active.pop_back();

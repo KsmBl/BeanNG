@@ -72,8 +72,13 @@ struct Block {
 enum ObjKind : u8 { OBJ_CAR, OBJ_PROP };
 
 struct Obj {
+  // As built. Static: used by analysis tools, not by the solver.
   u32 nodeStart = 0, nodeCount = 0;
   u32 beamStart = 0, beamCount = 0;
+  // What the object consists of right now. Tearing moves entries from here into new objects.
+  std::vector<u32> nodes, beamList;
+  u16 root = 0;        // the object this piece originally belonged to
+  bool dirty = false;  // a beam broke: check whether it has come apart
   ObjKind kind = OBJ_PROP;
   bool awake = false;
   bool alwaysAwake = false;
@@ -116,6 +121,7 @@ class Sim {
   u32 brokenBeams = 0;
   u64 stepCount = 0;
   size_t statTriPairs = 0, statBlockPairs = 0;
+  u32 splitGeneration = 0;  // goes up whenever an object tears into pieces
   u64 clampedSteps = 0;  // times the per-step velocity guard had to act: should stay at zero
 
   // Building.
@@ -144,6 +150,8 @@ class Sim {
   std::vector<BlockHit> blockHits;
   std::vector<float> contactLoad;
   std::vector<u32> touched;
+  std::vector<int> nodeSlot;
+  bool triObjDirty = false;
   std::vector<V3> blockCentre;
   std::vector<double> blockRad2;
   std::vector<u64> blockStep;
@@ -159,6 +167,8 @@ class Sim {
   void collideWorld(double dt);
   void integrate(double dt);
   void sleepWake();
+  void splitObjects();
+  void breakBeam(Beam& b, bool notify, double f);
   void computeBounds(Obj& o);
   bool triPairAllowed(u32 node, const Tri& t) const;
   void contactFriction(u32 n, V3 nrm, double fn, double muv, double dt, V3 relVel, double mEff,

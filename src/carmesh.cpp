@@ -176,6 +176,102 @@ void CarMesh::bind(const std::vector<V3>& rest, const std::vector<NodeGroup>& gr
   }
 }
 
+size_t CarMesh::rebindAfterTear(const std::vector<V3>& rest, const std::vector<NodeGroup>& groups, V3 spawn, const std::vector<u16>& nodeObj) {
+  size_t changed = 0;
+  std::vector<std::pair<u16, double>> share;
+  struct Cand {
+    double d2;
+    u32 n;
+  };
+  std::vector<Cand> cand;
+  for (const MeshPart& part : parts) {
+    if (!part.bound) continue;
+    const NodeGroup* g = nullptr;
+    for (const NodeGroup& ng : groups)
+      if (ng.name == part.group) g = &ng;
+    if (!g) continue;
+
+    // Pieces of this group big enough to carry geometry at all, with their node count.
+    std::vector<std::pair<u16, int>> sizes;
+    for (u32 n : g->nodes) {
+      bool found = false;
+      for (auto& sz : sizes)
+        if (sz.first == nodeObj[n]) {
+          sz.second++;
+          found = true;
+        }
+      if (!found) sizes.push_back({nodeObj[n], 1});
+    }
+
+    for (u32 v = part.firstVert; v < part.firstVert + part.vertCount; v++) {
+      share.clear();
+      for (int i = 0; i < kK; i++) {
+        const float w = bindWeight[size_t(v) * kK + i];
+        if (w == 0.f) continue;
+        const u16 o = nodeObj[bindNode[size_t(v) * kK + i]];
+        bool found = false;
+        for (auto& sh : share)
+          if (sh.first == o) {
+            sh.second += std::fabs(w);
+            found = true;
+          }
+        if (!found) share.push_back({o, std::fabs(double(w))});
+      }
+      if (share.size() < 2) continue;
+
+      // Follow the piece that dominates this vertex, as long as it can carry geometry.
+      u16 owner = share[0].first;
+      double best = -1;
+      for (const auto& sh : share) {
+        int count = 0;
+        for (const auto& sz : sizes)
+          if (sz.first == sh.first) count = sz.second;
+        if (count >= 6 && sh.second > best) {
+          best = sh.second;
+          owner = sh.first;
+        }
+      }
+      if (best < 0) continue;
+
+      const V3 p = designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn);
+      cand.clear();
+      for (u32 n : g->nodes)
+        if (nodeObj[n] == owner) cand.push_back({len2(rest[n] - p), n});
+      std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
+      const int k = std::min<int>(kK, int(cand.size()));
+      const double h2 = cand[size_t(k - 1)].d2 * 1.3 + 1e-3;
+      double wgt[kK], basis[kK][4];
+      double A[4][4] = {};
+      for (int i = 0; i < k; i++) {
+        const double q = std::max(1.0 - cand[size_t(i)].d2 / h2, 0.0);
+        wgt[i] = q * q + 1e-3;
+        const V3 d = rest[cand[size_t(i)].n] - p;
+        basis[i][0] = 1;
+        basis[i][1] = d.x;
+        basis[i][2] = d.y;
+        basis[i][3] = d.z;
+        for (int r = 0; r < 4; r++)
+          for (int c = 0; c < 4; c++) A[r][c] += wgt[i] * basis[i][r] * basis[i][c];
+      }
+      for (int r = 1; r < 4; r++) A[r][r] += 1e-7;
+      double sol[4] = {1, 0, 0, 0};
+      if (!solve4(A, sol)) sol[1] = sol[2] = sol[3] = 0;
+      double sum = 0;
+      double phi[kK] = {};
+      for (int i = 0; i < k; i++) {
+        phi[i] = wgt[i] * (basis[i][0] * sol[0] + basis[i][1] * sol[1] + basis[i][2] * sol[2] + basis[i][3] * sol[3]);
+        sum += phi[i];
+      }
+      for (int i = 0; i < kK; i++) {
+        bindNode[size_t(v) * kK + i] = i < k ? cand[size_t(i)].n : cand[0].n;
+        bindWeight[size_t(v) * kK + i] = i < k ? float(phi[i] / sum) : 0.f;
+      }
+      changed++;
+    }
+  }
+  return changed;
+}
+
 double CarMesh::restError(const std::vector<V3>& rest, V3 spawn, std::string* worst) const {
   double maxErr = 0;
   for (const MeshPart& part : parts) {

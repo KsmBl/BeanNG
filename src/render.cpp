@@ -379,7 +379,10 @@ struct Renderer::Impl {
 
   // Flexbody mesh, deformed on the CPU from the node snapshot every frame.
   const CarRig* rig = nullptr;
-  const CarMesh* mesh = nullptr;
+  CarMesh* mesh = nullptr;
+  V3 spawn;
+  u32 seenSplit = 0;
+  CarMesh pristine;
   GLuint carVao = 0, carVbo = 0, carIbo = 0, carGlassVao = 0, carGlassIbo = 0;
   std::vector<Vtx> carVerts;
   std::vector<u32> carIdx, glassIdx, lensIdx;
@@ -1085,7 +1088,7 @@ struct Renderer::Impl {
     };
     snprintf(buf, sizeof buf, "%3.0F FPS  %s", o.fps, o.gpuName.c_str());
     rtext(buf, .75f, .85f, .75f);
-    snprintf(buf, sizeof buf, "PHYSIK %3.0F%%  ECHTZEIT %3.0F%%  WACH %d", s.physLoad * 100.0, s.realtime * 100.0, s.awake);
+    snprintf(buf, sizeof buf, "PHYSIK %3.0F%%  ECHTZEIT %3.0F%%  WACH %d/%d", s.physLoad * 100.0, s.realtime * 100.0, s.awake, s.objectCount);
     rtext(buf, s.realtime < s.timeScale * 0.9 ? 1.f : .75f, s.realtime < s.timeScale * 0.9 ? .35f : .85f, .75f);
     rtext(o.gamepad ? "CONTROLLER AKTIV" : "TASTATUR/MAUS", .75f, .75f, .75f);
     snprintf(buf, sizeof buf, "KAMERA %s", o.cameraName.c_str());
@@ -1191,12 +1194,14 @@ struct Renderer::Impl {
   }
 };
 
-bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, const CarMesh& mesh) {
+bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMesh& mesh, V3 spawn) {
   d = new Impl();
   d->world = &world;
   d->sim = &sim;
   d->rig = &rig;
   d->mesh = &mesh;
+  d->spawn = spawn;
+  d->pristine = mesh;
   d->partHidden.assign(mesh.parts.size(), 0);
 
   d->progMesh = program(kMeshVS, kMeshFS);
@@ -1309,6 +1314,16 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   D.origin = {};  // positions stay within +-512 m, which is fine for float vertex data
   D.handleEvents(s);
   D.xrayNow = hud.xray;
+  if (s.splitGeneration != D.seenSplit) {
+    if (s.splitGeneration < D.seenSplit) {
+      // The world was reset: back to the original binding.
+      D.mesh->bindNode = D.pristine.bindNode;
+      D.mesh->bindWeight = D.pristine.bindWeight;
+    } else {
+      D.mesh->rebindAfterTear(D.sim->rest, D.rig->groups, D.spawn, s.nodeObj);
+    }
+    D.seenSplit = s.splitGeneration;
+  }
   D.updateCar(s);
   D.updateProps(s, cam.eye);
   D.stepParticles(dt);

@@ -140,6 +140,11 @@ struct Game {
     s.damageAge = car.lastDamageAge;
     s.physLoad = load;
     s.awake = int(sim.active.size());
+    s.objectCount = int(sim.objs.size());
+    if (s.splitGeneration != sim.splitGeneration) {
+      s.splitGeneration = sim.splitGeneration;
+      s.nodeObj = sim.nodeObj;
+    }
   }
 
   void physicsLoop() {
@@ -383,7 +388,7 @@ int main(int argc, char** argv) {
   Renderer renderer;
   // The renderer reads only topology from this immutable copy (rest pose, triangle list, beam end
   // points). Everything that moves arrives through snapshots, so it never races the physics.
-  renderer.init(G.world, G.simStart, G.rig, G.mesh);
+  renderer.init(G.world, G.simStart, G.rig, G.mesh, kSpawn);
 
   G.fillSnapshot(0);
   std::thread physics([&] { G.physicsLoop(); });
@@ -774,6 +779,9 @@ int main(int argc, char** argv) {
       view.physLoad = G.snap.physLoad;
       view.realtime = G.snap.realtime;
       view.awake = G.snap.awake;
+      view.objectCount = G.snap.objectCount;
+      view.splitGeneration = G.snap.splitGeneration;
+      view.nodeObj = G.snap.nodeObj;
       view.paused = G.snap.paused;
       view.timeScale = G.snap.timeScale;
     }

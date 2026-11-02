@@ -1051,6 +1051,72 @@ void testFreeFall() {
   printf("== Free fall from 20 m: hit after %.2f s at %.1f m/s (ideal 2.02 s, 19.8 m/s) ==\n", t, maxV);
 }
 
+void testSplit() {
+  printf("== Objects tearing into independent pieces ==\n");
+  {
+    // A sign post cut through its middle: two objects, the top falls, the base stays.
+    Bench b({-90, 0, 0}, 0, true);
+    u32 sign = 1;
+    b.sim.wake(u16(sign));
+    const size_t before = b.sim.objs.size();
+    const Obj& o = b.sim.objs[sign];
+    double zCut = 1.2;
+    u32 topNode = 0;
+    for (u32 n : o.nodes)
+      if (b.sim.rest[n].z > 1.5) topNode = n;
+    u32 baseNode = o.nodes[3];
+    for (u32 bi : std::vector<u32>(o.beamList)) {
+      Beam& B = b.sim.beams[bi];
+      const double za = b.sim.rest[B.a].z, zb = b.sim.rest[B.b].z;
+      if ((za < zCut) != (zb < zCut)) {
+        B.flags |= BF_BROKEN;
+        b.sim.objs[sign].dirty = true;
+      }
+    }
+    const double zTop0 = b.sim.pos[topNode].z, zBase0 = b.sim.pos[baseNode].z;
+    b.run(1.5, [](double, Controls&) {});
+    printf("  sign cut: objects %zu -> %zu; top in object %u fell %.2f m, base in object %u moved %.3f m; roots %u %u\n", before, b.sim.objs.size(), b.sim.nodeObj[topNode], zTop0 - b.sim.pos[topNode].z, b.sim.nodeObj[baseNode], zBase0 - b.sim.pos[baseNode].z, b.sim.objs[b.sim.nodeObj[topNode]].root, b.sim.objs[b.sim.nodeObj[baseNode]].root);
+    b.run(4.0, [](double, Controls&) {});
+    printf("  after settling: awake %zu of %zu, top z %.2f (lying on the ground, not sunk: %d)\n", b.sim.active.size(), b.sim.objs.size(), b.sim.pos[topNode].z, b.sim.pos[topNode].z > -0.02);
+  }
+  {
+    // The piece collides with what it came from: a block of wall dropped on the rest of the wall,
+    // and the fence rail on the car.
+    Bench b({-90, 0, 0}, 0, true);
+    b.launchAt(70 / 3.6, 3);
+    size_t peak = 0;
+    double next = 0;
+    auto t0 = std::chrono::steady_clock::now();
+    b.run(16.0, [&](double t, Controls& c) {
+      c.throttle = b.car.speed < 70 / 3.6 ? 0.8 : 0;
+      const double head = std::atan2(b.car.fwd.y, b.car.fwd.x);
+      c.steer = clampd(-0.05 * b.car.cog.y - 0.7 * head, -0.25, 0.25);
+      peak = std::max(peak, b.sim.active.size());
+      if (t >= next) {
+        next += 4.0;
+        printf("  t=%4.1f x=%6.1f v=%5.1f objects %4zu awake %3zu car nodes %zu of %u broken %u\n", t, b.car.cog.x, b.car.speed * 3.6, b.sim.objs.size(), b.sim.active.size(), b.sim.objs[0].nodes.size(), b.sim.objs[0].nodeCount, b.sim.brokenBeams);
+      }
+    });
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    printf("  gauntlet: %zu objects in the end, peak awake %zu, %.0f %% of real time, guard %llu, sane %d\n", b.sim.objs.size(), peak, wall / 16.0 * 100, (unsigned long long)b.sim.clampedSteps, b.sane());
+  }
+  {
+    // Crash hard enough to lose parts of the car.
+    Bench b({60, -30, 0}, 0);
+    CarMesh mesh;
+    mesh.load("assets/xantia.mesh");
+    mesh.bind(b.sim.rest, b.skin.groups, {60, -30, 0});
+    b.launchAt(170 / 3.6, 4);
+    b.run(4.0, [](double, Controls&) {});
+    size_t detached = 0;
+    for (size_t i = 1; i < b.sim.objs.size(); i++) detached += b.sim.objs[i].nodes.size();
+    const size_t changed = mesh.rebindAfterTear(b.sim.rest, b.skin.groups, {60, -30, 0}, b.sim.nodeObj);
+    std::string worst;
+    const double err = mesh.restError(b.sim.rest, {60, -30, 0}, &worst);
+    printf("  wall at 170 km/h: car split into %zu objects, %zu nodes came off, %zu mesh vertices re-bound, mesh rest error %.2f mm (%s), sane %d, guard %llu\n", b.sim.objs.size(), detached, changed, err * 1000, worst.c_str(), b.sane(), (unsigned long long)b.sim.clampedSteps);
+  }
+}
+
 void testTorn() {
   printf("== Parts torn off and thrown far away ==\n");
   Bench b({-90, 0, 0}, 0, true);
@@ -1197,6 +1263,10 @@ int main(int argc, char** argv) {
     testWheelStrike();
   }
   if (want("compliance")) testCompliance();
+  if (argc > 1 && !strcmp(argv[1], "split")) {
+    testSplit();
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "torn")) {
     testFreeFall();
     testTorn();
