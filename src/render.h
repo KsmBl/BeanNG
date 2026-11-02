@@ -1,0 +1,58 @@
+// OpenGL 3.3 renderer. Reads a snapshot of node positions, never touches the live simulation.
+#pragma once
+#include <string>
+#include <vector>
+#include "vehicle.h"
+
+struct WheelView {
+  V3 hub, axis, up;
+  double theta = 0, radius = 0.31, width = 0.2;
+  bool left = true;
+};
+
+// Copied out of the physics thread once per rendered frame.
+struct Snapshot {
+  std::vector<V3> pos;
+  std::vector<float> beamForce;  // 0 means broken, for the debug overlay
+  WheelView wheels[4];
+  std::vector<SimEvent> events;
+  V3 carCog, carFwd{1, 0, 0}, carUp{0, 0, 1}, carLeft{0, 1, 0}, carVel;
+  u32 headNode = 0;
+
+  // HUD values.
+  double speedKmh = 0, rpm = 0, throttle = 0, brake = 0, steer = 0, coolant = 0, accum = 0;
+  double roll = 0, latG = 0, lonG = 0, peakG = 0, plastic = 0, ram = 0, physLoad = 0;
+  int gear = 1, heightMode = 1, awake = 0;
+  bool autoBox = true, soft = true, sport = false, activa = true, running = true;
+  bool radiator = false, hydraulics = false, mount = false, steering = false, seized = false;
+  bool flat[4] = {};
+  double timeScale = 1;
+  bool paused = false;
+  std::string damageMsg;
+  double damageAge = 100;
+};
+
+struct Camera {
+  V3 eye, target, up{0, 0, 1};
+  double fovY = 60.0 * PI / 180.0;
+};
+
+struct HudOptions {
+  bool help = false, debugBeams = false, mouseSteer = false, gamepad = false;
+  std::string gamepadName, cameraName;
+};
+
+class Renderer {
+ public:
+  bool init(const World& world, const Sim& sim, const CarSkin& skin);
+  void resetDamage();
+  void draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt);
+  // Returns the nearest node under a screen position, for the mouse grabber.
+  int pickNode(const Snapshot& s, const Camera& cam, int w, int h, double mx, double my, double maxPx) const;
+  V3 unprojectOnPlane(const Camera& cam, int w, int h, double mx, double my, V3 planePoint) const;
+  bool savePng(const std::string& path, int w, int h) const;
+
+ private:
+  struct Impl;
+  Impl* d = nullptr;
+};
