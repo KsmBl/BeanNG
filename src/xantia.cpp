@@ -556,19 +556,27 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
     HydroStrut st;
     if (front) {
       // MacPherson strut, kinematically approximated by a long virtual upper link.
-      const u32 kl = node(hx, hy - 0.055, 0.17, 4.0, 0);
+      // A nearly level lower arm keeps the roll centre low. A high one would use cornering force to
+      // jack the body up, and on soft gas springs that lift is large.
+      const u32 kl = node(hx, hy - 0.055, 0.195, 4.0, 0);
       const u32 ku = node(hx + 0.015, hy - 0.115, 0.46, 4.0, 0);
       const u32 ks = node(hx + 0.13, hy - 0.125, 0.24, 2.5, 0);
+      // The carrier braces the axle from both sides: lateral force must not twist the wheel.
+      const u32 kf = node(hx - 0.13, hy - 0.10, 0.27, 2.5, 0);
       for (u32 a : {w.axIn, w.axOut}) {
         B.beam(kl, a, mCarrier);
         B.beam(ku, a, mCarrier);
         B.beam(ks, a, mCarrier);
+        B.beam(kf, a, mCarrier);
       }
       B.beam(kl, ku, mCarrier);
       B.beam(kl, ks, mCarrier);
       B.beam(ku, ks, mCarrier);
-      B.beam(w.ring[0], ku, mHub);
-      B.beam(w.ring[3], kl, mHub);
+      B.beam(kf, kl, mCarrier);
+      B.beam(kf, ku, mCarrier);
+      B.beam(kf, ks, mCarrier);
+      for (int i = 0; i < 6; i++)
+        for (u32 c : {kl, ku, ks, kf}) B.beam(w.ring[i], c, mHub);
 
       // Lower wishbone to the two rail pick-ups.
       B.ibeam(kl, B.body[4][1][side], mArm);
@@ -592,7 +600,8 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
       B.beam(ku, ur, mArm);
 
       // Steering rack end.
-      const u32 rack = node(1.03, 0.28, 0.24, 3.0, 0);
+      // The tie rod runs parallel to the lower arm, which is what keeps toe constant over the stroke.
+      const u32 rack = node(1.03, 0.28, 0.25, 3.0, 0);
       sub[side].rack = rack;
       B.anchor(rack, 5, mAnchor);
       B.ibeam(rack, B.body[8][1][side], mAnchor);
@@ -640,8 +649,19 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
         B.beam(kb, a, mCarrier);
       }
       B.beam(kt, kb, mCarrier);
-      B.beam(w.ring[0], kt, mHub);
-      B.beam(w.ring[3], kb, mHub);
+      const u32 kf = node(hx - 0.13, hy - 0.08, 0.31, 2.5, 0);
+      const u32 kr = node(hx + 0.13, hy - 0.08, 0.31, 2.5, 0);
+      for (u32 c : {kf, kr}) {
+        B.beam(c, w.axIn, mCarrier);
+        B.beam(c, w.axOut, mCarrier);
+        B.beam(c, kt, mCarrier);
+        B.beam(c, kb, mCarrier);
+      }
+      B.beam(kf, kr, mCarrier);
+      B.beam(kf, po, mArm);
+      B.beam(kf, pi, mArm);
+      for (int i = 0; i < 6; i++)
+        for (u32 c : {kt, kb, kf, kr}) B.beam(w.ring[i], c, mHub);
       B.beam(po, pi, mSubframe);
       B.anchor(po, 6, mAnchor);
       B.anchor(pi, 6, mAnchor);

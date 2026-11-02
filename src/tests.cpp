@@ -895,6 +895,146 @@ void testWheelStrike() {
   }
 }
 
+void testCompliance() {
+  // Where does the front axle give way? Node positions in the body frame, straight against 0.7 g.
+  Bench b({-120, -80, 0}, 0);
+  b.world.clearBoxes();
+  b.world.flatten();
+  const double vT = 80 / 3.6;
+  b.launchAt(vT, 3);
+  b.run(1.0, [&](double, Controls& c) { c.throttle = clampd((vT - b.car.speed) * 0.5, 0, 1); });
+  const Wheel& w = b.car.wheels[1];  // front right: the loaded one in a left turn
+  const u32 kl = b.car.axle[0].s[1].low;
+  const u32 ku = kl + 1, ks = kl + 2;
+  const Beam& tie = b.sim.beams[b.car.tieBeam[1]];
+  const u32 rack = tie.a == ks ? tie.b : tie.a;
+  struct N { const char* name; u32 id; };
+  const std::vector<N> list = {{"axle inner", w.axIn}, {"axle outer", w.axOut}, {"lower joint", kl}, {"upper joint", ku}, {"steer arm", ks}, {"rack end", rack}, {"tower", b.car.axle[0].s[1].top}, {"ring top", w.ring[0]}, {"ring 3", w.ring[3]}};
+  auto rel = [&](u32 n) {
+    const V3 r = b.sim.pos[n] - b.car.cog;
+    return V3{dot(r, b.car.fwd), dot(r, b.car.left), dot(r, b.car.up)};
+  };
+  std::vector<V3> p0;
+  for (const N& n : list) p0.push_back(rel(n.id));
+  // Same rack position change removed: compare with the tie rod rest length change later.
+  const double tie0 = tie.L0;
+  b.run(3.0, [&](double, Controls& c) { c.steer = 0.075; c.throttle = clampd((vT - b.car.speed) * 0.5, 0, 1); });
+  printf("== Front right corner at %.2f g, Fy %.0f, Fz %.0f: displacement in the body frame, mm ==\n", b.car.latAcc / 9.81, w.Fy, w.Fz);
+  for (size_t i = 0; i < list.size(); i++) {
+    const V3 d = (rel(list[i].id) - p0[i]) * 1000.0;
+    printf("  %-12s dx %+6.1f dy %+6.1f dz %+6.1f\n", list[i].name, d.x, d.y, d.z);
+  }
+  printf("  tie rod L0 change %+.1f mm, actual length %.1f (rest %.1f), force %.0f N\n", (tie.L0 - tie0) * 1000, len(b.sim.pos[tie.b] - b.sim.pos[tie.a]) * 1000, tie.L0 * 1000, double(tie.force));
+}
+
+void testResponse() {
+  printf("== Response: how direct does the car feel? ==\n");
+  auto toeOf = [](Bench& b, int i) {
+    const Wheel& w = b.car.wheels[i];
+    const V3 wf = norm(cross(w.axis, b.car.up));
+    return std::atan2(dot(wf, b.car.left), dot(wf, b.car.fwd)) * 57.3;
+  };
+  for (double kmh : {50.0, 80.0, 120.0}) {
+    for (double st : {0.03, 0.06}) {
+      Bench b({-120, -80, 0}, 0);
+      b.world.clearBoxes();
+      b.world.flatten();
+      const double vT = kmh / 3.6;
+      b.launchAt(vT, kmh > 100 ? 4 : 3);
+      b.run(1.0, [&](double, Controls& c) { c.throttle = clampd((vT - b.car.speed) * 0.5, 0, 1); });
+      double prevHead = std::atan2(b.car.fwd.y, b.car.fwd.x);
+      std::vector<double> yaw, lat, roll, steerA;
+      double toeStart = 0.5 * (toeOf(b, 0) + toeOf(b, 1));
+      double toeFinal = 0;
+      const int N = 6000;
+      b.run(N * kDt, [&](double, Controls& c) {
+        c.steer = st;
+        c.throttle = clampd((vT - b.car.speed) * 0.5, 0, 1);
+        const double h = std::atan2(b.car.fwd.y, b.car.fwd.x);
+        yaw.push_back((h - prevHead) / kDt);
+        prevHead = h;
+        lat.push_back(b.car.latAcc);
+        roll.push_back(b.car.rollAngle);
+        steerA.push_back(b.car.steerAct);
+        toeFinal = 0.5 * (toeOf(b, 0) + toeOf(b, 1));
+      });
+      auto smoothAt = [&](const std::vector<double>& v, int i) {
+        double sum = 0;
+        int n = 0;
+        for (int k = std::max(0, i - 60); k <= std::min(N - 1, i + 60); k++, n++) sum += v[size_t(k)];
+        return sum / n;
+      };
+      const double yawEnd = smoothAt(yaw, N - 200);
+      double t50 = -1, t90 = -1, peak = 0;
+      for (int i = 0; i < N; i += 10) {
+        const double y = smoothAt(yaw, i);
+        peak = std::max(peak, y);
+        if (t50 < 0 && y > 0.5 * yawEnd) t50 = i * kDt;
+        if (t90 < 0 && y > 0.9 * yawEnd) t90 = i * kDt;
+      }
+      const double rackTime = st / 2.6;
+      const double commanded = st * 31.0;
+      printf("  %3.0f km/h steer %.2f (rack ready %.0f ms): yaw 50%% %3.0f ms, 90%% %3.0f ms, overshoot %3.0f %%, yaw %.1f deg/s, lat %.2f g, roll %.2f deg, wheel angle %.2f of ~%.2f deg\n", kmh, st, rackTime * 1000, t50 * 1000, t90 * 1000, (peak / yawEnd - 1) * 100, yawEnd * 57.3, smoothAt(lat, N - 200) / 9.81, smoothAt(roll, N - 200) * 57.3, toeFinal - toeStart, commanded);
+    }
+  }
+  // Throttle.
+  {
+    Bench b({-120, -80, 0}, 0);
+    b.world.clearBoxes();
+    b.world.flatten();
+    b.launchAt(60 / 3.6, 3);
+    b.run(1.0, [&](double, Controls& c) { c.throttle = 0.15; });
+    double t63 = -1, peak = 0, a0 = b.car.lonAcc, tTorque = -1;
+    std::vector<double> acc;
+    b.run(1.2, [&](double t, Controls& c) {
+      c.throttle = 1.0;
+      acc.push_back(b.car.lonAcc);
+      peak = std::max(peak, b.car.lonAcc);
+      if (tTorque < 0 && b.car.wheels[0].driveT > 400) tTorque = t;
+    });
+    for (size_t i = 0; i < acc.size(); i++)
+      if (t63 < 0 && acc[i] > a0 + 0.63 * (peak - a0)) t63 = i * kDt;
+    printf("  throttle stab at 60 km/h: shaft torque after %.0f ms, 63%% of pull after %.0f ms, peak %.2f g\n", tTorque * 1000, t63 * 1000, peak / 9.81);
+  }
+  // Brake.
+  {
+    Bench b({-120, -80, 0}, 0);
+    b.world.clearBoxes();
+    b.world.flatten();
+    b.launchAt(80 / 3.6, 3);
+    b.run(1.0, [&](double, Controls& c) { c.throttle = 0.2; });
+    double t63 = -1, peak = 0, dive = 0, tForce = -1;
+    std::vector<double> acc;
+    b.run(1.2, [&](double t, Controls& c) {
+      c.brake = 1.0;
+      acc.push_back(-b.car.lonAcc);
+      peak = std::max(peak, -b.car.lonAcc);
+      dive = std::max(dive, std::fabs(b.car.pitchAngle));
+      // Direct measure, free of the telemetry filter: braking force at the tyres.
+      double fx = 0;
+      for (const Wheel& w : b.car.wheels) fx += w.Fx;
+      if (tForce < 0 && -fx > 0.63 * 0.9 * b.car.totalMass * 9.81) tForce = t;
+    });
+    for (size_t i = 0; i < acc.size(); i++)
+      if (t63 < 0 && acc[i] > 0.63 * peak) t63 = i * kDt;
+    printf("  brake stab at 80 km/h: tyre force at 63%% after %.0f ms (filtered decel %.0f ms), peak %.2f g, dive %.2f deg\n", tForce * 1000, t63 * 1000, peak / 9.81, dive * 57.3);
+  }
+  // Compliance: how far do the wheels move under a steady 0.6 g, relative to the body?
+  {
+    Bench b({-120, -80, 0}, 0);
+    b.world.clearBoxes();
+    b.world.flatten();
+    const double vT = 80 / 3.6;
+    b.launchAt(vT, 3);
+    double st0[4], st1[4];
+    b.run(1.0, [&](double, Controls& c) { c.throttle = clampd((vT - b.car.speed) * 0.5, 0, 1); });
+    for (int i = 0; i < 4; i++) st0[i] = toeOf(b, i);
+    b.run(3.0, [&](double, Controls& c) { c.steer = 0.075; c.throttle = clampd((vT - b.car.speed) * 0.5, 0, 1); });
+    for (int i = 0; i < 4; i++) st1[i] = toeOf(b, i);
+    printf("  toe change at %.2f g, steer 0.075 (rack ~2.3 deg): FL %+.2f FR %+.2f RL %+.2f RR %+.2f deg, tyre slip front %.1f rear %.1f deg\n", b.car.latAcc / 9.81, st1[0] - st0[0], st1[1] - st0[1], st1[2] - st0[2], st1[3] - st0[3], std::atan(b.car.wheels[1].slipY) * 57.3, std::atan(b.car.wheels[3].slipY) * 57.3);
+  }
+}
+
 void testPropRest() {
   // Regression: every prop, woken with nothing touching it, must simply stay standing.
   Bench b({-90, 0, 0}, 0, true);
@@ -977,6 +1117,8 @@ int main(int argc, char** argv) {
     testWheelDamage();
     testWheelStrike();
   }
+  if (want("compliance")) testCompliance();
+  if (want("response")) testResponse();
   if (want("powertrain")) testPowertrain();
   if (want("rough")) testRough();
   if (want("rest")) testPropRest();

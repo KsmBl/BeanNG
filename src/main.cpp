@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -92,6 +93,9 @@ struct Game {
       v.up = sim.pos[w.ring[0]] - v.hub;
       v.theta = w.theta;
       v.left = w.left;
+      v.skid = w.skid;
+      v.surface = w.surface;
+      v.patch = w.patchPoint;
       v.deflate = w.deflate;
       v.groundN = -w.patchNormal;
       v.groundD = w.contact ? dot(w.patchPoint - v.hub, v.groundN) : 10.0;
@@ -229,7 +233,7 @@ struct CameraRig {
     double dh = heading - headingSmooth;
     while (dh > PI) dh -= 2 * PI;
     while (dh < -PI) dh += 2 * PI;
-    headingSmooth += dh * clampd(dt * 4.0, 0, 1);
+    headingSmooth += dh * clampd(dt * 7.5, 0, 1);
 
     const V3 c = s.carCog;
     switch (mode) {
@@ -280,7 +284,31 @@ double applyDeadzone(double v, double dz) {
 }
 }  // namespace
 
+// On a hybrid laptop GL would land on the integrated GPU. This asks for the discrete NVIDIA card
+// through PRIME render offload. It has to happen before anything loads a GL driver, and it only takes
+// effect if that card and its driver exist. BEANNG_GPU=integrated keeps the integrated one.
+static void preferDiscreteGpu() {
+  const char* choice = getenv("BEANNG_GPU");
+  if (choice && !strcmp(choice, "integrated")) return;
+  constexpr const char* kNvidiaEgl = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json";
+  FILE* f = fopen("/proc/driver/nvidia/version", "r");
+  if (f) {
+    fclose(f);
+    setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 0);
+    setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 0);
+    setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 0);
+    FILE* e = fopen(kNvidiaEgl, "r");
+    if (e) {
+      fclose(e);
+      setenv("__EGL_VENDOR_LIBRARY_FILENAMES", kNvidiaEgl, 0);
+    }
+  } else {
+    setenv("DRI_PRIME", "1", 0);  // AMD or nouveau discrete cards under Mesa
+  }
+}
+
 int main(int argc, char** argv) {
+  preferDiscreteGpu();
   std::string shotDir;
   int scriptMode = 0;
   for (int i = 1; i < argc; i++) {
@@ -373,6 +401,19 @@ int main(int argc, char** argv) {
   CameraRig rig;
   Camera cam;
   HudOptions hud;
+  {
+    // Short name for the HUD: "NVIDIA RTX 3500 Ada Generation Laptop GPU/PCIe/SSE2" -> "RTX 3500".
+    std::string r = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    const size_t cut = r.find('/');
+    if (cut != std::string::npos) r.resize(cut);
+    for (const char* drop : {"NVIDIA ", "Mesa ", " Laptop GPU", " Generation", "(R)"}) {
+      const size_t at = r.find(drop);
+      if (at != std::string::npos) r.erase(at, strlen(drop));
+    }
+    hud.gpuName = r;
+  }
+  double fpsClock = 0;
+  int fpsFrames = 0;
   hud.help = true;
   double helpTimer = 8.0;
   bool rmb = false, lmb = false;
@@ -399,6 +440,12 @@ int main(int argc, char** argv) {
     lastFrame = now;
     dt = std::min(dt, 0.1);
     const double tNow = std::chrono::duration<double>(now - startTime).count();
+    fpsClock += dt;
+    if (++fpsFrames >= 30) {
+      hud.fps = fpsFrames / std::max(fpsClock, 1e-3);
+      fpsFrames = 0;
+      fpsClock = 0;
+    }
 
     Controls edges;
     bool doReset = false, doRepair = false;
@@ -518,7 +565,7 @@ int main(int argc, char** argv) {
     const double speedAbs = std::fabs(view.speedKmh) / 3.6;
     const double limit = clampd(5.0 / std::max(speedAbs, 1.0), 0.09, 1.0);
     const double keyTarget = keyDir * limit;
-    const double keyRate = (keyDir != 0 && keyDir * keySteer >= 0) ? 1.6 : 3.2;
+    const double keyRate = (keyDir != 0 && keyDir * keySteer >= 0) ? 2.4 : 4.0;
     keySteer += clampd(keyTarget - keySteer, -keyRate * dt, keyRate * dt);
 
     const double keyGas = (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) ? 1.0 : 0.0;
@@ -537,8 +584,8 @@ int main(int argc, char** argv) {
       if (std::fabs(stick) > 0 || rt > 0.02 || lt > 0.02) hud.gamepad = true;
       if (std::fabs(stick) > 0) {
         // Curved for fine control around the centre, and narrowed with speed.
-        const double curved = std::copysign(std::pow(std::fabs(stick), 1.6), -stick);
-        steer = curved * clampd(6.5 / std::max(speedAbs, 1.0), 0.14, 1.0);
+        const double curved = std::copysign(std::pow(std::fabs(stick), 1.35), -stick);
+        steer = curved * clampd(8.0 / std::max(speedAbs, 1.0), 0.16, 1.0);
       }
       gas = std::max(gas, rt);
       brake = std::max(brake, lt);
@@ -560,6 +607,7 @@ int main(int argc, char** argv) {
 
     // Scripted runs for automated screenshots.
     bool scripted = false;
+    bool scriptHand = false;
     double scriptGas = 0, scriptSteer = 0;
     if (scriptMode > 0) {
       scripted = true;
@@ -595,6 +643,16 @@ int main(int argc, char** argv) {
           rig.dist = 4.2;
           rig.pitch = 0.42;
           rig.yaw = 0.5 + double(shotCount) * PI / 3.0;
+          break;
+        case 12:  // lay rubber: launch, then a hard turn with the handbrake on
+          rig.mode = CAM_ORBIT;
+          rig.dist = 16.0;
+          rig.pitch = 0.75;
+          rig.yaw = 2.6;
+          scriptGas = tNow < 6.0 ? 1.0 : 0.7;
+          scriptSteer = tNow < 6.0 ? 0.0 : 0.65;
+          G.input.c.handbrake = 0;
+          scriptHand = tNow > 6.0 && tNow < 8.0;
           break;
         case 10:  // close look at a tyre going flat and a dented rim
           rig.mode = CAM_ORBIT;
@@ -637,7 +695,7 @@ int main(int argc, char** argv) {
       c.steer = scripted && !scriptPad ? scriptSteer : steer;
       c.throttle = scripted && !scriptPad ? scriptGas : gas;
       c.brake = scripted && !scriptPad ? 0.0 : brake;
-      c.handbrake = hb;
+      c.handbrake = scriptHand ? 1.0 : hb;
       c.shiftUp |= sendC.shiftUp;
       c.shiftDown |= sendC.shiftDown;
       c.toggleAuto |= sendC.toggleAuto;
@@ -654,6 +712,7 @@ int main(int argc, char** argv) {
       G.input.grabTarget = grabTarget;
     }
     if (doReset || doRepair) renderer.resetDamage();
+    if (doReset) renderer.clearSkidMarks();
 
     {
       std::lock_guard<std::mutex> lock(G.snapMutex);
@@ -742,11 +801,12 @@ int main(int argc, char** argv) {
         char path[512];
         snprintf(path, sizeof path, "%s/shot_%02d.png", shotDir.c_str(), shotCount++);
         renderer.savePng(path, w, h);
+        if (shotCount == 1) printf("fps %.0f gpu %s\n", hud.fps, hud.gpuName.c_str());
         printf("t=%.1f v=%.0f km/h x=%.1f z=%.2f steer=%+.2f gear=%d gas=%.2f br=%.2f plastic=%.1f kJ awake=%d load=%.0f%% pad=%d\n", tNow, view.speedKmh, view.carCog.x, view.carCog.z, view.steer, view.gear, view.throttle, view.brake, view.plastic / 1e3, view.awake, view.physLoad * 100, hud.gamepad);
         const bool burst = scriptMode == 7 || scriptMode == 8;
         nextShot += burst ? 0.0 : 1.0;
         if (burst && nextShot < 6.0) nextShot = 6.0;
-        if (shotCount >= (burst ? 6 : (scriptMode == 9 ? 7 : 19))) quit = true;
+        if (shotCount >= (burst ? 6 : (scriptMode == 9 ? 7 : (scriptMode == 12 ? 13 : 19)))) quit = true;
       }
     }
     if (wantShot) {

@@ -7,6 +7,8 @@ Fahrzeug: Citroën Xantia Activa (3.0 V6).
 
     ./run.sh
 
+Auf Laptops mit zwei GPUs nutzt das Spiel automatisch die dedizierte Karte. Mit `BEANNG_GPU=integrated ./run.sh` läuft es auf der integrierten.
+
 Abhängigkeiten: SDL3, libepoxy, CMake, ein C++20-Compiler, Python 3 mit numpy, scipy und shapely.
 
 ## Steuerung
@@ -52,6 +54,6 @@ und Bordsteine (y = 70 bis 100) sowie die Landstraße rund um die Fläche.
     ./build/beanng-test                    # alles
     ./build/beanng-test crash skidpad      # einzelne Tests
 
-Tests: `statics bounce accel brake skidpad crash rough jitter powertrain rest props perf`
+Tests: `statics bounce accel brake skidpad crash rough jitter response compliance wheel powertrain rest props perf`
 
 Die Fahrzeugdaten sind angenäherte Werte, keine Herstellerdaten.

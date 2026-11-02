@@ -48,6 +48,7 @@ struct Wheel {
 
   // Where the tyre touches, for the visible contact patch.
   V3 patchPoint, patchNormal{0, 0, 1};
+  double skid = 0;  // how hard the tread is sliding, 0..1: rubber left on the road
 
   // Outputs.
   double Fz = 0, Fx = 0, Fy = 0, slipX = 0, slipY = 0;

@@ -9,6 +9,9 @@ struct WheelView {
   double theta = 0;
   bool left = true;
   double deflate = 0;
+  double skid = 0;
+  u8 surface = 0;
+  V3 patch;
   V3 groundN{0, 0, -1};     // towards the road, world space
   double groundD = 10;      // distance from hub to road along groundN; large when airborne
   float dent[Wheel::kDentBins] = {};
@@ -46,13 +49,15 @@ struct Camera {
 
 struct HudOptions {
   bool help = false, xray = false, debugBeams = false, mouseSteer = false, gamepad = false;
-  std::string gamepadName, cameraName;
+  std::string gamepadName, cameraName, gpuName;
+  double fps = 0;
 };
 
 class Renderer {
  public:
   bool init(const World& world, const Sim& sim, const CarRig& rig, const CarMesh& mesh);
   void resetDamage();
+  void clearSkidMarks();
   void draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt);
   // Returns the nearest node under a screen position, for the mouse grabber.
   int pickNode(const Snapshot& s, const Camera& cam, int w, int h, double mx, double my, double maxPx) const;

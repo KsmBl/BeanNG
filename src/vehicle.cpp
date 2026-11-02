@@ -284,6 +284,11 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
       tetWeights(patch - t * (trail * (Vx >= 0 ? 1.0 : -1.0)), wl);
       for (int i = 0; i < 4; i++) sim.force[tetN[i]] += l * (Fy * wl[i]);
 
+      // Tread on the limit lays rubber; on a flat tyre the carcass scrubs at any slip.
+      const double slipSpeed = std::hypot(Vsx, Vy);
+      w.skid = smoothstepd(0.95, 1.5, s) * clampd(Fz / 1500.0, 0, 1) * smoothstepd(0.8, 2.5, slipSpeed);
+      if (w.deflate > 0.5) w.skid = std::max(w.skid, 0.5 * smoothstepd(1.0, 4.0, absV));
+
       if (s > 1.3 && absV + std::fabs(w.omega * Re) > 4.0 && Fz > 800.0 &&
           (sim.stepCount & 31) == 0 && sim.events.size() < 500) {
         const bool soft = surf == SURF_GRASS || surf == SURF_GRAVEL;
@@ -296,6 +301,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
     // A heavy blow through the tyre leaves its mark on the rim, right where it struck.
     if (Fz > 17000.0 && (sim.stepCount & 3) == 0) addRimDamage(w, patch, (Fz - 17000.0) * 8e-9, 0.0);
   } else {
+    w.skid = 0;
     w.ux *= 0.995;
     w.uy *= 0.995;
   }
@@ -378,7 +384,7 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
   if (std::fabs(latAcc) > 2.2) wantFirm = true;
   if (brakeAct > 0.35 || std::fabs(lonAcc) > 3.8) wantFirm = true;
   if (throttleRate > 2.2 && v > 3.0) wantFirm = true;
-  if (v > 44.0) wantFirm = true;  // about 160 km/h
+  if (v > 33.0) wantFirm = true;  // about 120 km/h
   if (wantFirm)
     firmHold = 1.4;
   else
@@ -677,7 +683,7 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   }
   constexpr double kManifoldMin = 0.22;
   const double manifoldTarget = kManifoldMin + (1.0 - kManifoldMin) * std::pow(th, 0.75);
-  manifold += (manifoldTarget - manifold) * clampd(dt / 0.06, 0, 1);
+  manifold += (manifoldTarget - manifold) * clampd(dt / 0.04, 0, 1);
   const double load = clampd((manifold - kManifoldMin) / (1.0 - kManifoldMin), 0, 1);
 
   // Six firing strokes per two revolutions: three torque pulses per crank revolution. This pulsation
@@ -1029,8 +1035,9 @@ void Vehicle::update(Sim& sim, const Controls& in, double dt) {
     if (!(tr.flags & BF_BROKEN)) tr.L0 += delta - rackPrev_;
     rackPrev_ = delta;
   }
-  throttleAct += clampd(in.throttle - throttleAct, -8.0 * dt, 6.0 * dt);
-  brakeAct += clampd(in.brake - brakeAct, -10.0 * dt, 9.0 * dt);
+  throttleAct += clampd(in.throttle - throttleAct, -14.0 * dt, 14.0 * dt);
+  // The Citroen brake is powered and has almost no pedal travel: it bites at once.
+  brakeAct += clampd(in.brake - brakeAct, -14.0 * dt, 20.0 * dt);
   hbAct_ = in.handbrake;
 
   // Aerodynamics: applied to the whole body by mass, so it needs no attitude model.

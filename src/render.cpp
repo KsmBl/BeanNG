@@ -404,6 +404,60 @@ struct Renderer::Impl {
   GLuint lineVao = 0, lineVbo = 0;
   std::vector<LineV> lineVerts;
 
+  // Skid marks: a ring buffer of triangles lying on the road. They stay until the world is reset.
+  static constexpr size_t kMarkVerts = 6 * 60000;
+  GLuint markVao = 0, markVbo = 0;
+  size_t markNext = 0, markCount = 0;
+  struct MarkTrail {
+    bool valid = false;
+    V3 l, r;
+    float a = 0;
+  } trail[4];
+
+  void addSkidMarks(const Snapshot& s) {
+    constexpr double kHalfTread = 0.085;
+    constexpr double kMinStep = 0.06, kMaxStep = 4.0;
+    LineV q[6];
+    glBindBuffer(GL_ARRAY_BUFFER, markVbo);
+    for (int i = 0; i < 4; i++) {
+      const WheelView& w = s.wheels[i];
+      MarkTrail& t = trail[i];
+      if (w.skid < 0.03 || w.groundD > 5.0) {
+        t.valid = false;
+        continue;
+      }
+      // Above the road ribbon on roads, just above the ground elsewhere.
+      V3 c = w.patch;
+      const bool road = w.surface == SURF_ASPHALT;
+      c.z += road ? 0.036 : 0.016;
+      V3 side = w.axis - V3{0, 0, 1} * w.axis.z;
+      side = norm(side) * kHalfTread;
+      const V3 l = c + side, r = c - side;
+      const float a = float(w.skid) * (road ? 0.72f : 0.8f);
+      if (!t.valid) {
+        t = {true, l, r, a};
+        continue;
+      }
+      const double step = len((l + r) * 0.5 - (t.l + t.r) * 0.5);
+      if (step < kMinStep) continue;
+      if (step < kMaxStep) {
+        const bool soft = w.surface == SURF_GRASS || w.surface == SURF_GRAVEL;
+        const float cr = soft ? 0.13f : 0.012f, cg = soft ? 0.10f : 0.012f, cb = soft ? 0.06f : 0.014f;
+        auto v = [&](V3 p, float al) { return LineV{float(p.x), float(p.y), float(p.z), cr, cg, cb, al}; };
+        q[0] = v(t.l, t.a);
+        q[1] = v(l, a);
+        q[2] = v(r, a);
+        q[3] = v(t.l, t.a);
+        q[4] = v(r, a);
+        q[5] = v(t.r, t.a);
+        glBufferSubData(GL_ARRAY_BUFFER, GLintptr(markNext * sizeof(LineV)), sizeof q, q);
+        markNext = (markNext + 6) % kMarkVerts;
+        markCount = std::min(kMarkVerts, markCount + 6);
+      }
+      t = {true, l, r, a};
+    }
+  }
+
   GLuint hudVao = 0, hudVbo = 0;
   std::vector<HudV> hudVerts;
 
@@ -1029,6 +1083,8 @@ struct Renderer::Impl {
       text(W - float(strlen(t)) * 12 * scale - 10 * scale, ry, t, px2, r, g, b);
       ry += 20 * scale;
     };
+    snprintf(buf, sizeof buf, "%3.0F FPS  %s", o.fps, o.gpuName.c_str());
+    rtext(buf, .75f, .85f, .75f);
     snprintf(buf, sizeof buf, "PHYSIK %3.0F%%  WACH %d", s.physLoad * 100.0, s.awake);
     rtext(buf, .75f, .85f, .75f);
     rtext(o.gamepad ? "CONTROLLER AKTIV" : "TASTATUR/MAUS", .75f, .75f, .75f);
@@ -1214,6 +1270,16 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, const
   glEnableVertexAttribArray(1);
   glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(LineV), (void*)12);
 
+  glGenVertexArrays(1, &d->markVao);
+  glGenBuffers(1, &d->markVbo);
+  glBindVertexArray(d->markVao);
+  glBindBuffer(GL_ARRAY_BUFFER, d->markVbo);
+  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(Impl::kMarkVerts * sizeof(LineV)), nullptr, GL_DYNAMIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LineV), (void*)0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(LineV), (void*)12);
+
   glGenVertexArrays(1, &d->hudVao);
   glGenBuffers(1, &d->hudVbo);
   glBindVertexArray(d->hudVao);
@@ -1226,6 +1292,11 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, const
 
   glEnable(GL_PROGRAM_POINT_SIZE);
   return true;
+}
+
+void Renderer::clearSkidMarks() {
+  d->markNext = d->markCount = 0;
+  for (auto& t : d->trail) t.valid = false;
 }
 
 void Renderer::resetDamage() {
@@ -1241,6 +1312,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   D.updateCar(s);
   D.updateProps(s, cam.eye);
   D.stepParticles(dt);
+  D.addSkidMarks(s);
   D.buildHud(s, hud, w, h);
 
   // Eye-relative view would be more precise, but +-500 m with 1 mm float steps is good enough.
@@ -1389,10 +1461,19 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     glDisable(GL_BLEND);
   }
 
-  // Transparent things last: glass and particles.
+  // Transparent things last: skid marks, glass and particles.
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDepthMask(GL_FALSE);
+  if (D.markCount > 0) {
+    glUseProgram(D.progLine);
+    D.setMat(D.progLine, "uVP", vp);
+    glBindVertexArray(D.markVao);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -2.0f);
+    glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.markCount));
+    glDisable(GL_POLYGON_OFFSET_FILL);
+  }
   glUseProgram(D.progMesh);
   D.setMat(D.progMesh, "uModel", I);
   glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), 0.30f);
