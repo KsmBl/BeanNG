@@ -21,9 +21,11 @@ struct Snapshot {
 
   // HUD values.
   double speedKmh = 0, rpm = 0, throttle = 0, brake = 0, steer = 0, coolant = 0, accum = 0;
+  double lhm = 0, fuel = 0, oil = 0, clutchPos = 0;
   double roll = 0, latG = 0, lonG = 0, peakG = 0, plastic = 0, ram = 0, physLoad = 0;
   int gear = 1, heightMode = 1, awake = 0;
   bool autoBox = true, soft = true, sport = false, activa = true, running = true;
+  bool gearboxBad = false, tankBad = false, oilBad = false, charging = false;
   bool radiator = false, hydraulics = false, mount = false, steering = false, seized = false;
   bool flat[4] = {};
   double timeScale = 1;
@@ -38,7 +40,7 @@ struct Camera {
 };
 
 struct HudOptions {
-  bool help = false, debugBeams = false, mouseSteer = false, gamepad = false;
+  bool help = false, xray = false, debugBeams = false, mouseSteer = false, gamepad = false;
   std::string gamepadName, cameraName;
 };
 

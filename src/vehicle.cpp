@@ -16,7 +16,15 @@ double fullLoadTorque(double rpm) {
 }
 double frictionTorque(double rpm) { return 12.0 + 0.008 * rpm; }
 
-constexpr double kEngineInertia = 0.22;
+// Rotating inertias [kg m^2] and shaft rates [Nm/rad]. Plausible for this size of car, not OEM data.
+constexpr double kEngineInertia = 0.22;   // crank and flywheel
+constexpr double kDiscInertia = 0.012;    // clutch disc
+constexpr double kInputInertia = 0.016;   // input shaft, cluster and synchro hubs
+constexpr double kCarrierInertia = 0.09;  // differential carrier and final drive
+constexpr double kSpiderInertia = 0.025;  // side gears, referred to the shafts
+constexpr double kDamperRate = 1500.0, kDamperDamp = 3.0;    // clutch torsion damper
+constexpr double kShaftRate = 8000.0, kShaftDamp = 9.0;      // halfshaft
+constexpr double kSynchroTorque = 45.0;   // synchro cone at the input shaft [Nm]
 constexpr double kClutchCapacity = 430.0;
 constexpr double kIdleRpm = 800.0, kRevLimit = 6600.0;
 constexpr double kGears[] = {3.42, 1.81, 1.28, 0.97, 0.77};  // close to the ML5T box
@@ -26,7 +34,7 @@ constexpr double kRpmToRad = 2.0 * PI / 60.0;
 
 // ---- Tyre: 205/60 R15 touring tyre, Magic Formula in normalised combined slip.
 constexpr double kKappaPeak = 0.11, kAlphaPeak = 0.14;  // peak slip, about 8 degrees
-constexpr double kC = 1.55;                             // falls to roughly 85 % when sliding
+constexpr double kC = 1.40;                             // falls to roughly 85 % when sliding
 constexpr double kSigmaX = 0.10, kSigmaY = 0.35;        // relaxation lengths [m]
 constexpr double kFz0 = 4000.0;
 constexpr double kTrail0 = 0.035;
@@ -36,6 +44,14 @@ inline double magic(double s) { return std::sin(kC * std::atan(kB * s)); }
 
 constexpr double kAirDensity = 1.2;
 constexpr double kFluidLeakSinkRate = 25e-6;  // m^3/s lost per strut after a line has burst
+
+// Main hydraulic circuit. Accumulator data from owner forums, pump size estimated.
+constexpr double kAccV0 = 400e-6, kAccP0 = 65e5;
+constexpr double kCutIn = 145e5, kCutOut = 170e5;  // pressure regulator
+constexpr double kPumpDisplacement = 3.0e-6;       // [m^3 per crank revolution]
+constexpr double kRamArea = 6e-4;                  // Activa ram piston [m^2]
+constexpr double kRackArea = 8e-4;                 // power steering piston [m^2]
+constexpr double kBrakeVolume = 14e-6;             // fluid for a full brake application [m^3]
 }  // namespace
 
 void Vehicle::note(const char* msg) {
@@ -303,11 +319,34 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
     firmHold = std::max(0.0, firmHold - dt);
   hydractiveSoft = firmHold <= 0;
 
-  // ---- Pump and accumulator.
-  const double pumpOn = engineRunning && !dmg.engineMount ? 1.0 : 0.0;
-  const double pumpFlowOK = pumpOn * clampd(rpm() / 800.0, 0.3, 1.0);
-  if (accumulator < 170e5 && hydroFluid > 0.02)
-    accumulator = std::min(170e5, accumulator + pumpFlowOK * 22e5 * dt);
+  // ---- Pump, pressure regulator and accumulator: real volumes, gas law for the pressure.
+  {
+    const double Vg = std::max(kAccV0 - accFluid, kAccV0 * 0.05);
+    accumulator = accFluid <= 0 ? std::max(0.0, kAccP0 * (1.0 + accFluid / 20e-6)) : kAccP0 * std::pow(kAccV0 / Vg, 1.35);
+    if (accumulator < kCutIn) pumpCharging = true;
+    if (accumulator > kCutOut) pumpCharging = false;
+    const bool drive = engineRunning && !dmg.engineMount && reservoir > 2e-4;
+    const double pumpFlow = drive ? kPumpDisplacement * rpm() / 60.0 : 0.0;
+    if (pumpCharging && pumpFlow > 0) {
+      accFluid += pumpFlow * dt;
+      reservoir -= pumpFlow * dt;
+      pumpTorque = accumulator * kPumpDisplacement / (2.0 * PI);
+    } else {
+      pumpTorque = drive ? 0.6 : 0.0;
+    }
+    if (dmg.hydraulics) {
+      // A burst line empties the accumulator and the reservoir onto the road.
+      const double leak = std::min(accFluid, 90e-6 * dt);
+      accFluid -= leak;
+      reservoir = std::max(0.0, reservoir - 40e-6 * dt);
+    }
+    // Brakes run from the same circuit: only pressing the pedal further costs fluid.
+    const double pedalRate = std::max(0.0, brakeAct - prevBrake_) / dt;
+    prevBrake_ = brakeAct;
+    drawAccumulator(pedalRate * kBrakeVolume * dt);
+    // Power steering: fluid goes with rack movement.
+    drawAccumulator(std::fabs(rackRate_) * kRackArea * dt);
+  }
 
   static const double kNominalL[3] = {-0.05, 0.0, 0.06};  // ride height offset by mode
   const double heightOffset = kNominalL[heightMode];
@@ -335,7 +374,7 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
     const double target = clampd(ff + ramTrim_, -0.14, 0.14);
     const double rate = clampd((target - ramCmd_) * 25.0, -0.25, 0.25);
     ramCmd_ += rate * dt;
-    accumulator -= std::fabs(rate) * 2.5e5 * dt;
+    drawAccumulator(std::fabs(rate) * kRamArea * 2.0 * dt);
   } else {
     // Rams bleed down: the bars stay passive and the car rolls like a normal one.
     ramCmd_ += (0.0 - ramCmd_) * clampd(dt * 3.0, 0, 1);
@@ -410,7 +449,7 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
       const double err = (A.s[0].Lnom + heightOffset) - avgL;
       A.levelErrLP += (err - A.levelErrLP) * clampd(dt * 2.0, 0, 1);
       if (std::fabs(A.levelErrLP) > 0.003) {
-        const bool canAdd = accumulator > 90e5 && hydroFluid > 0.02;
+        const bool canAdd = accumulator > A.s[0].pGas + 10e5;
         // Proportional, so that it converges instead of hunting around the target height.
         constexpr double kLevelGain = 0.45;     // 1/s
         constexpr double kLevelMaxFlow = 18e-6;  // m^3/s per strut
@@ -420,15 +459,20 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
           if (A.s[side].burst) continue;
           A.s[side].Vf += flow * dt;
         }
-        if (flow > 0) accumulator -= flow * 2.2e11 * dt;
+        const double total = flow * 2.0 * dt;
+        if (flow > 0)
+          drawAccumulator(total, false);  // stays in the suspension
+        else
+          reservoir -= total;  // height corrector returning fluid to the tank
       }
     }
   }
 
-  if (dmg.hydraulics) {
-    hydroFluid = std::max(0.0, hydroFluid - dt * 0.08);
-    accumulator = std::max(0.0, accumulator - dt * 18e5);
-  }
+}
+
+void Vehicle::drawAccumulator(double volume, bool returnsToTank) {
+  accFluid -= volume;
+  if (returnsToTank) reservoir += volume;
 }
 
 void Vehicle::settleFluid(Sim& sim) {
@@ -450,6 +494,40 @@ void Vehicle::settleFluid(Sim& sim) {
 // ---------------------------------------------------------------------------------------
 // Engine, clutch, gearbox, differential
 // ---------------------------------------------------------------------------------------
+void Vehicle::applyBlockTorque(Sim& sim, const std::vector<u32>& nodes, double torque) {
+  // Reaction torque on a rigid block, about the car's transverse axis, as a pure couple.
+  if (nodes.empty()) return;
+  V3 c{};
+  for (u32 n : nodes) c += sim.pos[n];
+  c = c / double(nodes.size());
+  double arm2 = 0;
+  for (u32 n : nodes) {
+    const V3 r = sim.pos[n] - c;
+    arm2 += len2(r - left * dot(r, left));
+  }
+  if (arm2 < 1e-6) return;
+  for (u32 n : nodes) sim.force[n] += cross(left, sim.pos[n] - c) * (torque / arm2);
+}
+
+void Vehicle::presetRolling(double v, int gearIndex) {
+  gear = gearIndex;
+  shiftTarget = gearIndex;
+  shiftPhase = 0;
+  double wheelOmega = 0;
+  for (Wheel& w : wheels) {
+    w.omega = v / (w.R - 0.006);
+    wheelOmega = w.omega;
+  }
+  carrierOmega = wheelOmega;
+  spiderOmega = 0;
+  const double r = gear == 0 ? 0.0 : (gear > 0 ? kGears[gear - 1] : -kReverse) * kFinal;
+  inputOmega = r * carrierOmega;
+  discOmega = inputOmega;
+  engineOmega = std::max(90.0, inputOmega);
+  clutch = 1;
+  clutchRamp_ = 1;
+}
+
 void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   // Mode buttons are edge-triggered upstream.
   if (in.toggleAuto) autoBox = !autoBox;
@@ -457,119 +535,188 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   if (in.toggleActiva) activaOn = !activaOn;
   if (in.cycleHeight) heightMode = (heightMode + 1) % 3;
   if (in.toggleIgnition) {
-    engineRunning = !engineRunning;
-    if (engineRunning) engineOmega = std::max(engineOmega, kIdleRpm * kRpmToRad);
+    if (engineRunning)
+      engineRunning = false;
+    else if (!dmg.seized)
+      starterClock = 1.2;
   }
 
-  int nDriven = 0;
-  double omegaDiff = 0;
-  for (const Wheel& w : wheels)
-    if (w.driven && w.attached) {
-      omegaDiff += w.omega;
-      nDriven++;
-    }
-  if (nDriven) omegaDiff /= nDriven;
+  auto ratioOf = [](int g) { return g == 0 ? 0.0 : (g > 0 ? kGears[g - 1] : -kReverse) * kFinal; };
 
-  const double dir = gear < 0 ? -1.0 : 1.0;
-  const double ratio = gear == 0 ? 0.0 : (gear > 0 ? kGears[gear - 1] : -kReverse) * kFinal;
-  const double omegaIn = ratio * omegaDiff;
-
-  // ---- Shifting.
+  // ---- Gear selection. A shift is a sequence of physical steps: open the clutch, pull the box into
+  // neutral, let the synchro bring the input shaft to the new speed, engage, close the clutch. How
+  // long it takes follows from the speeds and inertias involved.
   sinceShift += dt;
-  auto engage = [&](int g) {
-    if (g == gear) return;
-    gear = g;
-    shiftTimer = 0.22;
+  auto request = [&](int g) {
+    if (g == shiftTarget || dmg.gearbox) return;
+    shiftTarget = g;
+    shiftPhase = 1;
+    shiftClock = 0;
     sinceShift = 0;
   };
-  if (shiftTimer > 0) shiftTimer -= dt;
-  if (in.requestGear != 99) engage(in.requestGear);
-  if (in.shiftUp) engage(std::min(5, gear + 1));
-  if (in.shiftDown) engage(std::max(-1, gear - 1));
-  if (autoBox && shiftTimer <= 0 && sinceShift > 0.9 && gear >= 1) {
-    const double r = omegaIn / kRpmToRad;
-    const double up = lerpd(2300, 6150, throttleAct);
-    const double dn = lerpd(1250, 3400, throttleAct);
-    if (r > up && gear < 5)
-      engage(gear + 1);
-    else if (r < dn && gear > 1)
-      engage(gear - 1);
+  if (in.requestGear != 99) request(in.requestGear);
+  if (in.shiftUp) request(std::min(5, shiftTarget + 1));
+  if (in.shiftDown) request(std::max(-1, shiftTarget - 1));
+  if (autoBox && shiftPhase == 0 && sinceShift > 0.9 && gear >= 1) {
+    const double r = std::fabs(inputOmega) / kRpmToRad;
+    if (r > lerpd(2300, 6150, throttleAct) && gear < 5)
+      request(gear + 1);
+    else if (r < lerpd(1250, 3400, throttleAct) && gear > 1)
+      request(gear - 1);
   }
+  double syncTorque = 0;
+  if (shiftPhase == 1) {
+    shiftClock += dt;
+    if (shiftClock > 0.07) {
+      gear = 0;
+      shiftPhase = shiftTarget == 0 ? 0 : 2;
+    }
+  }
+  if (shiftPhase == 2) {
+    const double wanted = ratioOf(shiftTarget) * carrierOmega;
+    const double slip = wanted - inputOmega;
+    // Reverse has no synchro, so it only goes in when everything has nearly stopped.
+    if (shiftTarget < 0 && std::fabs(carrierOmega) > 4.0) {
+      syncTorque = 0;
+    } else if (std::fabs(slip) < 4.0) {
+      gear = shiftTarget;
+      inputOmega = wanted;
+      shiftPhase = 0;
+      clutchRamp_ = 0;
+    } else {
+      syncTorque = clampd(slip * kInputInertia / dt, -kSynchroTorque, kSynchroTorque);
+    }
+  }
+  if (dmg.gearbox) gear = 0;
+  const double ratio = ratioOf(gear);
 
-  // ---- Throttle/idle/rev limiter.
+  // ---- Combustion: throttle plate, manifold filling, then torque from the air actually in the
+  // cylinders. That lag is why a real engine does not react instantly to the pedal.
   const double rpmNow = rpm();
   double th = throttleAct;
-  if (engineRunning) {
+  bool ignition = engineRunning;
+  if (fuelLitres <= 0 || dmg.seized) ignition = false;
+  if (throttleAct > 0.15 && !engineRunning && !dmg.seized && starterClock <= 0 && fuelLitres > 0) starterClock = 1.2;
+  // Automated shifting manages the revs: throttle closed on the way up, a blip to match on the way down.
+  if (shiftPhase != 0) {
+    const double wanted = std::fabs(ratioOf(shiftTarget) * carrierOmega);
+    th = shiftPhase == 2 && wanted > engineOmega + 15.0 ? 0.45 : 0.0;
+  }
+  if (ignition) {
     if (rpmNow < kIdleRpm + 100) th = std::max(th, clampd((kIdleRpm + 100 - rpmNow) / 250.0, 0, 0.55));
     if (rpmNow > kRevLimit) th = 0;
-    if (dmg.seized) th = 0;
     if (dmg.coolantTemp > 118.0) th *= clampd(1.0 - (dmg.coolantTemp - 118.0) / 15.0, 0.2, 1.0);
   } else {
     th = 0;
-    if (throttleAct > 0.15 && !dmg.seized) {  // restart by pressing the pedal
+  }
+  constexpr double kManifoldMin = 0.22;
+  const double manifoldTarget = kManifoldMin + (1.0 - kManifoldMin) * std::pow(th, 0.75);
+  manifold += (manifoldTarget - manifold) * clampd(dt / 0.06, 0, 1);
+  const double load = clampd((manifold - kManifoldMin) / (1.0 - kManifoldMin), 0, 1);
+
+  // Six firing strokes per two revolutions: three torque pulses per crank revolution. This pulsation
+  // is what shakes the block on its mounts at idle.
+  crankAngle = std::fmod(crankAngle + engineOmega * dt, 2.0 * PI);
+  const double fric = frictionTorque(rpmNow) * (oilLevel < 0.2 ? 2.5 : 1.0);
+  double comb = ignition ? load * (fullLoadTorque(rpmNow) + fric) : 0.0;
+  comb *= 1.0 + 0.25 * std::cos(3.0 * crankAngle);
+  combustionTorque = comb;
+  double Te = comb - fric - 2.0 - pumpTorque;
+  if (dmg.seized) Te -= 900.0 * clampd(engineOmega / 5.0, 0, 1);
+  if (starterClock > 0) {
+    starterClock -= dt;
+    Te += 55.0;
+    if (rpmNow > 500.0 && !dmg.seized && fuelLitres > 0) {
       engineRunning = true;
-      engineOmega = std::max(engineOmega, 650 * kRpmToRad);
+      starterClock = 0;
     }
   }
-  double Te = th * fullLoadTorque(rpmNow) - (1.0 - th) * frictionTorque(rpmNow);
-  if (dmg.seized) Te -= 900.0;
   engineTorqueOut = Te;
+  if (ignition) fuelLitres = std::max(0.0, fuelLitres - load * rpmNow * 1.6e-6 * dt);
 
-  // ---- Clutch, automated. It slips at launch and opens during shifts.
-  if (shiftTimer > 0 || gear == 0) {
+  // ---- Clutch: automated. Slips at launch, opens for a shift, closes progressively afterwards.
+  clutchRamp_ = std::min(1.0, clutchRamp_ + dt * 11.0);
+  if (shiftPhase != 0 || gear == 0 || dmg.bellHousing) {
     clutch = 0;
   } else {
-    const double rIn = std::fabs(omegaIn) / kRpmToRad;
-    if (rIn > 1150.0) {
-      clutch = 1;
-    } else {
-      const double e = smoothstepd(1000.0, 2100.0, rpmNow);
-      clutch = throttleAct > 0.03 ? e : 0.0;
-    }
+    const double rIn = std::fabs(inputOmega) / kRpmToRad;
+    double e;
+    if (rIn > 1150.0)
+      e = 1;
+    else
+      e = throttleAct > 0.03 ? smoothstepd(1000.0, 2100.0, rpmNow) : 0.0;
+    clutch = e * clutchRamp_;
   }
 
-  // Velocity-level clutch solve: the torque needed to equalise both sides this step, limited by
-  // clutch capacity. A stiff torsional spring here would need a far smaller time step.
-  double Tc = 0;
-  double wheelI = 0;
-  for (const Wheel& w : wheels)
-    if (w.driven) wheelI = w.I;
-  if (ratio != 0 && nDriven > 0 && clutch > 0) {
-    const double J = 1.0 / kEngineInertia + ratio * ratio / (nDriven * wheelI);
-    const double need = ((engineOmega + Te * dt / kEngineInertia) - omegaIn) / (dt * J);
-    const double cap = kClutchCapacity * clutch;
-    Tc = clampd(need, -cap, cap);
-  }
-  engineOmega += (Te - Tc) * dt / kEngineInertia;
-  if (engineOmega < 0) engineOmega = 0;
+  // Torsion damper between clutch disc and input shaft.
+  const double Td = kDamperRate * dampAngle + kDamperDamp * (discOmega - inputOmega);
+
+  // Friction at the clutch, as an exact stick-slip limit between flywheel and disc.
+  const double wePred = engineOmega + Te * dt / kEngineInertia;
+  const double wdPred = discOmega - Td * dt / kDiscInertia;
+  const double need = (wePred - wdPred) / (dt * (1.0 / kEngineInertia + 1.0 / kDiscInertia));
+  const double cap = kClutchCapacity * clutch;
+  const double Tc = clampd(need, -cap, cap);
+  engineOmega = std::max(0.0, engineOmega + (Te - Tc) * dt / kEngineInertia);
+  discOmega += (Tc - Td) * dt / kDiscInertia;
   if (engineRunning && engineOmega < 380.0 * kRpmToRad) {
     engineRunning = false;
-    note("MOTOR ABGEWUERGT");
+    note(dmg.seized ? "MOTOR STEHT" : "MOTOR ABGEWUERGT");
   }
 
-  // Open differential: equal torque to both driven wheels.
-  double totalT = 0;
-  for (Wheel& w : wheels) {
-    w.driveT = 0;
-    if (w.driven && w.attached && nDriven > 0) {
-      w.driveT = Tc * ratio / nDriven;
-      totalT += w.driveT;
+  // ---- Halfshafts: torsion springs from the side gears to the wheels. Open differential: carrier
+  // speed is the mean of the side gears, and the spider gears freewheel between them.
+  Wheel* wL = nullptr;
+  Wheel* wR = nullptr;
+  for (Wheel& w : wheels)
+    if (w.driven) (w.left ? wL : wR) = &w;
+  const double wsL = carrierOmega + spiderOmega, wsR = carrierOmega - spiderOmega;
+  double TL = 0, TR = 0;
+  if (wL && wL->attached) {
+    shaftAngle[0] += (wsL - wL->omega) * dt;
+    TL = kShaftRate * shaftAngle[0] + kShaftDamp * (wsL - wL->omega);
+  }
+  if (wR && wR->attached) {
+    shaftAngle[1] += (wsR - wR->omega) * dt;
+    TR = kShaftRate * shaftAngle[1] + kShaftDamp * (wsR - wR->omega);
+  }
+  if (wL) wL->driveT = TL;
+  if (wR) wR->driveT = TR;
+
+  // A shaft shears when overloaded, typically with a locked wheel and a dropped clutch.
+  for (int i = 0; i < 2; i++) {
+    Wheel* w = i == 0 ? wL : wR;
+    if (w && w->attached && std::fabs(i == 0 ? TL : TR) > 6500.0) {
+      w->attached = false;
+      note("ANTRIEBSWELLE ABGESCHERT");
     }
   }
 
-  // Reaction on the engine and gearbox block: launching rocks the engine on its mounts.
-  if (!engineNodes.empty() && std::fabs(totalT) > 0.1) {
-    V3 c{};
-    for (u32 n : engineNodes) c += sim.pos[n];
-    c = c / double(engineNodes.size());
-    double arm2 = 0;
-    for (u32 n : engineNodes) {
-      const V3 r = sim.pos[n] - c;
-      arm2 += len2(r - left * dot(r, left));
-    }
-    for (u32 n : engineNodes) sim.force[n] += cross(left, sim.pos[n] - c) * (-totalT / arm2);
+  spiderOmega += ((TR - TL) / kSpiderInertia) * dt;
+  spiderOmega *= 1.0 - clampd(dt * 0.6, 0, 1);
+
+  // Gear mesh: in gear, input shaft and final drive turn as one. Oil churning and bearing friction
+  // cost torque, more of it the faster things spin.
+  const double loss = 0.8 + 0.018 * std::fabs(inputOmega);
+  if (ratio != 0) {
+    const double J = kCarrierInertia + kInputInertia * ratio * ratio;
+    const double Tloss = std::fabs(carrierOmega) > 0.2 ? std::copysign(loss * std::fabs(ratio), carrierOmega) : 0.0;
+    carrierOmega += (Td * ratio - Tloss - TL - TR) * dt / J;
+    inputOmega = ratio * carrierOmega;
+  } else {
+    // Neutral: shafts run free, and the synchro is the only link while selecting a gear.
+    const double r2 = ratioOf(shiftTarget);
+    inputOmega += (Td + syncTorque - std::copysign(std::min(loss, std::fabs(inputOmega) * kInputInertia / dt), inputOmega)) * dt / kInputInertia;
+    carrierOmega += (-TL - TR - syncTorque * r2) * dt / kCarrierInertia;
   }
-  (void)dir;
+  dampAngle += (discOmega - inputOmega) * dt;
+
+  // Reaction torques on the housings: the engine rocks against combustion, the gearbox against what
+  // it passes on to the shafts. Together that is the drive torque reacted through the mounts.
+  if (!engineNodes.empty()) {
+    applyBlockTorque(sim, engineNodes, -(comb - fric));
+    applyBlockTorque(sim, gearboxNodes, Tc - (TL + TR));
+  }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -657,6 +804,38 @@ void Vehicle::updateDamage(Sim& sim, double dt) {
       note("MOTOR ZERSTOERT");
     }
   }
+  if (!dmg.gearbox && plastified(gearboxBeams, 0.02) >= 2) {
+    dmg.gearbox = true;
+    note("GETRIEBEGEHAEUSE GEBROCHEN");
+  }
+  if (!dmg.bellHousing) {
+    int broken = 0;
+    for (u32 id : bellBeams) broken += (sim.beams[id].flags & BF_BROKEN) ? 1 : 0;
+    if (broken * 2 >= int(bellBeams.size()) && !bellBeams.empty()) {
+      dmg.bellHousing = true;
+      note("GETRIEBE VOM MOTOR GERISSEN");
+    }
+  }
+  if (!dmg.tank && plastified(tankBeams, 0.08) >= 3) {
+    dmg.tank = true;
+    note("TANK LECK");
+  }
+  if (dmg.tank) fuelLitres = std::max(0.0, fuelLitres - dt * 0.4);
+  // The sump is the lowest part of the engine: dragging it over the road holes it.
+  if (!dmg.oilLeak && !engineNodes.empty()) {
+    const V3& sumpN = sim.pos[engineNodes[0]];
+    if (sumpN.z - sim.world->height(sumpN.x, sumpN.y) < 0.015 && len2(vCog) > 9.0) {
+      dmg.oilLeak = true;
+      note("OELWANNE AUFGERISSEN");
+    }
+  }
+  if (dmg.oilLeak) {
+    oilLevel = std::max(0.0, oilLevel - dt * 0.05);
+    if (oilLevel <= 0 && engineRunning && !dmg.seized) {
+      dmg.seized = true;
+      note("MOTOR OHNE OEL FESTGEGANGEN");
+    }
+  }
   if (!dmg.hydraulics && plastified(hydraulicBeams, 0.06) >= 2) {
     dmg.hydraulics = true;
     note("STOP: HYDRAULIK LECK");
@@ -680,14 +859,18 @@ void Vehicle::updateDamage(Sim& sim, double dt) {
         note("STOP: FEDERBEIN ZERSTOERT");
       }
     }
+  // Halfshafts have plunge and angle limits at their CV joints: pulled out, they come apart.
+  int si = 0;
   for (Wheel& w : wheels) {
-    if (w.driven && w.attached && !engineNodes.empty()) {
-      if (len(sim.pos[w.axIn] - sim.pos[engineNodes[0]]) > 1.25) {
-        w.attached = false;
-        note("ANTRIEBSWELLE AB");
-      }
+    if (!w.driven) continue;
+    const int idx = w.left ? 0 : 1;
+    if (w.attached && std::fabs(len(sim.pos[w.axIn] - sim.pos[shaftNode[idx]]) - shaftLen[idx]) > 0.10) {
+      w.attached = false;
+      note("ANTRIEBSWELLE RAUSGERISSEN");
     }
+    si++;
   }
+  (void)si;
 
   // Cooling.
   if (dmg.radiator) dmg.coolant = std::max(0.0, dmg.coolant - dt * 0.04);
@@ -702,13 +885,73 @@ void Vehicle::updateDamage(Sim& sim, double dt) {
   lastDamageAge += dt;
 }
 
+// Beams only damp along their own axis, so a flat sheet of them has nothing to stop it from ringing
+// across its plane. Shape damping fits the rigid motion of the whole structure and brakes each node's
+// deviation from it. Rigid motion is untouched by construction, since it is what gets subtracted, and
+// the sum of the forces is zero. Only slow deviations count: above a few m/s a node is taking part in
+// a crash or has come off, and that must not be held back.
+void Vehicle::shapeDamping(Sim& sim, double dt) {
+  double M = 0;
+  V3 c{}, V{};
+  for (u32 n : structureNodes) {
+    const double m = sim.mass[n];
+    M += m;
+    c += sim.pos[n] * m;
+    V += sim.vel[n] * m;
+  }
+  if (M <= 0) return;
+  c = c / M;
+  V = V / M;
+  if (bodyTick_ % 4 == 0) {
+    // Angular velocity from angular momentum and the inertia tensor.
+    double I[3][3] = {};
+    V3 L{};
+    for (u32 n : structureNodes) {
+      const double m = sim.mass[n];
+      const V3 r = sim.pos[n] - c;
+      L += cross(r, sim.vel[n] - V) * m;
+      const double xx = r.x * r.x, yy = r.y * r.y, zz = r.z * r.z;
+      I[0][0] += m * (yy + zz);
+      I[1][1] += m * (xx + zz);
+      I[2][2] += m * (xx + yy);
+      I[0][1] -= m * r.x * r.y;
+      I[0][2] -= m * r.x * r.z;
+      I[1][2] -= m * r.y * r.z;
+    }
+    I[1][0] = I[0][1];
+    I[2][0] = I[0][2];
+    I[2][1] = I[1][2];
+    const double c00 = I[1][1] * I[2][2] - I[1][2] * I[2][1], c01 = I[1][2] * I[2][0] - I[1][0] * I[2][2], c02 = I[1][0] * I[2][1] - I[1][1] * I[2][0];
+    const double det = I[0][0] * c00 + I[0][1] * c01 + I[0][2] * c02;
+    if (std::fabs(det) > 1e-6) {
+      const double c11 = I[0][0] * I[2][2] - I[0][2] * I[2][0], c12 = I[0][1] * I[2][0] - I[0][0] * I[2][1], c22 = I[0][0] * I[1][1] - I[0][1] * I[1][0];
+      omegaFit_ = V3{c00 * L.x + c01 * L.y + c02 * L.z, c01 * L.x + c11 * L.y + c12 * L.z, c02 * L.x + c12 * L.y + c22 * L.z} / det;
+    }
+  }
+  constexpr double kTau = 0.012;           // decay time of slow deformation [s]
+  constexpr double kFull = 1.5, kOff = 4;  // deviation speeds [m/s] for full effect and none
+  for (u32 n : structureNodes) {
+    const V3 rel = sim.vel[n] - (V + cross(omegaFit_, sim.pos[n] - c));
+    const double s2 = len2(rel);
+    if (s2 > kOff * kOff) continue;
+    const double s = std::sqrt(s2);
+    const double g = s < kFull ? 1.0 : (kOff - s) / (kOff - kFull);
+    sim.force[n] -= rel * (sim.mass[n] * g / kTau);
+  }
+  (void)dt;
+}
+
 void Vehicle::update(Sim& sim, const Controls& in, double dt) {
   bodyTick_++;
   updateBodyFrame(sim, dt);
+  shapeDamping(sim, dt);
 
   // Rack and pinion: rate-limited, and the rack is moved by changing the tie rod rest lengths.
-  const double maxRate = 2.6 * dt;
+  // Without pressure there is no power steering: the driver can only heave the rack round slowly.
+  const double maxRate = (accumulator > 60e5 ? 2.6 : 0.5) * dt;
+  const double steerBefore = steerAct;
   steerAct += clampd(in.steer - steerAct, -maxRate, maxRate);
+  rackRate_ = (steerAct - steerBefore) / dt * steerTravel;
   if (!dmg.steering) {
     // Incremental, so that a tie rod bent in a crash stays bent and the car pulls to one side.
     const double delta = steerAct * steerTravel;

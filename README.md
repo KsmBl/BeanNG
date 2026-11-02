@@ -7,7 +7,7 @@ Fahrzeug: Citroën Xantia Activa (3.0 V6).
 
     ./run.sh
 
-Abhängigkeiten: SDL3, libepoxy, CMake, ein C++20-Compiler.
+Abhängigkeiten: SDL3, libepoxy, CMake, ein C++20-Compiler, Python 3 mit numpy, scipy und shapely.
 
 ## Steuerung
 
@@ -27,7 +27,7 @@ Abhängigkeiten: SDL3, libepoxy, CMake, ein C++20-Compiler.
 | Auto packen | linke Maustaste ziehen | – |
 | Reparieren / Neustart | F5 / R | B / Back |
 | Pause / Zeitlupe | P / `[` `]` | Start / Steuerkreuz links, rechts |
-| Beam-Ansicht, Hilfe, Screenshot | F2, F1, F12 | – |
+| Beam-Ansicht, Röntgen-Ansicht, Hilfe, Screenshot | F2, F3, F1, F12 | – |
 
 ## Teststrecke
 
@@ -40,7 +40,9 @@ und Bordsteine (y = 70 bis 100) sowie die Landstraße rund um die Fläche.
 
 - `src/sim.*`: Node-Beam-Solver mit 2 kHz, elastoplastische Beams, Kollisionen, Schlafzustand
 - `src/vehicle.*`: Reifen, Antrieb, ABS, Hydropneumatik, Hydractive, Activa, Schadenslogik
-- `src/xantia.cpp`: Struktur, Fahrwerk, Massen und Karosserie des Xantia
+- `src/xantia.cpp`: Struktur, Fahrwerk und Massen des Xantia
+- `tools/gen_xantia.py`: erzeugt das 3D-Modell (`assets/xantia.mesh`, braucht numpy, scipy, shapely)
+- `src/carmesh.*`: bindet das Modell an die Physik-Nodes
 - `src/props.*`: zerstörbare Objekte, `src/world.*`: Gelände, Straßen, statische Objekte
 - `src/render.*`, `src/main.cpp`: Grafik, Eingabe, Kameras, Physik-Thread
 - `src/tests.cpp`: Prüfstand ohne Grafik
@@ -50,6 +52,6 @@ und Bordsteine (y = 70 bis 100) sowie die Landstraße rund um die Fläche.
     ./build/beanng-test                    # alles
     ./build/beanng-test crash skidpad      # einzelne Tests
 
-Tests: `statics bounce accel brake skidpad crash rough rest props perf`
+Tests: `statics bounce accel brake skidpad crash rough jitter powertrain rest props perf`
 
 Die Fahrzeugdaten sind angenäherte Werte, keine Herstellerdaten.

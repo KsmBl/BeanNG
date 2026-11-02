@@ -434,11 +434,19 @@ roof = roof_outer.difference(windscreen.buffer(0.012)).difference(box(1.25, -0.9
 panel("roof", "body", "paint", roof, TOP, h=0.05)
 panel("glass_ws", "windscreen", "glass", windscreen.buffer(0.006), TOP, offset=-0.004, roll=0, flange=0, h=0.05)
 panel("frame_ws", "windscreen", "black", windscreen.buffer(0.014).difference(windscreen.buffer(-0.016)), TOP, offset=-0.0005, roll=0.002, flange=0, h=0.03)
-panel("cowl", "body", "black", Polygon([(1.315, 0.0), (1.30, 0.78), (1.40, 0.76), (1.40, -0.76), (1.30, -0.78)]), TOP, offset=-0.002, roll=0.002, flange=0, h=0.03)
+panel("cowl", "windscreen", "black", Polygon([(1.315, 0.0), (1.30, 0.78), (1.40, 0.76), (1.40, -0.76), (1.30, -0.78)]), TOP, offset=-0.002, roll=0.002, flange=0, h=0.03)
 
 # Tailgate: rear window and deck in top view, tail panel in the tail chart.
-xl = np.linspace(3.225, 4.40, 40)
-gate_top = Polygon([(x, yrail_inner(x) - 0.006) for x in xl] + [(x, -(yrail_inner(x) - 0.006)) for x in xl[::-1]]).buffer(0.01).buffer(-0.01)
+xl = np.linspace(3.225, 4.465, 50)
+
+
+def gate_half_width(x):
+    # The tail rounds off in plan view, so the deck has to narrow with it towards the lip.
+    pl = float(plan(np.array([x]), np.array([1.04]))[0])
+    return (yrail_inner(x) - 0.006) * min(pl, 1.0)
+
+
+gate_top = Polygon([(x, gate_half_width(x)) for x in xl] + [(x, -gate_half_width(x)) for x in xl[::-1]]).buffer(0.01).buffer(-0.01)
 rw_half = P([3.27, 3.6, 3.92], [0.575, 0.625, 0.655])
 rear_win = Polygon([(x, float(rw_half(x))) for x in np.linspace(3.27, 3.92, 16)] + [(x, -float(rw_half(x))) for x in np.linspace(3.92, 3.27, 16)]).buffer(0.04).buffer(-0.04)
 panel("gate_top", "tailgate", "paint", gate_top.difference(rear_win.buffer(0.02)), TOP, h=0.05)
@@ -500,8 +508,8 @@ panel("bumper_r_low", "bumper_r", "dark", box(-uR + 0.05, 0.27, uR - 0.05, 0.37)
 
 # Tail panel (moves with the tailgate), corners (fixed to the body), split rear lights.
 gate_half = 0.62
-tail_lid = box(-gate_half, 0.575, gate_half, 1.03)
-corner_l = Polygon([(gate_half + 0.006, 0.575), (uR - 0.05, 0.575), (uR - 0.03, 0.98), (gate_half + 0.006, 1.03)])
+tail_lid = box(-gate_half, 0.575, gate_half, 0.995)
+corner_l = Polygon([(gate_half + 0.006, 0.575), (uR - 0.05, 0.575), (uR - 0.03, 0.95), (gate_half + 0.006, 0.995)])
 lt_in = box(0.31, 0.745, gate_half - 0.018, 0.89).buffer(0.008).buffer(-0.008)
 lt_out = Polygon([(gate_half + 0.018, 0.745), (0.98, 0.745), (0.98, 0.88), (gate_half + 0.018, 0.89)]).buffer(0.008).buffer(-0.008)
 holes = [lt_in, Polygon([(-x, y) for x, y in lt_in.exterior.coords])]
@@ -721,7 +729,7 @@ B_.box("dark", (1.04, 0.50, 0.68), (0.20, 0.29, 0.015))
 B_.cyl("metal", (1.0, 0.42, 0.685), (1.0, 0.42, 0.71), 0.012, 8)
 B_.cyl("rust", (1.0, 0.58, 0.685), (1.0, 0.58, 0.71), 0.012, 8)
 B_.finish("battery")
-AB = Comp("body")
+AB = Comp("frame")
 AB.box("black", (0.62, 0.50, 0.66), (0.34, 0.22, 0.13))
 AB.box("dark", (0.45, 0.40, 0.66), (0.06, 0.08, 0.09))
 AB.cyl("black", (0.80, 0.42, 0.68), (0.95, 0.15, 0.78), 0.05, 14)
@@ -731,7 +739,7 @@ AB.cyl("black", (1.13, -0.42, 0.72), (1.13, -0.42, 0.75), 0.05, 14)
 AB.finish("bay_parts")
 
 # Bulkhead, inner wings and underbody: what you see through a missing panel.
-IW = Comp("body")
+IW = Comp("frame")
 IW.box("liner", (1.40, 0.0, 0.54), (0.02, 1.40, 0.68))                       # firewall
 IW.box("metal", (0.27, 0.0, 0.40), (0.03, 0.56, 0.22))                       # radiator support
 
@@ -797,7 +805,7 @@ for cx in (0.90, 3.64):
 IW.finish("shell_inner")
 
 # Interior.
-IN = Comp("body")
+IN = Comp("frame")
 IN.box("dark", (1.60, 0.0, 0.84), (0.34, 1.36, 0.12))                         # dashboard top
 IN.box("dark", (1.53, 0.0, 0.60), (0.22, 1.34, 0.38))
 IN.box("black", (1.68, 0.0, 0.89), (0.1, 1.30, 0.02))
@@ -817,7 +825,7 @@ IN.add("fabric", prim_box((3.28, 0.0, 0.72), (0.14, 1.30, 0.56), rotY(math.radia
 IN.finish("interior")
 
 # Driver's controls: left-hand drive.
-ST = Comp("body")
+ST = Comp("frame")
 sw = np.array([1.78, 0.38, 0.84])
 st_axis = np.array([-math.cos(math.radians(24)), 0, -math.sin(math.radians(24))])
 ST.cyl("black", sw, sw + st_axis * 0.26, 0.022, 10)
@@ -834,7 +842,7 @@ ST.cyl("black", sw - t1 * 0.18, sw + t1 * 0.18, 0.012, 8)
 ST.finish("steering")
 
 # Underbody: exhaust, fuel tank, rear beam.
-EX = Comp("body")
+EX = Comp("frame")
 EX.cyl("rust", (1.05, 0.12, 0.30), (1.4, 0.05, 0.215), 0.03, 12)
 EX.cyl("rust", (1.4, 0.05, 0.215), (2.3, 0.05, 0.22), 0.03, 12)
 EX.cyl("rust", (1.6, 0.05, 0.215), (2.0, 0.05, 0.22), 0.065, 16)
@@ -848,16 +856,16 @@ FT.box("dark", (3.25, 0.0, 0.31), (0.60, 1.08, 0.17))
 FT.finish("fuel_tank")
 
 # The rest of the ten spheres: four corners, two Hydractive regulators, two Activa, brake reserve.
-SPH = Comp("body")
+SPH = Comp("frame")
 for sg in (-1, 1):
     SPH.ball("lhm", (1.02, sg * 0.60, 0.78), 0.062)                 # front corner, on the strut top
     SPH.cyl("metal", (1.02, sg * 0.60, 0.70), (1.02, sg * 0.60, 0.74), 0.028, 12)
     SPH.ball("lhm", (3.72, sg * 0.56, 0.42), 0.062)                 # rear corner, next to the arm
     SPH.cyl("metal", (3.72, sg * 0.46, 0.42), (3.72, sg * 0.51, 0.42), 0.028, 12)
 SPH.ball("lhm", (1.15, 0.15, 0.74), 0.062)                           # front Hydractive regulator
-SPH.ball("lhm", (3.05, -0.35, 0.21) if False else (3.62, 0.0, 0.38), 0.062)  # rear Hydractive regulator
+SPH.ball("lhm", (3.66, 0.22, 0.42), 0.062)                          # rear Hydractive regulator
 SPH.ball("lhm", (0.43, 0.26, 0.30), 0.06)                            # front Activa sphere, by the bar
-SPH.ball("lhm", (3.40, 0.0, 0.35), 0.056)                            # rear Activa sphere
+SPH.ball("lhm", (3.66, -0.22, 0.42), 0.056)                          # rear Activa sphere
 SPH.ball("lhm", (1.20, -0.20, 0.74), 0.05)                           # brake reserve
 # Hydraulic lines from the bay along the floor.
 for sg, c in ((1, "metal"), (-1, "metal")):
@@ -886,7 +894,7 @@ for side, sg, gp_f, gp_r in (("l", 1, "door_fl", "door_rl"), ("r", -1, "door_fr"
     DC.box("dark", (2.88, sg * 0.79, 0.62), (0.68, 0.03, 0.56))
     DC.finish("card_r" + side)
 # Wipers on the cowl.
-WP = Comp("body")
+WP = Comp("windscreen")
 for y0 in (0.65, 0.05):
     z = float(ztop_surface(np.array([1.40]), np.array([y0]))[0])
     WP.add("black", prim_box((1.42, y0 - 0.30, z + 0.012), (0.012, 0.62, 0.012), rotZ(math.radians(-6))))

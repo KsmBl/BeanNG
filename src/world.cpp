@@ -115,6 +115,10 @@ bool World::contact(V3 p, Contact& out) const {
   return hit;
 }
 
+void World::flatten() {
+  std::fill(h_.begin(), h_.end(), 0.f);
+}
+
 void World::clearBoxes() {
   boxes_.clear();
   for (auto& c : boxGrid_) c.clear();

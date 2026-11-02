@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <map>
+#include <string>
 #include <vector>
 #include "props.h"
 #include "vehicle.h"
@@ -51,9 +53,7 @@ struct Bench {
   void launchAt(double v, int gear) {
     const Obj& o = sim.objs[car.obj];
     for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) sim.vel[i] = car.fwd * v;
-    for (Wheel& w : car.wheels) w.omega = v / (w.R - 0.006);
-    car.gear = gear;
-    car.engineOmega = std::max(90.0, v / 0.306 * 3.57 * (gear > 0 ? std::array<double, 5>{3.42, 1.81, 1.28, 0.97, 0.77}[gear - 1] : 3.0));
+    car.presetRolling(v, gear);
   }
 };
 
@@ -413,6 +413,8 @@ void testBounce() {
 
 void testAccel() {
   Bench b;
+  b.world.clearBoxes();
+  b.world.flatten();
   printf("== Acceleration ==\n");
   double t100 = -1, t60 = -1, tTop = 0, vTop = 0, t400 = -1;
   V3 start = b.car.cog;
@@ -428,13 +430,14 @@ void testAccel() {
       tTop = t;
     }
     // Stay on the terrain: the pad is short, so drive around on a big circle once fast.
-    if (t > 8) c.steer = 0.012;
+    if (t > 3) c.steer = clampd(0.012 * 45.0 / std::max(b.car.speed, 10.0), 0, 0.08);  // ~400 m circle
     if ((int(t * 2000) % 20000) == 0)
       printf("  t=%4.0f v=%5.1f km/h gear %d rpm %5.0f  z=%.2f\n", t, kmh, b.car.gear, b.car.rpm(), b.car.cog.z);
   });
   ok = b.sane();
   printf("  0-60: %.2f s  0-100: %.2f s  400 m: %.2f s  vmax: %.1f km/h at t=%.0f  sane %d\n", t60, t100, t400, vTop, tTop, ok);
-  printf("  (real car: 0-100 about 8 s, vmax about 230 km/h)\n");
+  printf("  (listed: about 8.2 s, 230 km/h)\n");
+  printf("  fuel %.1f l, LHM %.2f l, accumulator %.0f bar, gear %d, shaft twist %.3f rad\n", b.car.fuelLitres, b.car.reservoir * 1000, b.car.accumulator / 1e5, b.car.gear, b.car.shaftAngle[0]);
 }
 
 void testBraking() {
@@ -656,8 +659,35 @@ void testRough() {
     Bench b({-60, 70, 0}, 0);
     b.launchAt(40 / 3.6, 2);
     double a = 9, c = -9;
-    drive(b, 8.0, 40, a, c, 70);
+    double next = 0;
+    double firstBreak = -1;
+    b.run(8.0, [&](double t, Controls& ctl) {
+      ctl.throttle = clampd((40 / 3.6 - b.car.speed) * 0.6, 0, 1);
+      const double head = std::atan2(b.car.fwd.y, b.car.fwd.x);
+      ctl.steer = clampd(-0.05 * (b.car.cog.y - 70) - 0.7 * head, -0.25, 0.25);
+      a = std::min(a, b.car.cog.z);
+      c = std::max(c, b.car.cog.z);
+      double maxFz = 0;
+      for (const Wheel& w : b.car.wheels) maxFz = std::max(maxFz, w.Fz);
+      if (firstBreak < 0 && b.sim.brokenBeams > 0) {
+        firstBreak = t;
+        printf("  first break at t=%.3f x=%.2f maxFz %.0f peakG %.1f\n", t, b.car.cog.x, maxFz, b.car.peakG);
+      }
+      (void)next;
+    });
     report("kerbs 40 km/h", b, a, c);
+    std::map<std::string, int> counts;
+    const Obj& o = b.sim.objs[b.car.obj];
+    for (u32 i = o.beamStart; i < o.beamStart + o.beamCount; i++) {
+      const Beam& B = b.sim.beams[i];
+      if (!(B.flags & BF_BROKEN)) continue;
+      char key[120];
+      snprintf(key, sizeof key, "x%.1f-%.1f z%.1f-%.1f k%.1e fB%.0f", 2.26 - (b.sim.rest[B.a].x + 60), 2.26 - (b.sim.rest[B.b].x + 60), b.sim.rest[B.a].z, b.sim.rest[B.b].z, B.k, B.fBreak);
+      counts[key]++;
+    }
+    int shown = 0;
+    for (auto& kv : counts)
+      if (shown++ < 30) printf("    %3d x %s\n", kv.second, kv.first.c_str());
   }
   {
     Bench b({-30, 40, 0}, 0);
@@ -687,6 +717,129 @@ void testRough() {
     b.run(5.0, [](double, Controls& c) { c.handbrake = 1.0; });
     printf("  parked drift over 5 s: %.1f mm\n", std::fabs(b.car.cog.x - x0) * 1000);
   }
+}
+
+void testPowertrain() {
+  printf("== Powertrain trace: launch, shifts, lift-off, engine off ==\n");
+  Bench b;
+  b.world.clearBoxes();
+  double next = 0;
+  b.world.flatten();
+  auto report = [&](double t) {
+    if (t >= next) {
+      next += 0.5;
+      printf("  t=%4.1f v=%5.1f gear %2d phase %d rpm %5.0f disc %6.1f input %6.1f carrier %6.1f spider %+6.2f clutch %.2f mani %.2f shaft %+6.0f %+6.0f Nm  acc %3.0f bar fuel %.2f\n", t, b.car.speed * 3.6, b.car.gear, b.car.shiftPhase, b.car.rpm(), b.car.discOmega, b.car.inputOmega, b.car.carrierOmega, b.car.spiderOmega, b.car.clutch, b.car.manifold, b.car.wheels[0].driveT, b.car.wheels[1].driveT, b.car.accumulator / 1e5, b.car.fuelLitres);
+    }
+  };
+  b.run(9.0, [&](double t, Controls& c) { c.throttle = 1.0; report(t); });
+  next = 0;
+  next = 9.0;
+  b.run(3.0, [&](double t, Controls& c) { report(t + 9.0); });
+  next = 12.0;
+  bool once = false;
+  b.run(3.0, [&](double t, Controls& c) {
+    c.toggleIgnition = !once;
+    once = true;
+    report(t + 12.0);
+  });
+  // One wheel on low grip: the open differential must send the speed to the slipping wheel.
+  printf("  hydraulics after engine stop: %.0f bar, front strut %.1f bar\n", b.car.accumulator / 1e5, b.car.axle[0].s[0].pGas / 1e5);
+}
+
+// How much does the visible car shake? Tracks every node in the body frame and every mesh vertex,
+// sampled at 60 Hz like the renderer, and reports frame-to-frame motion.
+void testJitter(const char* label, double kmh) {
+  Bench b;
+  b.world.clearBoxes();
+  b.world.flatten();
+  CarMesh mesh;
+  mesh.load("assets/xantia.mesh");
+  mesh.bind(b.sim.rest, b.skin.groups, {-90, 0, 0});
+  if (kmh > 0) b.launchAt(kmh / 3.6, kmh > 60 ? 3 : 2);
+  const Obj& o = b.sim.objs[b.car.obj];
+  auto toBody = [&](V3 p) {
+    const V3 r = p - b.car.cog;
+    return V3{dot(r, b.car.fwd), dot(r, b.car.left), dot(r, b.car.up)};
+  };
+  b.run(1.5, [&](double, Controls& c) {
+    c.throttle = clampd((kmh / 3.6 - b.car.speed) * 0.5, 0, 1);
+    if (kmh > 0) c.steer = 0.01;
+  });
+  const size_t nv = mesh.restPos.size() / 3;
+  constexpr int K = CarMesh::kK;
+  std::vector<V3> prevV(nv), prevN(o.nodeCount);
+  std::vector<double> maxStep(mesh.parts.size(), 0.0), meanStep(mesh.parts.size(), 0.0);
+  std::vector<double> nodeStep(o.nodeCount, 0.0);
+  int frames = 0;
+  const int stepsPerFrame = 33;
+  for (int f = 0; f < 120; f++) {
+    b.run(stepsPerFrame * kDt, [&](double, Controls& c) {
+      c.throttle = clampd((kmh / 3.6 - b.car.speed) * 0.5, 0, 1);
+      if (kmh > 0) c.steer = 0.01;
+    });
+    for (size_t pi = 0; pi < mesh.parts.size(); pi++) {
+      const MeshPart& p = mesh.parts[pi];
+      if (!p.bound) continue;
+      for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v += 7) {
+        V3 q{};
+        for (int k = 0; k < K; k++) q += b.sim.pos[mesh.bindNode[size_t(v) * K + k]] * double(mesh.bindWeight[size_t(v) * K + k]);
+        q = toBody(q);
+        if (f > 0) {
+          const double d = len(q - prevV[v]);
+          maxStep[pi] = std::max(maxStep[pi], d);
+          meanStep[pi] += d;
+        }
+        prevV[v] = q;
+      }
+    }
+    for (u32 i = 0; i < o.nodeCount; i++) {
+      const V3 q = toBody(b.sim.pos[o.nodeStart + i]);
+      if (f > 0) nodeStep[i] = std::max(nodeStep[i], len(q - prevN[i]));
+      prevN[i] = q;
+    }
+    frames++;
+  }
+  printf("== Shake at %s: frame-to-frame motion in the body frame, mm ==\n", label);
+  std::vector<std::pair<double, size_t>> order;
+  for (size_t pi = 0; pi < mesh.parts.size(); pi++)
+    if (mesh.parts[pi].bound) order.push_back({maxStep[pi], pi});
+  std::sort(order.rbegin(), order.rend());
+  for (size_t i = 0; i < 10 && i < order.size(); i++) {
+    const MeshPart& p = mesh.parts[order[i].second];
+    printf("  %-16s group %-10s max %7.2f  mean %6.2f\n", p.name.c_str(), p.group.c_str(), order[i].first * 1000, meanStep[order[i].second] / (frames * (p.vertCount / 7 + 1)) * 1000);
+  }
+  std::vector<std::pair<double, u32>> no;
+  for (u32 i = 0; i < o.nodeCount; i++) no.push_back({nodeStep[i], i});
+  std::sort(no.rbegin(), no.rend());
+  for (int i = 0; i < 6; i++) {
+    const u32 n = o.nodeStart + no[size_t(i)].second;
+    printf("  node %3u design (%.2f %+.2f %.2f) mass %.1f max step %.2f mm\n", n, 2.26 - (b.sim.rest[n].x + 90), b.sim.rest[n].y, b.sim.rest[n].z, b.sim.mass[n], no[size_t(i)].first * 1000);
+  }
+  printf("  broken %u, guard %llu\n", b.sim.brokenBeams, (unsigned long long)b.sim.clampedSteps);
+  // The wheels as drawn: hub position and orientation, sampled like the renderer.
+  V3 prevHub[4], prevAxis[4];
+  double hubMax[4] = {}, axisMax[4] = {}, hubAvg[4] = {};
+  for (int f = 0; f < 60; f++) {
+    b.run(33 * kDt, [&](double, Controls& c) {
+      c.throttle = clampd((kmh / 3.6 - b.car.speed) * 0.5, 0, 1);
+      if (kmh > 0) c.steer = 0.01;
+    });
+    for (int i = 0; i < 4; i++) {
+      const Wheel& w = b.car.wheels[i];
+      const V3 hub = toBody((b.sim.pos[w.axIn] + b.sim.pos[w.axOut]) * 0.5);
+      const V3 ax = norm(b.sim.pos[w.axOut] - b.sim.pos[w.axIn]);
+      if (f > 0) {
+        const double d = len(hub - prevHub[i]);
+        hubMax[i] = std::max(hubMax[i], d);
+        hubAvg[i] += d / 59.0;
+        axisMax[i] = std::max(axisMax[i], len(ax - prevAxis[i]));
+      }
+      prevHub[i] = hub;
+      prevAxis[i] = ax;
+    }
+  }
+  for (int i = 0; i < 4; i++)
+    printf("  wheel %d hub step max %.2f mean %.2f mm, axle direction step max %.2f deg\n", i, hubMax[i] * 1000, hubAvg[i] * 1000, axisMax[i] * 57.3);
 }
 
 void testPropRest() {
@@ -762,6 +915,12 @@ int main(int argc, char** argv) {
     testCrash(50);
     testCrash(100);
   }
+  if (want("jitter")) {
+    testJitter("standstill", 0);
+    testJitter("60 km/h", 60);
+    testJitter("120 km/h", 120);
+  }
+  if (want("powertrain")) testPowertrain();
   if (want("rough")) testRough();
   if (want("rest")) testPropRest();
   if (want("props")) testProps();

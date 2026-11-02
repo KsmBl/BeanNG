@@ -53,6 +53,7 @@ class World {
   u8 surfaceAt(double x, double y) const;
 
   void clearBoxes();  // for the test bench: an empty, obstacle-free pad
+  void flatten();     // for the test bench: a level plane for top speed runs
 
   // Renderer access.
   double gridHeight(int ix, int iy) const { return h_[size_t(iy) * N + ix]; }

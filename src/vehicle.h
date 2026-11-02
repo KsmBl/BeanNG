@@ -51,8 +51,8 @@ struct Wheel {
 struct HydroStrut {
   u32 top = 0, low = 0;
   double A = 3.85e-4;       // piston area [m^2]
-  double V0 = 210e-6;       // sphere gas volume at precharge [m^3]
-  double p0 = 55e5;         // precharge [Pa]
+  double V0 = 290e-6;       // sphere gas volume at precharge [m^3]
+  double p0 = 48e5;         // precharge [Pa]
   double Vf = 0;            // fluid currently in the sphere [m^3]
   double Lmin = 0, Lmax = 0, Lnom = 0;
   double bump[2] = {1850, 1000}, reb[2] = {2400, 1400};  // [firm, soft] damping
@@ -62,7 +62,7 @@ struct HydroStrut {
 
 struct HydroAxle {
   HydroStrut s[2];
-  double regV0 = 500e-6, regP0 = 55e5, regVf = 0;  // Hydractive regulator sphere
+  double regV0 = 400e-6, regP0 = 48e5, regVf = 0;  // Hydractive regulator sphere
   double levelErrLP = 0;
   double kBar = 30e3;     // anti-roll bar rate [N per m of stroke difference]
   double ram = 0;         // Activa ram displacement [m]
@@ -72,6 +72,7 @@ struct HydroAxle {
 struct DamageState {
   bool radiator = false, hydraulics = false, engineMount = false, steering = false;
   bool seized = false;
+  bool gearbox = false, bellHousing = false, tank = false, oilLeak = false;
   double coolantTemp = 90;
   double coolant = 1.0;
 };
@@ -83,6 +84,7 @@ class Vehicle {
   std::vector<Wheel> wheels;
   HydroAxle axle[2];  // 0 front, 1 rear
   std::vector<u32> engineNodes, gearboxNodes;
+  std::vector<u32> structureNodes;  // everything sprung, for shape damping
   u32 refFrontL = 0, refFrontR = 0, refRearL = 0, refRearR = 0;  // body frame reference
   u32 tieBeam[2] = {};
   double steerTravel = 0.066;  // rack travel at full lock [m]
@@ -101,12 +103,31 @@ class Vehicle {
   bool activaOn = true;
   int heightMode = 1;          // 0 low, 1 road, 2 high
   double clutch = 1;
-  double shiftTimer = 0;
   double sinceShift = 10;
+
+  // Powertrain state: every rotating part with its own inertia.
+  double crankAngle = 0;
+  double manifold = 0.3;       // intake manifold fill, fraction of ambient pressure
+  double combustionTorque = 0;
+  double discOmega = 85, inputOmega = 0, carrierOmega = 0, spiderOmega = 0;
+  double dampAngle = 0;        // clutch disc torsion damper wind-up [rad]
+  double shaftAngle[2] = {};   // halfshaft twist, left and right [rad]
+  double shaftLen[2] = {};     // as-built halfshaft lengths [m]
+  int shiftPhase = 0;          // 0 in gear, 1 clutch opening, 2 synchronising
+  int shiftTarget = 1;
+  double shiftClock = 0;
+  double fuelLitres = 55;
+  double oilLevel = 1;
+  double starterClock = 0;
+
+  // Hydraulic circuit state.
+  double accFluid = 190e-6;    // fluid in the main accumulator sphere [m^3]
+  double reservoir = 3.2e-3;   // LHM in the tank [m^3]
+  bool pumpCharging = true;
+  double pumpTorque = 0;
   bool hydractiveSoft = true;
   double firmHold = 0;
-  double accumulator = 170e5;  // hydraulic accumulator pressure [Pa]
-  double hydroFluid = 1.0;     // reservoir level
+  double accumulator = 165e5;  // main accumulator pressure [Pa]
   DamageState dmg;
   std::string lastDamage;
   double lastDamageAge = 100;
@@ -125,14 +146,18 @@ class Vehicle {
 
   void update(Sim& sim, const Controls& in, double dt);
   void settleFluid(Sim& sim);
+  // Sets all rotating parts to match rolling at this speed, for test bench starts.
+  void presetRolling(double v, int gearIndex);
   double rpm() const { return engineOmega * 60.0 / (2.0 * PI); }
 
  private:
   V3 prevV_, prevFwd_{1, 0, 0};
+  V3 omegaFit_;
   double yawRate_ = 0;
   double prevThrottle_ = 0, prevSteer_ = 0;
   double ramCmd_ = 0, ramTrim_ = 0;
   double hbAct_ = 0;
+  double clutchRamp_ = 1, prevBrake_ = 0, rackRate_ = 0;
   double rackPrev_ = 0;
   double stuckTime_ = 0;
   int bodyTick_ = 0;
@@ -140,8 +165,11 @@ class Vehicle {
   void updateBodyFrame(Sim& sim, double dt);
   void updateHydraulics(Sim& sim, double dt);
   void updateDrivetrain(Sim& sim, const Controls& in, double dt);
+  void applyBlockTorque(Sim& sim, const std::vector<u32>& nodes, double torque);
+  void drawAccumulator(double volume, bool returnsToTank = true);
   void updateWheel(Sim& sim, Wheel& w, double dt);
   void updateDamage(Sim& sim, double dt);
+  void shapeDamping(Sim& sim, double dt);
   void note(const char* msg);
 };
 

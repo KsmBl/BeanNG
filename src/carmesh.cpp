@@ -108,7 +108,7 @@ void CarMesh::bind(const std::vector<V3>& rest, const std::vector<NodeGroup>& gr
       if (part.group.rfind("wheel", 0) != 0) fprintf(stderr, "mesh part %s: no node group '%s'\n", part.name.c_str(), part.group.c_str());
       continue;
     }
-    double partH = g->nodes.size() <= kK ? 50.0 : 0.45;
+    double partH = g->nodes.size() <= kK ? 50.0 : (part.group == "frame" ? 0.9 : 0.45);
     for (int pass = 0; pass < 2; pass++)
     for (u32 v = part.firstVert; v < part.firstVert + part.vertCount; v++) {
       const V3 p = designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn);

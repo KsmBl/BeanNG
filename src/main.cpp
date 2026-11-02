@@ -119,6 +119,12 @@ struct Game {
     s.mount = car.dmg.engineMount;
     s.steering = car.dmg.steering;
     s.seized = car.dmg.seized;
+    s.gearboxBad = car.dmg.gearbox || car.dmg.bellHousing;
+    s.tankBad = car.dmg.tank;
+    s.oilBad = car.dmg.oilLeak;
+    s.lhm = car.reservoir;
+    s.fuel = car.fuelLitres;
+    s.gear = car.shiftPhase != 0 ? car.shiftTarget : car.gear;
     s.damageMsg = car.lastDamage;
     s.damageAge = car.lastDamageAge;
     s.physLoad = load;
@@ -223,11 +229,12 @@ struct CameraRig {
         const double gh = world.height(eye.x, eye.y) + 0.35;
         if (eye.z < gh) eye.z = gh;
         const V3 target = c + V3{0, 0, 0.45};
-        const double k = clampd(dt * 16.0, 0, 1);
-        eyeSmooth = lerpv(eyeSmooth, eye, k);
-        targetSmooth = lerpv(targetSmooth, target, clampd(dt * 30.0, 0, 1));
-        out.eye = eyeSmooth;
-        out.target = targetSmooth;
+        // Rigidly attached in position: only the heading above is smoothed. Any lag in position would
+        // vary with the frame time, and on screen that looks exactly like the car shaking.
+        eyeSmooth = eye;
+        targetSmooth = target;
+        out.eye = eye;
+        out.target = target;
         out.up = {0, 0, 1};
         out.fovY = 58.0 * PI / 180.0;
         break;
@@ -444,6 +451,7 @@ int main(int argc, char** argv) {
             case SDLK_RIGHTBRACKET: timeScale = std::min(1.0, timeScale * 2.0); break;
             case SDLK_F1: hud.help = !hud.help; helpTimer = 0; break;
             case SDLK_F2: hud.debugBeams = !hud.debugBeams; break;
+            case SDLK_F3: hud.xray = !hud.xray; break;
             case SDLK_F12: wantShot = true; break;
             default: break;
           }
@@ -563,6 +571,23 @@ int main(int argc, char** argv) {
           rig.pitch = 0.14;
           rig.yaw = 0.35 + double(shotCount) * PI / 4.0;
           break;
+        case 7:  // burst of consecutive frames with a fixed camera, to detect render flicker
+          rig.mode = CAM_ORBIT;
+          rig.dist = 5.5;
+          rig.pitch = 0.16;
+          rig.yaw = 0.6;
+          break;
+        case 9:  // x-ray walk around the mechanicals
+          hud.xray = true;
+          rig.mode = CAM_ORBIT;
+          rig.dist = 4.2;
+          rig.pitch = 0.42;
+          rig.yaw = 0.5 + double(shotCount) * PI / 3.0;
+          break;
+        case 8:  // burst while driving steadily, chase camera
+          scriptGas = view.speedKmh < 50 ? 0.5 : 0.12;
+          scriptSteer = clampd(-0.05 * view.carCog.y - 0.7 * std::atan2(view.carFwd.y, view.carFwd.x), -0.2, 0.2);
+          break;
         case 5: {  // end-to-end controller test: throttle, steer, brake, reverse, repair
           const auto ax = [&](SDL_GamepadAxis a, double v) { SDL_SetJoystickVirtualAxis(vpad, a, Sint16(v * 32767.0)); };
           ax(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, tNow > 2 && tNow < 6 ? 1.0 : -1.0);
@@ -651,6 +676,11 @@ int main(int argc, char** argv) {
       view.mount = G.snap.mount;
       view.steering = G.snap.steering;
       view.seized = G.snap.seized;
+      view.gearboxBad = G.snap.gearboxBad;
+      view.tankBad = G.snap.tankBad;
+      view.oilBad = G.snap.oilBad;
+      view.lhm = G.snap.lhm;
+      view.fuel = G.snap.fuel;
       view.damageMsg = G.snap.damageMsg;
       view.damageAge = G.snap.damageAge;
       view.physLoad = G.snap.physLoad;
@@ -685,8 +715,10 @@ int main(int argc, char** argv) {
         snprintf(path, sizeof path, "%s/shot_%02d.png", shotDir.c_str(), shotCount++);
         renderer.savePng(path, w, h);
         printf("t=%.1f v=%.0f km/h x=%.1f z=%.2f steer=%+.2f gear=%d gas=%.2f br=%.2f plastic=%.1f kJ awake=%d load=%.0f%% pad=%d\n", tNow, view.speedKmh, view.carCog.x, view.carCog.z, view.steer, view.gear, view.throttle, view.brake, view.plastic / 1e3, view.awake, view.physLoad * 100, hud.gamepad);
-        nextShot += 1.0;
-        if (shotCount >= 19) quit = true;
+        const bool burst = scriptMode == 7 || scriptMode == 8;
+        nextShot += burst ? 0.0 : 1.0;
+        if (burst && nextShot < 6.0) nextShot = 6.0;
+        if (shotCount >= (burst ? 6 : (scriptMode == 9 ? 7 : 19))) quit = true;
       }
     }
     if (wantShot) {

@@ -512,6 +512,12 @@ struct Renderer::Impl {
     setupVtxAttribs();
   }
 
+  bool xrayNow = false;
+  static bool isMechanical(const MeshPart& p) {
+    return p.group == "engine" || p.group == "gearbox" || p.group == "radiator" || p.group == "battery" || p.group == "tank" ||
+           p.name.rfind("spheres", 0) == 0 || p.name.rfind("exhaust", 0) == 0 || p.name.rfind("bay_parts", 0) == 0 || p.name.rfind("steering", 0) == 0;
+  }
+
   // Deform the flexbody from the node snapshot.
   void updateCar(const Snapshot& s) {
     const CarMesh& M = *mesh;
@@ -563,7 +569,7 @@ struct Renderer::Impl {
       const MeshPart& p = M.parts[pi];
       if (!p.bound) continue;
       const bool isGlass = p.mat == MM_GLASS;
-      if (partHidden[pi]) continue;
+      if (partHidden[pi] || (xrayNow && !isMechanical(p))) continue;
       auto& list = isGlass ? glassIdx : (p.mat == MM_LENS ? lensIdx : carIdx);
       u32 overstrained = 0;
       for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++) {
@@ -891,7 +897,7 @@ struct Renderer::Impl {
     text(bx + 222 * scale, by + 58 * scale, s.autoBox ? "AUTO" : "MAN", px1 * 2, .7f, .7f, .7f);
     const float rpmN = float(s.rpm / 7000.0);
     bar(bx, by + 76 * scale, 270 * scale, 14 * scale, rpmN, s.rpm > 6100 ? 1.f : .35f, s.rpm > 6100 ? .15f : .8f, .25f);
-    snprintf(buf, sizeof buf, "%4.0f U/MIN %s", s.rpm, s.running ? "" : "MOTOR AUS");
+    snprintf(buf, sizeof buf, "%4.0f U/MIN %2.0FL %s", s.rpm, s.fuel, s.running ? "" : "MOTOR AUS");
     text(bx, by + 94 * scale, buf, px1 * 2, .85f, .85f, .85f);
 
     // Lower left: Hydractive/Activa state.
@@ -912,8 +918,8 @@ struct Renderer::Impl {
     snprintf(buf, sizeof buf, "ROLL %+5.1f QUER %+4.2fG", s.roll * 57.3, s.latG);
     text(lx, ly, buf, px2, .85f, .85f, .85f);
     ly += 22 * scale;
-    text(lx, ly, "DRUCK", px2, .85f, .85f, .85f);
-    bar(lx + 70 * scale, ly, 200 * scale, 14 * scale, float(s.accum / 170e5), s.accum > 90e5 ? .35f : 1.f, s.accum > 90e5 ? .75f : .2f, .9f);
+    snprintf(buf, sizeof buf, "LHM %3.0F BAR %.1FL", s.accum / 1e5, s.lhm * 1000.0);
+    text(lx, ly, buf, px2, s.accum > 90e5 ? .55f : 1.f, s.accum > 90e5 ? .95f : .3f, .55f);
     ly += 22 * scale;
     text(lx, ly, "WASSER", px2, .85f, .85f, .85f);
     bar(lx + 70 * scale, ly, 200 * scale, 14 * scale, float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? 1.f : .4f, s.coolant > 112 ? .2f : .7f, .3f);
@@ -940,6 +946,9 @@ struct Renderer::Impl {
     warn(s.mount, "MOTORLAGER");
     warn(s.steering, "LENKUNG DEFEKT");
     warn(s.flat[0] || s.flat[1] || s.flat[2] || s.flat[3], "REIFENSCHADEN");
+    warn(s.gearboxBad, "GETRIEBE DEFEKT");
+    warn(s.tankBad, "TANK LECK");
+    warn(s.oilBad, "OELVERLUST");
 
     // Upper right: status.
     float ry = 10 * scale;
@@ -977,7 +986,7 @@ struct Renderer::Impl {
           "G HYDRACTIVE SPORT   H NIVEAU   V ACTIVA AN/AUS",
           "I ZUENDUNG   R ZURUECK ZUM START   F5 REPARIEREN",
           "C KAMERA   M MAUSLENKUNG   P PAUSE   [ ] ZEITLUPE",
-          "F2 BEAM-ANSICHT   F12 SCREENSHOT   ESC BEENDEN",
+          "F2 BEAM-ANSICHT   F3 ROENTGEN   F12 SCREENSHOT   ESC BEENDEN",
           "MAUS: RECHTS ZIEHEN KAMERA, RAD ZOOM, LINKS ZIEHEN PACKT DAS AUTO",
           "",
           "CONTROLLER: L-STICK LENKEN  RT GAS  LT BREMSE",
@@ -1125,6 +1134,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   Impl& D = *d;
   D.origin = {};  // positions stay within +-512 m, which is fine for float vertex data
   D.handleEvents(s);
+  D.xrayNow = hud.xray;
   D.updateCar(s);
   D.updateProps(s, cam.eye);
   D.stepParticles(dt);
@@ -1136,8 +1146,16 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   const Mat4 vp = mul(proj, view);
 
   // Shadow map: a tight box following the car, for sharp contact shadows where it matters.
-  const V3 focus = s.carCog;
   constexpr double kRange = 42.0;
+  // Snap the shadow camera to whole texels, or the shadow edges would crawl with every movement.
+  V3 focus = s.carCog;
+  {
+    const V3 lr = norm(cross(D.sun, V3{0, 0, 1}));
+    const V3 lu = cross(lr, D.sun);
+    const double texel = 2.0 * kRange / Impl::kShadow;
+    const double a = std::round(dot(focus, lr) / texel) * texel, b = std::round(dot(focus, lu) / texel) * texel, c = dot(focus, D.sun);
+    focus = lr * a + lu * b + D.sun * c;
+  }
   const V3 lightEye = focus + D.sun * 120.0;
   const Mat4 lightView = lookAt(lightEye, focus, V3{0, 0, 1});
   const Mat4 lightVP = mul(ortho(-kRange, kRange, -kRange, kRange, 1.0, 260.0), lightView);

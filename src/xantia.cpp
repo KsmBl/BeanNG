@@ -38,7 +38,8 @@ V3 design(int s, int r) {
   s = std::clamp(s, 0, NS - 1);
   const double x = X[s];
   switch (r) {
-    case 0: return {x, 0.0, ZFLOOR[s]};
+    // The transmission tunnel arches the floor. A flat sheet of beams has no out-of-plane stiffness.
+    case 0: return {x, 0.0, ZFLOOR[s] + (s >= 8 && s <= 13 ? 0.09 : 0.0)};
     case 1: return {x, WFLOOR[s] * 0.5, ZFLOOR[s]};
     case 2: return {x, WFLOOR[s], ZFLOOR[s] - 0.005};
     case 3: return {x, W[s] * (s < 3 || s > 18 ? 0.98 : 1.0), ZLOW[s]};
@@ -49,7 +50,7 @@ V3 design(int s, int r) {
     case 5: return {x, W[s] * 0.985, ZBELT[s]};
     case 6: return {x, WRAIL[s], ZRAIL[s]};
     case 7: return {x, WRAIL[s] * 0.52, ZTOP[s] - 0.008};
-    case 8: return {x, 0.0, ZTOP[s]};
+    case 8: return {x, 0.0, ZTOP[s] + (s >= 10 && s <= 13 ? 0.02 : 0.0)};
   }
   return {};
 }
@@ -123,7 +124,7 @@ const Mat mLatch{0.8e6, 160, 0, 0, 0, 0, 9e3};
 const Mat mPanel{0.7e6, 110, 1.8e3, 5e3, 1e4, 0.60, 0};
 const Mat mPanelHinge{0.8e6, 140, 0, 0, 0, 0, 9e3};
 const Mat mPanelLatch{0.5e6, 100, 0, 0, 0, 0, 5e3};
-const Mat mClip{0.2e6, 60, 0, 0, 0, 0, 2.2e3};
+const Mat mClip{0.3e6, 70, 0, 0, 0, 0, 7e3};
 
 struct Builder {
   Sim& sim;
@@ -513,7 +514,7 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
   std::vector<u32> batNodes, tankNodes;
   rigidBlock(0.95, 1.13, 0.37, 0.63, 0.49, 0.67, 18.0, batNodes, mBattery, nullptr);
   for (u32 n : batNodes) B.anchor(n, 2, mRadMount);
-  rigidBlock(2.95, 3.55, -0.56, 0.56, 0.20, 0.38, 60.0, tankNodes, mTank, &veh.tankBeams);
+  rigidBlock(2.95, 3.55, -0.56, 0.56, 0.25, 0.42, 60.0, tankNodes, mTank, &veh.tankBeams);
   for (u32 n : tankNodes) B.anchor(n, 3, mRadMount);
 
   // ---- Suspension and wheels.
@@ -616,8 +617,8 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
       st.top = tower;
       st.low = kl;
       st.A = 3.85e-4;
-      st.V0 = 210e-6;
-      st.p0 = 55e5;
+      st.V0 = 290e-6;
+      st.p0 = 48e5;
     } else {
       // Trailing arm pivoting on a transverse subframe axis.
       const u32 kt = node(hx, hy - 0.06, 0.50, 2.5, 0);
@@ -654,8 +655,8 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
       st.top = tower;
       st.low = kb;
       st.A = 2.75e-4;
-      st.V0 = 210e-6;
-      st.p0 = 55e5;
+      st.V0 = 300e-6;
+      st.p0 = 30e5;
       st.bump[0] = 1150; st.bump[1] = 700;
       st.reb[0] = 1500; st.reb[1] = 900;
     }
@@ -720,6 +721,9 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
         for (auto [ss, rr2] : {std::pair{12, 1}, {13, 1}, {14, 1}, {12, 2}, {13, 2}})
           B.ibeam(int(n), B.body[ss][rr2][sd], mSubframe);
   }
+  veh.axle[1].regP0 = 40e5;
+  for (int i = 0; i < 2; i++)
+    veh.shaftLen[i] = len(sim.pos[veh.wheels[size_t(i)].axIn] - sim.pos[veh.shaftNode[i]]);
   veh.axle[0].kBar = 30e3;
   veh.axle[1].kBar = 18e3;
 
@@ -840,6 +844,22 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
       addQuad(n, s, true);
     }
 
+  // Everything sprung takes part in shape damping: all but wheels, arms, engine and gearbox.
+  {
+    std::vector<char> skip(sim.pos.size(), 0);
+    for (u32 n : veh.engineNodes) skip[n] = 1;
+    for (u32 n : veh.gearboxNodes) skip[n] = 1;
+    for (const Wheel& w : veh.wheels) {
+      skip[w.axIn] = skip[w.axOut] = 1;
+      for (u32 r : w.ring) skip[r] = 1;
+    }
+    for (int ax = 0; ax < 2; ax++)
+      for (int sd = 0; sd < 2; sd++) skip[veh.axle[ax].s[sd].low] = 1;
+    for (u32 n : shell) veh.structureNodes.push_back(n);
+    for (u32 i = shell.back() + 1; i < sim.pos.size(); i++)
+      if (!skip[i] && sim.mass[i] < 15.0 && !(sim.flags[i] & NF_WHEEL) && (sim.flags[i] & NF_COLLIDE)) veh.structureNodes.push_back(i);
+  }
+
   // ---- Node groups the visible mesh binds to.
   if (rig) {
     auto group = [&](const char* name, std::vector<u32> nodes) { rig->groups.push_back({name, std::move(nodes)}); };
@@ -878,6 +898,14 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
         for (int side = 0; side < (r == 8 ? 1 : 2); side++)
           if (B.body[s][r][side] >= 0) ws.push_back(u32(B.body[s][r][side]));
     group("windscreen", ws);
+    // A stiff, three-dimensional frame for everything mounted inside the car. Sills, pillars and
+    // roof rails span the whole volume, so nothing has to be extrapolated from a flat sheet.
+    std::vector<u32> frame;
+    for (int s = 0; s < NS; s++)
+      for (int r : {2, 3, 6})
+        for (int side = 0; side < 2; side++)
+          if (B.body[s][r][side] >= 0) frame.push_back(u32(B.body[s][r][side]));
+    group("frame", frame);
     group("bumper_f", bf);
     group("bumper_r", br);
     group("engine", veh.engineNodes);
