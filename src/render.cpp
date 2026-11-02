@@ -153,6 +153,71 @@ void main(){
   frag = vec4(pow(c,vec3(1.0/1.6)), uAlpha);
 })";
 
+// Wheel: rim damage turns with the wheel, the contact patch and tyre bulge stay at the road.
+const char* kWheelVS = R"(#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec4 aCol;
+uniform mat4 uVP;
+uniform mat4 uModel;
+uniform mat4 uShadowVP;
+uniform int uMode;        // 0 rigid, 1 rim, 2 tyre
+uniform vec2 uSpin;       // cos, sin of the wheel angle
+uniform float uDent[24];
+uniform vec2 uRunout;
+uniform vec3 uPlaneN;     // towards the road, wheel frame
+uniform float uPlaneD;    // hub to road
+uniform float uDeflate;
+out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow;
+const float PI = 3.14159265;
+void main(){
+  vec3 p = aPos;
+  vec3 n = aNrm;
+  if(uMode > 0){
+    float r = length(p.xz);
+    float phi = atan(p.z, p.x);
+    float f = (phi + PI) / (2.0*PI) * 24.0;
+    f = mod(f + 12.0, 24.0);   // bin 0 at phi = 0
+    int i0 = int(f);
+    float dent = mix(uDent[i0], uDent[(i0+1)%24], f - float(i0));
+    float rimF = smoothstep(0.06, 0.18, r);
+    float r2 = r - dent*rimF;
+    if(uMode == 2){
+      // The carcass above the bead: a flat tyre loses its height and its shape.
+      float bead = 0.195;
+      float wall = max(r - bead, 0.0);
+      float wrinkle = uDeflate * 0.005 * sin(phi*11.0 + p.y*40.0);
+      r2 = (bead - dent) + wall*(1.0 - 0.34*uDeflate) + wrinkle;
+      float edge = clamp(wall/0.117, 0.0, 1.0);
+      p.y *= 1.0 + uDeflate*0.10*sin(edge*PI);
+    }
+    if(r > 1e-4) p.xz *= r2/r;
+    p.y += dot(uRunout, vec2(cos(phi), sin(phi))) * rimF;
+  }
+  // Turn the wheel.
+  p.xz = vec2(p.x*uSpin.x - p.z*uSpin.y, p.x*uSpin.y + p.z*uSpin.x);
+  n.xz = vec2(n.x*uSpin.x - n.z*uSpin.y, n.x*uSpin.y + n.z*uSpin.x);
+  if(uMode == 2){
+    // The road flattens the tread and pushes the sidewalls out. This happens at any load, and it
+    // is simply far more of it on a flat tyre.
+    float h = dot(p, uPlaneN);
+    float band = 0.05 + 0.05*uDeflate;
+    float t = clamp((h - (uPlaneD - band))/band, 0.0, 1.0);
+    float bulge = t*t*(0.005 + 0.035*uDeflate);
+    p.y += sign(p.y) * bulge * (1.0 - 0.5*abs(p.y)/0.1025);
+    if(h > uPlaneD){
+      p -= uPlaneN*(h - uPlaneD);
+      n = normalize(mix(n, -uPlaneN, 0.85));
+    }
+  }
+  vec4 w = uModel * vec4(p,1.0);
+  vPos = w.xyz;
+  vNrm = mat3(uModel) * n;
+  vCol = aCol;
+  vShadow = uShadowVP * w;
+  gl_Position = uVP * w;
+})";
+
 const char* kDepthVS = R"(#version 330 core
 layout(location=0) in vec3 aPos;
 uniform mat4 uVP; uniform mat4 uModel;
@@ -297,6 +362,7 @@ struct Renderer::Impl {
   const World* world = nullptr;
   const Sim* sim = nullptr;
 
+  GLuint progWheel = 0, progWheelDepth = 0;
   GLuint progMesh = 0, progDepth = 0, progSky = 0, progPart = 0, progLine = 0, progHud = 0;
   GLuint shadowFbo = 0, shadowTex = 0;
   static constexpr int kShadow = 2048;
@@ -322,7 +388,7 @@ struct Renderer::Impl {
   std::vector<u8> partHidden;
   std::vector<const MeshPart*> wheelParts, wheelStaticParts;
   GLuint wheelVao2 = 0, wheelVbo2 = 0, wheelIbo2 = 0;
-  std::vector<int> wheelDrawFirst, wheelDrawCount, staticDrawFirst, staticDrawCount;
+  std::vector<int> wheelDrawFirst, wheelDrawCount, wheelDrawMode, staticDrawFirst, staticDrawCount;
   // Unit rod for arms, shafts and struts.
   GLuint rodVao = 0, rodVbo = 0;
   GLsizei rodCount = 0;
@@ -656,6 +722,13 @@ struct Renderer::Impl {
       for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++)
         for (int k = 0; k < 3; k++) idx.push_back(M.tris[t * 3 + k] - p.firstVert + base);
       (isStatic ? staticDrawCount : wheelDrawCount).push_back(int(p.triCount * 3));
+      if (!isStatic) {
+        // The disc and hub stay true; rim and tyre take the damage.
+        int mode = 1;
+        if (p.name == "wheel_tyre") mode = 2;
+        if (p.name.rfind("wheel_disc", 0) == 0 || p.name.rfind("wheel_hub", 0) == 0) mode = 0;
+        wheelDrawMode.push_back(mode);
+      }
     }
     glGenVertexArrays(1, &wheelVao2);
     glGenBuffers(1, &wheelVbo2);
@@ -1009,22 +1082,50 @@ struct Renderer::Impl {
   void setMat(GLuint p, const char* n, const Mat4& m) {
     glUniformMatrix4fv(glGetUniformLocation(p, n), 1, GL_FALSE, m.m);
   }
-  Mat4 wheelMatrix(const WheelView& wv, const V3& org) {
-    // Local axes: x and z span the wheel plane, y is the axle pointing outboard.
-    V3 yAxis = wv.axis * (wv.left ? 1.0 : -1.0);
-    V3 xAxis = norm(wv.up - wv.axis * dot(wv.up, wv.axis));
-    V3 zAxis = cross(xAxis, yAxis);
-    const double c = std::cos(wv.theta), sn = std::sin(wv.theta) * (wv.left ? 1.0 : -1.0);
-    const V3 ex = xAxis * c + zAxis * sn;
-    const V3 ez = zAxis * c - xAxis * sn;
-    const double r = wv.radius / 0.312, w = 1.0;
+  // Wheel frame without its rotation: x and z span the wheel plane, y is the axle pointing outboard.
+  void wheelAxes(const WheelView& wv, V3& ex, V3& ey, V3& ez) {
+    ey = wv.axis * (wv.left ? 1.0 : -1.0);
+    ex = norm(wv.up - wv.axis * dot(wv.up, wv.axis));
+    ez = cross(ex, ey);
+  }
+  Mat4 wheelMatrix(const WheelView& wv) {
+    V3 ex, ey, ez;
+    wheelAxes(wv, ex, ey, ez);
     Mat4 m;
-    m.m[0] = float(ex.x * r); m.m[1] = float(ex.y * r); m.m[2] = float(ex.z * r);
-    m.m[4] = float(yAxis.x * w); m.m[5] = float(yAxis.y * w); m.m[6] = float(yAxis.z * w);
-    m.m[8] = float(ez.x * r); m.m[9] = float(ez.y * r); m.m[10] = float(ez.z * r);
-    m.m[12] = float(wv.hub.x - org.x); m.m[13] = float(wv.hub.y - org.y); m.m[14] = float(wv.hub.z - org.z);
+    m.m[0] = float(ex.x); m.m[1] = float(ex.y); m.m[2] = float(ex.z);
+    m.m[4] = float(ey.x); m.m[5] = float(ey.y); m.m[6] = float(ey.z);
+    m.m[8] = float(ez.x); m.m[9] = float(ez.y); m.m[10] = float(ez.z);
+    m.m[12] = float(wv.hub.x); m.m[13] = float(wv.hub.y); m.m[14] = float(wv.hub.z);
     m.m[15] = 1;
     return m;
+  }
+  void drawWheels(const Snapshot& s, GLuint prog, const Mat4& vp, const Mat4& shadowVP) {
+    glUseProgram(prog);
+    setMat(prog, "uVP", vp);
+    setMat(prog, "uShadowVP", shadowVP);
+    glBindVertexArray(wheelVao2);
+    const GLint uMode = glGetUniformLocation(prog, "uMode"), uSpin = glGetUniformLocation(prog, "uSpin");
+    for (const WheelView& wv : s.wheels) {
+      V3 ex, ey, ez;
+      wheelAxes(wv, ex, ey, ez);
+      setMat(prog, "uModel", wheelMatrix(wv));
+      glUniform1fv(glGetUniformLocation(prog, "uDent"), 24, wv.dent);
+      glUniform2f(glGetUniformLocation(prog, "uRunout"), wv.runoutX, wv.runoutZ);
+      glUniform3f(glGetUniformLocation(prog, "uPlaneN"), float(dot(wv.groundN, ex)), float(dot(wv.groundN, ey)), float(dot(wv.groundN, ez)));
+      glUniform1f(glGetUniformLocation(prog, "uPlaneD"), float(wv.groundD));
+      glUniform1f(glGetUniformLocation(prog, "uDeflate"), float(wv.deflate));
+      const float sn = float(std::sin(wv.theta) * (wv.left ? 1.0 : -1.0));
+      glUniform2f(uSpin, float(std::cos(wv.theta)), sn);
+      for (size_t i = 0; i < wheelDrawFirst.size(); i++) {
+        glUniform1i(uMode, wheelDrawMode[i]);
+        glDrawElements(GL_TRIANGLES, wheelDrawCount[i], GL_UNSIGNED_INT, (void*)(size_t(wheelDrawFirst[i]) * sizeof(u32)));
+      }
+      // Caliper: fixed to the hub, it does not turn.
+      glUniform1i(uMode, 0);
+      glUniform2f(uSpin, 1.f, 0.f);
+      for (size_t i = 0; i < staticDrawFirst.size(); i++)
+        glDrawElements(GL_TRIANGLES, staticDrawCount[i], GL_UNSIGNED_INT, (void*)(size_t(staticDrawFirst[i]) * sizeof(u32)));
+    }
   }
 
   Mat4 identity() {
@@ -1044,6 +1145,8 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, const
 
   d->progMesh = program(kMeshVS, kMeshFS);
   d->progDepth = program(kDepthVS, kDepthFS);
+  d->progWheel = program(kWheelVS, kMeshFS);
+  d->progWheelDepth = program(kWheelVS, kDepthFS);
   d->progSky = program(kSkyVS, kSkyFS);
   d->progPart = program(kPartVS, kPartFS);
   d->progLine = program(kLineVS, kLineFS);
@@ -1167,17 +1270,6 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     glDrawElements(GL_TRIANGLES, GLsizei(D.carIdx.size()), GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(D.propVao);
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.propVerts.size()));
-    glBindVertexArray(D.wheelVao2);
-    for (const WheelView& wv : s.wheels) {
-      D.setMat(prog, "uModel", D.wheelMatrix(wv, D.origin));
-      for (size_t i = 0; i < D.wheelDrawFirst.size(); i++)
-        glDrawElements(GL_TRIANGLES, D.wheelDrawCount[i], GL_UNSIGNED_INT, (void*)(size_t(D.wheelDrawFirst[i]) * sizeof(u32)));
-      WheelView fixed = wv;
-      fixed.theta = 0;
-      D.setMat(prog, "uModel", D.wheelMatrix(fixed, D.origin));
-      for (size_t i = 0; i < D.staticDrawFirst.size(); i++)
-        glDrawElements(GL_TRIANGLES, D.staticDrawCount[i], GL_UNSIGNED_INT, (void*)(size_t(D.staticDrawFirst[i]) * sizeof(u32)));
-    }
     // Running gear: arms, shafts and struts between their real nodes.
     glBindVertexArray(D.rodVao);
     for (const VisLink& l : D.rig->links) {
@@ -1213,6 +1305,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   D.setMat(D.progDepth, "uModel", I);
   glBindVertexArray(D.staticVao);
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
+  D.drawWheels(s, D.progWheelDepth, lightVP, lightVP);
   glDisable(GL_POLYGON_OFFSET_FILL);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -1261,6 +1354,12 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
 
   drawDyn(D.progMesh);
+  glUseProgram(D.progWheel);
+  glUniform3f(glGetUniformLocation(D.progWheel, "uEye"), float(cam.eye.x), float(cam.eye.y), float(cam.eye.z));
+  glUniform3f(glGetUniformLocation(D.progWheel, "uSun"), float(D.sun.x), float(D.sun.y), float(D.sun.z));
+  glUniform1f(glGetUniformLocation(D.progWheel, "uAlpha"), 1.f);
+  glUniform1i(glGetUniformLocation(D.progWheel, "uShadow"), 0);
+  D.drawWheels(s, D.progWheel, vp, lightVP);
 
   // Debug overlay: every beam, coloured by load.
   if (hud.debugBeams) {

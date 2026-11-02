@@ -6,8 +6,13 @@
 
 struct WheelView {
   V3 hub, axis, up;
-  double theta = 0, radius = 0.31, width = 0.2;
+  double theta = 0;
   bool left = true;
+  double deflate = 0;
+  V3 groundN{0, 0, -1};     // towards the road, world space
+  double groundD = 10;      // distance from hub to road along groundN; large when airborne
+  float dent[Wheel::kDentBins] = {};
+  float runoutX = 0, runoutZ = 0;
 };
 
 // Copied out of the physics thread once per rendered frame.

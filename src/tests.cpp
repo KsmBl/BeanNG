@@ -584,6 +584,11 @@ void testCrash(double kmh) {
     printf("  engine mounts broken %d/%zu, last note '%s', dmg check tick engine-to-wall\n", mountBroken, b.car.engineMountBeams.size(), b.car.lastDamage.c_str());
   }
   printf("  plastic energy %.1f kJ of %.1f kJ kinetic, beams broken %d, final speed %.1f\n", b.sim.plasticEnergy / 1e3, E0 / 1e3, brokenCar, b.car.speed);
+  for (const Wheel& w : b.car.wheels) {
+    double mx = 0;
+    for (float d : w.dent) mx = std::max(mx, double(d));
+    printf("  wheel %s%s: flat %.2f, deepest rim dent %.1f mm, runout %.1f mm, hub height %.3f\n", w.front ? "F" : "R", w.left ? "L" : "R", w.deflate, mx * 1000, std::hypot(w.runoutX, w.runoutZ) * 1000, w.hub.z);
+  }
   printf("  damage: rad %d hyd %d mount %d steer %d seized %d  sane %d\n", b.car.dmg.radiator, b.car.dmg.hydraulics, b.car.dmg.engineMount, b.car.dmg.steering, b.car.dmg.seized, b.sane());
 }
 
@@ -630,7 +635,10 @@ void testRough() {
     for (u32 i = o.beamStart; i < o.beamStart + o.beamCount; i++) broken += (b.sim.beams[i].flags & BF_BROKEN) ? 1 : 0;
     int flat = 0;
     for (const Wheel& w : b.car.wheels) flat += w.deflate > 0 ? 1 : 0;
-    printf("  %-22s v=%5.1f km/h body z %.2f..%.2f  plastic %6.1f kJ  broken %3d  flat %d  sane %d\n", name, b.car.speed * 3.6, zMin, zMax, b.sim.plasticEnergy / 1e3, broken, flat, b.sane());
+    double dentMax = 0;
+    for (const Wheel& w : b.car.wheels)
+      for (float d : w.dent) dentMax = std::max(dentMax, double(d));
+    printf("  %-22s v=%5.1f km/h body z %.2f..%.2f  plastic %6.1f kJ  broken %3d  flat %d  rim dent %4.1f mm  sane %d\n", name, b.car.speed * 3.6, zMin, zMax, b.sim.plasticEnergy / 1e3, broken, flat, dentMax * 1000, b.sane());
   };
   auto drive = [](Bench& b, double seconds, double kmh, double& zMin, double& zMax, double yT, double steerOverride = 9) {
     b.run(seconds, [&](double, Controls& c) {
@@ -842,6 +850,51 @@ void testJitter(const char* label, double kmh) {
     printf("  wheel %d hub step max %.2f mean %.2f mm, axle direction step max %.2f deg\n", i, hubMax[i] * 1000, hubAvg[i] * 1000, axisMax[i] * 57.3);
 }
 
+void testWheelDamage() {
+  printf("== Flat tyre and bent rim while rolling ==\n");
+  Bench b;
+  b.world.clearBoxes();
+  b.world.flatten();
+  const double h0 = b.car.wheels[0].hub.z;
+  b.launchAt(40 / 3.6, 2);
+  double zMin = 9, zMax = -9;
+  b.run(2.0, [&](double, Controls& c) { c.throttle = 0.2; });
+  for (int i = 0; i < 2; i++) {
+    Wheel& w = b.car.wheels[0];
+    if (i == 1) {
+      w.deflate = 0.001;
+      printf("  burst: ");
+    } else {
+      w.dent[5] = w.dent[6] = 0.03f;
+      printf("  30 mm rim dent: ");
+    }
+    double aMax = 0;
+    b.run(3.0, [&](double, Controls& c) {
+      c.throttle = 0.2;
+      zMin = std::min(zMin, b.car.wheels[0].hub.z);
+      zMax = std::max(zMax, b.car.wheels[0].hub.z);
+      aMax = std::max(aMax, std::fabs(b.car.pitchAngle));
+    });
+    printf("hub z range %.3f..%.3f (healthy %.3f), v %.1f km/h, pull: heading %.1f deg, sane %d\n", zMin, zMax, h0, b.car.speed * 3.6, std::atan2(b.car.fwd.y, b.car.fwd.x) * 57.3, b.sane());
+    zMin = 9;
+    zMax = -9;
+  }
+}
+
+void testWheelStrike() {
+  // Front left wheel driven into the end of a concrete wall, offset so that the wheel takes the hit.
+  printf("== Wheel strike against the scrape wall end ==\n");
+  for (double kmh : {20.0, 40.0, 70.0}) {
+    Bench b({60 - 30 - 12, 140 - 0.5 - 0.72, 0}, 0);
+    b.launchAt(kmh / 3.6, 2);
+    b.run(2.5, [&](double, Controls& c) { c.throttle = 0.1; });
+    const Wheel& w = b.car.wheels[0];
+    double mx = 0;
+    for (float d : w.dent) mx = std::max(mx, double(d));
+    printf("  %3.0f km/h: FL flat %.2f, dent %.1f mm, runout %.1f mm, attached %d, hub z %.3f, plastic %.1f kJ, sane %d\n", kmh, w.deflate, mx * 1000, std::hypot(w.runoutX, w.runoutZ) * 1000, w.attached, w.hub.z, b.sim.plasticEnergy / 1e3, b.sane());
+  }
+}
+
 void testPropRest() {
   // Regression: every prop, woken with nothing touching it, must simply stay standing.
   Bench b({-90, 0, 0}, 0, true);
@@ -919,6 +972,10 @@ int main(int argc, char** argv) {
     testJitter("standstill", 0);
     testJitter("60 km/h", 60);
     testJitter("120 km/h", 120);
+  }
+  if (want("wheel")) {
+    testWheelDamage();
+    testWheelStrike();
   }
   if (want("powertrain")) testPowertrain();
   if (want("rough")) testRough();

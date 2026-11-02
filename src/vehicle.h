@@ -39,12 +39,22 @@ struct Wheel {
   double deflate = 0;        // 0 = inflated, 1 = flat
   bool attached = true;      // drive shaft still connected
 
+  // Permanent rim damage, in the wheel's own frame so that it turns with the wheel.
+  static constexpr int kDentBins = 24;
+  float dent[kDentBins] = {};  // radial dent depth [m] around the rim
+  float runoutX = 0, runoutZ = 0;  // lateral bend of the rim, as a cosine and sine amplitude [m]
+  u32 spoke[6][2] = {};        // beams from each ring node to the two axle nodes
+  double spokeSeen[6][2] = {}; // plastic shortening already turned into rim damage
+
+  // Where the tyre touches, for the visible contact patch.
+  V3 patchPoint, patchNormal{0, 0, 1};
+
   // Outputs.
   double Fz = 0, Fx = 0, Fy = 0, slipX = 0, slipY = 0;
   double driveT = 0;
   bool contact = false;
   u8 surface = SURF_ASPHALT;
-  V3 hub, axis;
+  V3 hub, axis, upHint{0, 0, 1};
 };
 
 // One hydropneumatic strut: a piston feeding a nitrogen sphere through a damper valve.
@@ -171,6 +181,8 @@ class Vehicle {
   void updateDamage(Sim& sim, double dt);
   void shapeDamping(Sim& sim, double dt);
   void note(const char* msg);
+  void addRimDamage(Wheel& w, V3 where, double depth, double lateral);
+  void updateRimDamage(Sim& sim, Wheel& w);
 };
 
 // What the builder hands to the renderer: node groups the mesh binds to, and running gear drawn as

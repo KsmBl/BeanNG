@@ -105,7 +105,7 @@ const Mat mSubframe{3.0e6, 440, 70e3, 90e3, 2e5, 0.22, 0};
 const Mat mInnerWing{1.8e6, 300, 32e3, 55e3, 1e5, 0.40, 0};
 const Mat mAnchor{3.0e6, 440, 65e3, 85e3, 2e5, 0.20, 0};
 const Mat mArm{4.0e6, 500, 55e3, 75e3, 3e5, 0.22, 0};
-const Mat mHub{2.2e6, 280, 42e3, 60e3, 2e5, 0.18, 0};
+const Mat mHub{2.2e6, 280, 16e3, 26e3, 1.2e5, 0.25, 0};  // a wheel bends long before an arm does
 const Mat mCarrier{3.2e6, 420, 90e3, 110e3, 4e5, 0.20, 0};
 const Mat mTie{3.0e6, 360, 26e3, 34e3, 1e5, 0.12, 0};
 const Mat mBlock{6e6, 900, 240e3, 240e3, 6e5, 0.0, 0};
@@ -545,7 +545,9 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
     // Hub-and-rim lattice. Plastic spokes mean a heavy kerb strike leaves a bent wheel.
     B.beam(w.axIn, w.axOut, mHub);
     for (int i = 0; i < 6; i++) {
+      w.spoke[i][0] = u32(sim.beams.size());
       B.beam(w.ring[i], w.axIn, mHub);
+      w.spoke[i][1] = u32(sim.beams.size());
       B.beam(w.ring[i], w.axOut, mHub);
       B.beam(w.ring[i], w.ring[(i + 1) % 6], mHub);
       B.beam(w.ring[i], w.ring[(i + 2) % 6], mHub);

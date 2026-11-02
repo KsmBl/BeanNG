@@ -1,6 +1,7 @@
 // BeanNG: game loop, input, cameras and the physics thread.
 #include <SDL3/SDL.h>
 #include <epoxy/gl.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -42,6 +43,7 @@ struct Game {
   Snapshot snap;
   std::atomic<bool> running{true};
   std::atomic<bool> resetVisuals{false};
+  std::atomic<bool> debugWheel{false};
 
   void applyRepair() {
     // Restore the pristine car, keeping position and heading.
@@ -89,9 +91,13 @@ struct Game {
       v.axis = norm(w.left ? sim.pos[w.axOut] - sim.pos[w.axIn] : sim.pos[w.axIn] - sim.pos[w.axOut]);
       v.up = sim.pos[w.ring[0]] - v.hub;
       v.theta = w.theta;
-      v.radius = lerpd(w.R, w.R - 0.095, w.deflate);
-      v.width = w.width;
       v.left = w.left;
+      v.deflate = w.deflate;
+      v.groundN = -w.patchNormal;
+      v.groundD = w.contact ? dot(w.patchPoint - v.hub, v.groundN) : 10.0;
+      std::copy(w.dent, w.dent + Wheel::kDentBins, v.dent);
+      v.runoutX = w.runoutX;
+      v.runoutZ = w.runoutZ;
       s.flat[i] = w.deflate > 0.1;
     }
     s.speedKmh = car.speed * 3.6;
@@ -151,6 +157,12 @@ struct Game {
         input.c.cycleHeight = input.c.toggleIgnition = input.c.toggleActiva = false;
         input.c.requestGear = 99;
         input.reset = input.repair = false;
+      }
+      if (debugWheel.exchange(false) && car.wheels[0].deflate == 0) {
+        Wheel& w = car.wheels[0];
+        w.deflate = 0.001;
+        w.dent[3] = 0.02f; w.dent[4] = 0.04f; w.dent[5] = 0.045f; w.dent[6] = 0.03f; w.dent[7] = 0.012f;
+        w.runoutX = 0.012f;
       }
       if (in.reset) {
         sim = simStart;
@@ -584,6 +596,13 @@ int main(int argc, char** argv) {
           rig.pitch = 0.42;
           rig.yaw = 0.5 + double(shotCount) * PI / 3.0;
           break;
+        case 10:  // close look at a tyre going flat and a dented rim
+          rig.mode = CAM_ORBIT;
+          rig.dist = 2.6;
+          rig.pitch = 0.08;
+          rig.yaw = -1.25 + 0.0;
+          G.debugWheel = true;
+          break;
         case 8:  // burst while driving steadily, chase camera
           scriptGas = view.speedKmh < 50 ? 0.5 : 0.12;
           scriptSteer = clampd(-0.05 * view.carCog.y - 0.7 * std::atan2(view.carFwd.y, view.carFwd.x), -0.2, 0.2);
@@ -702,6 +721,15 @@ int main(int argc, char** argv) {
     hud.mouseSteer = mouseSteer;
     hud.cameraName = kCamNames[rig.mode];
     rig.update(view, dt, cam, G.world);
+    if (scriptMode == 10) {  // close-up of the front left wheel
+      cam.target = view.wheels[0].hub + V3{0, 0, -0.05};
+      cam.eye = cam.target + V3{0.55, 1.15, 0.12};
+    }
+    if (scriptMode == 11) {  // close-up of a rear corner
+      const V3 corner = view.carCog + view.carFwd * -2.25 + view.carLeft * 0.55 + view.carUp * 0.5;
+      cam.target = corner;
+      cam.eye = corner + view.carFwd * (shotCount % 2 ? -1.0 : -1.3) + view.carLeft * (shotCount % 2 ? 1.1 : 0.2) + view.carUp * (shotCount % 3 == 2 ? 0.1 : 0.45);
+    }
 
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);

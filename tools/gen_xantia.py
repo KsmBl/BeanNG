@@ -394,6 +394,8 @@ quarter = unary_union([quarter, box(3.262, 0.285, 3.32, 0.46), box(3.27, 0.53, 4
 quarter = quarter.difference(box(3.9, 0.0, 4.3, 0.555)).difference(win_q.buffer(0.016)).buffer(0)
 if hasattr(quarter, "geoms"):
     quarter = max(quarter.geoms, key=lambda g: g.area)
+# Above the rear lights the quarter runs on towards the lip, closing the corner up to the tailgate edge.
+quarter = unary_union([quarter, outline([(4.15, 0.90), (4.44, 0.90)], poly_fn(rail, 4.44, 4.15, 16))]).buffer(0)
 panel("quarter_l", "body", "paint", quarter, SIDE, mirror=True, flip_name="quarter_r")
 
 # Sills, in dark plastic.
@@ -508,14 +510,14 @@ panel("bumper_r_low", "bumper_r", "dark", box(-uR + 0.05, 0.27, uR - 0.05, 0.37)
 
 # Tail panel (moves with the tailgate), corners (fixed to the body), split rear lights.
 gate_half = 0.62
-tail_lid = box(-gate_half, 0.575, gate_half, 0.995)
-corner_l = Polygon([(gate_half + 0.006, 0.575), (uR - 0.05, 0.575), (uR - 0.03, 0.95), (gate_half + 0.006, 0.995)])
+tail_lid = box(-gate_half, 0.575, gate_half, 1.028)
+corner_l = Polygon([(gate_half + 0.006, 0.575), (uR - 0.05, 0.575), (uR - 0.03, 0.985), (gate_half + 0.006, 1.03)])
 lt_in = box(0.31, 0.745, gate_half - 0.018, 0.89).buffer(0.008).buffer(-0.008)
 lt_out = Polygon([(gate_half + 0.018, 0.745), (0.98, 0.745), (0.98, 0.88), (gate_half + 0.018, 0.89)]).buffer(0.008).buffer(-0.008)
 holes = [lt_in, Polygon([(-x, y) for x, y in lt_in.exterior.coords])]
 panel("tail_lid", "tailgate", "paint", tail_lid.difference(unary_union(holes)), TAIL, h=0.05)
-panel("tail_corner_l", "body", "paint", corner_l.difference(lt_out), TAIL, h=0.05)
-panel("tail_corner_r", "body", "paint", scale(corner_l.difference(lt_out), xfact=-1, yfact=1, origin=(0, 0)), TAIL, h=0.05)
+panel("tail_corner_l", "body", "paint", corner_l.difference(lt_out), TAIL, h=0.05, offset=0.0015)
+panel("tail_corner_r", "body", "paint", scale(corner_l.difference(lt_out), xfact=-1, yfact=1, origin=(0, 0)), TAIL, h=0.05, offset=0.0015)
 for s, nm in ((1, "l"), (-1, "r")):
     li = Polygon([(s * x, y) for x, y in lt_in.exterior.coords])
     lo = Polygon([(s * x, y) for x, y in lt_out.exterior.coords])
@@ -773,7 +775,7 @@ for sg in (-1, 1):
     IW.box("metal", (2.3, sg * 0.70, 0.27), (2.0, 0.10, 0.09))                    # sill box
 IW.box("liner", (3.85, 0.0, 0.32), (1.05, 1.10, 0.02))                            # boot floor
 IW.box("liner", (3.25, 0.0, 0.62), (0.02, 1.36, 0.80))                            # seat back bulkhead
-IW.box("liner", (3.98, 0.0, 1.00), (0.5, 1.18, 0.01))                             # parcel shelf
+IW.box("liner", (4.0, 0.0, 1.03), (0.62, 1.30, 0.012))                             # parcel shelf
 
 
 def arch_liner(comp, cx, sg, r=0.392, y0=0.62, y1=0.872):
@@ -802,6 +804,10 @@ def arch_liner(comp, cx, sg, r=0.392, y0=0.62, y1=0.872):
 for cx in (0.90, 3.64):
     for sg in (-1, 1):
         arch_liner(IW, cx, sg)
+# Boot tub: closes the car from the inside, so that no gap ever looks straight through it.
+IW.box("liner", (4.36, 0.0, 0.66), (0.012, 1.14, 0.68))
+for sg in (-1, 1):
+    IW.box("liner", (4.14, sg * 0.57, 0.66), (0.44, 0.012, 0.68))
 IW.finish("shell_inner")
 
 # Interior.

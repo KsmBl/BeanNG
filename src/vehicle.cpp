@@ -54,6 +54,51 @@ constexpr double kRackArea = 8e-4;                 // power steering piston [m^2
 constexpr double kBrakeVolume = 14e-6;             // fluid for a full brake application [m^3]
 }  // namespace
 
+namespace {
+double rimDentAt(const Wheel& w, double phi) {
+  constexpr int n = Wheel::kDentBins;
+  double f = (phi / (2.0 * PI) + 1000.0) * n;
+  f -= std::floor(f / n) * n;
+  const int i = int(f) % n;
+  const double t = f - std::floor(f);
+  return lerpd(w.dent[i], w.dent[(i + 1) % n], t);
+}
+}  // namespace
+
+// Adds a dent at a point on the wheel, spread over the rim like the buckle a kerb leaves behind.
+void Vehicle::addRimDamage(Wheel& w, V3 where, double depth, double lateral) {
+  const V3 yAxis = w.axis * (w.left ? 1.0 : -1.0);
+  const V3 upV = (w.hub + w.upHint) - w.hub;
+  const V3 xAxis = norm(upV - yAxis * dot(upV, yAxis));
+  const V3 zAxis = cross(xAxis, yAxis);
+  const V3 r = where - w.hub;
+  const double phi = std::atan2(dot(r, zAxis), dot(r, xAxis)) - w.theta * (w.left ? 1.0 : -1.0);
+  constexpr int n = Wheel::kDentBins;
+  double f = (phi / (2.0 * PI) + 1000.0) * n;
+  f -= std::floor(f / n) * n;
+  for (int k = -3; k <= 3; k++) {
+    const int i = (int(f) + k + 1000 * n) % n;
+    const double g = std::exp(-0.5 * k * k / (1.3 * 1.3));
+    w.dent[i] = float(std::min(0.055, double(w.dent[i]) + depth * g));
+  }
+  w.runoutX = float(clampd(w.runoutX + lateral * std::cos(phi), -0.03, 0.03));
+  w.runoutZ = float(clampd(w.runoutZ + lateral * std::sin(phi), -0.03, 0.03));
+}
+
+// Spokes that have yielded mean the structure of the wheel was hit there.
+void Vehicle::updateRimDamage(Sim& sim, Wheel& w) {
+  for (int i = 0; i < 6; i++) {
+    const Beam& bi = sim.beams[w.spoke[i][0]];
+    const Beam& bo = sim.beams[w.spoke[i][1]];
+    const double si = std::max(0.0, bi.Lorig - bi.L0), so = std::max(0.0, bo.Lorig - bo.L0);
+    const double di = si - w.spokeSeen[i][0], dio = so - w.spokeSeen[i][1];
+    if (di < 1e-4 && dio < 1e-4) continue;
+    w.spokeSeen[i][0] = si;
+    w.spokeSeen[i][1] = so;
+    addRimDamage(w, sim.pos[w.ring[i]], 0.5 * (std::max(di, 0.0) + std::max(dio, 0.0)), 0.5 * (dio - di));
+  }
+}
+
 void Vehicle::note(const char* msg) {
   lastDamage = msg;
   lastDamageAge = 0;
@@ -70,9 +115,23 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
   V3 a = norm(w.left ? pB - pA : pA - pB);
   w.hub = C;
   w.axis = a;
+  w.upHint = sim.pos[w.ring[0]] - C;
 
-  const double Rnow = lerpd(w.R, w.R - 0.095, w.deflate);
+  // A flat tyre does not shrink: the carcass collapses between rim and road and the car comes down
+  // onto it, so it still carries load, only on a much softer and lower cushion.
+  const double Rflat = lerpd(w.R, 0.232, w.deflate);
   const double kRad = lerpd(w.kRadial, w.kRadial * 0.12, w.deflate);
+  // A dented rim is out of round. The dent rolls past the road once per revolution, and the car feels it.
+  double Rnow = Rflat;
+  {
+    const double sideSign = w.left ? 1.0 : -1.0;
+    const V3 yAxis = a * sideSign;
+    const V3 upV = sim.pos[w.ring[0]] - C;
+    const V3 xAxis = norm(upV - yAxis * dot(upV, yAxis));
+    const V3 zAxis = cross(xAxis, yAxis);
+    const double phi = std::atan2(dot(V3{0, 0, -1}, zAxis), dot(V3{0, 0, -1}, xAxis)) - w.theta * sideSign;
+    Rnow -= rimDentAt(w, phi);
+  }
 
   // Sample the lower half of the carcass in three rows across the tread. Each row reacts to its
   // deepest sample, which approximates the tyre enveloping a kerb or a stone: the force direction
@@ -232,6 +291,10 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
       }
     }
     w.Fz = Fz;
+    w.patchPoint = patch;
+    w.patchNormal = n;
+    // A heavy blow through the tyre leaves its mark on the rim, right where it struck.
+    if (Fz > 17000.0 && (sim.stepCount & 3) == 0) addRimDamage(w, patch, (Fz - 17000.0) * 8e-9, 0.0);
   } else {
     w.ux *= 0.995;
     w.uy *= 0.995;
@@ -290,7 +353,10 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
   w.theta = std::fmod(w.theta + omega * dt, 2.0 * PI);
 
   // Pinch flat: tyre compressed down onto the rim by a heavy impact.
-  if (w.deflate == 0 && w.Fz > 32000.0) {
+  // A deep dent lifts the bead off the rim and the tyre loses its air.
+  double deepest = 0;
+  for (float d : w.dent) deepest = std::max(deepest, double(d));
+  if (w.deflate == 0 && (w.Fz > 32000.0 || deepest > 0.016)) {
     w.deflate = 0.001;
     note("REIFEN GEPLATZT");
   }
@@ -859,6 +925,8 @@ void Vehicle::updateDamage(Sim& sim, double dt) {
         note("STOP: FEDERBEIN ZERSTOERT");
       }
     }
+  for (Wheel& w : wheels) updateRimDamage(sim, w);
+
   // Halfshafts have plunge and angle limits at their CV joints: pulled out, they come apart.
   int si = 0;
   for (Wheel& w : wheels) {
