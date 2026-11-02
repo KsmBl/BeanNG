@@ -9,4 +9,10 @@ if [[ ! -f build/build.ninja ]]; then
 fi
 cmake --build build --target beanng
 
+# The car mesh is generated, and only rebuilt when the generator has changed.
+if [[ ! -f assets/xantia.mesh || tools/gen_xantia.py -nt assets/xantia.mesh ]]; then
+  mkdir -p assets
+  python3 tools/gen_xantia.py assets/xantia.mesh
+fi
+
 exec ./build/beanng "$@"

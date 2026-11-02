@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <vector>
@@ -16,7 +17,7 @@ struct Bench {
   World world;
   Sim sim;
   Vehicle car;
-  CarSkin skin;
+  CarRig skin;
 
   explicit Bench(V3 pos = {-90, 0, 0}, double yaw = 0, bool props = false) {
     world.build();
@@ -60,13 +61,23 @@ void testStatics() {
   Bench b;
   const Vehicle& c = b.car;
   printf("== Statics ==\n");
-  printf("  nodes %zu  beams %zu  tris %zu  skin quads %zu\n", b.sim.pos.size(), b.sim.beams.size(),
-         b.sim.tris.size(), b.skin.quads.size());
+  printf("  nodes %zu  beams %zu  tris %zu\n", b.sim.pos.size(), b.sim.beams.size(), b.sim.tris.size());
+  {
+    CarMesh mesh;
+    if (mesh.load("assets/xantia.mesh")) {
+      mesh.bind(b.sim.rest, b.skin.groups, {-90, 0, 0});
+      std::string worst;
+      const double err = mesh.restError(b.sim.rest, {-90, 0, 0}, &worst);
+      printf("  mesh: %zu parts, %zu verts, %zu tris, max rest error %.2f mm (%s)\n", mesh.parts.size(), mesh.restPos.size() / 3, mesh.tris.size() / 3, err * 1000, worst.c_str());
+    } else {
+      printf("  mesh: assets/xantia.mesh NOT FOUND\n");
+    }
+  }
   u32 worst = 0;
-  const double lam = b.sim.maxAccelEstimate(&worst);
-  printf("  Gershgorin lambda %.3g (limit %.3g), worst node %u mass %.2f at (%.2f %.2f %.2f)\n", lam,
-         4.0 / (kDt * kDt), worst, b.sim.mass[worst], b.sim.pos[worst].x, b.sim.pos[worst].y,
-         b.sim.pos[worst].z);
+  const double lam = b.sim.maxEigenvalue(b.car.obj, &worst);
+  printf("  stability: largest eigenvalue %.3g, limit %.3g (%.0f %%), worst node %u mass %.2f design (%.2f %+.2f %.2f)\n", lam, 4.0 / (kDt * kDt), lam / (4.0 / (kDt * kDt)) * 100, worst, b.sim.mass[worst],
+         2.26 - (b.sim.rest[worst].x + 90), b.sim.rest[worst].y, b.sim.rest[worst].z);
+  printf("  velocity guard activations %llu\n", (unsigned long long)b.sim.clampedSteps);
   printf("  mass %.0f kg  cog z %.3f m\n", c.totalMass, c.cog.z);
   double fzF = c.wheels[0].Fz + c.wheels[1].Fz, fzR = c.wheels[2].Fz + c.wheels[3].Fz;
   printf("  axle load F %.0f N  R %.0f N (%.1f %% front)\n", fzF, fzR, 100.0 * fzF / (fzF + fzR));
@@ -88,7 +99,7 @@ void testSpawn() {
   world.build();
   Sim sim;
   sim.world = &world;
-  CarSkin skin;
+  CarRig skin;
   Vehicle car = buildXantia(sim, {-90, 0, 0}, 0, &skin);
   sim.finalize();
   car.settleFluid(sim);
@@ -107,7 +118,213 @@ void testSpawn() {
   }
 }
 
+void testBalance() {
+  // External force balance on a car that should be at rest.
+  World world;
+  world.build();
+  Sim sim;
+  sim.world = &world;
+  CarRig rig;
+  Vehicle car = buildXantia(sim, {-90, 0, 0}, 0, &rig);
+  sim.finalize();
+  car.settleFluid(sim);
+  Controls c;
+  const Obj& o = sim.objs[car.obj];
+  auto total = [&](bool grav) {
+    V3 f{};
+    for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) f += sim.force[i];
+    return f;
+  };
+  double m = 0;
+  V3 mg{};
+  for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) m += sim.mass[i];
+  for (int i = 0; i < 16000; i++) {
+    sim.forces(kDt);
+    const V3 afterBeams = total(true);
+    car.update(sim, c, kDt);
+    const V3 afterCar = total(true);
+    std::vector<V3> before;
+    if (i == 15999) before.assign(sim.force.begin(), sim.force.end());
+    sim.finish(kDt);
+    if (i == 15999) {
+      V3 net{};
+      printf("  nodes receiving contact force at the end:\n");
+      for (u32 k = o.nodeStart; k < o.nodeStart + o.nodeCount; k++) {
+        const V3 d = sim.force[k] - before[k];
+        net += d;
+        if (len(d) > 5.0)
+          printf("    node %u rest (%.2f %+.2f %.2f) now (%.2f %+.2f %.3f) contact force (%+.0f %+.0f %+.0f) flags %d mass %.1f\n", k, 2.26 - (sim.rest[k].x + 90), sim.rest[k].y, sim.rest[k].z, sim.pos[k].x, sim.pos[k].y, sim.pos[k].z, d.x, d.y, d.z, sim.flags[k], sim.mass[k]);
+      }
+      printf("  net contact force (%+.0f %+.0f %+.0f)\n", net.x, net.y, net.z);
+    }
+    if (i % 2000 == 0 || i == 15999) {
+      V3 fx{};
+      for (const Wheel& w : car.wheels) fx.x += w.Fx, fx.y += w.Fy, fx.z += w.Fz;
+      V3 p{};
+      double zl = 0;
+      printf("  t=%.1f beams+grav (%+.1f %+.1f %+.1f)  +vehicle (%+.1f %+.1f %+.1f)  tyres Fx %+.0f Fy %+.0f Fz %.0f  vCog (%+.3f %+.3f %+.3f) om %+.2f\n", i * kDt, afterBeams.x, afterBeams.y, afterBeams.z + m * 9.81, afterCar.x, afterCar.y, afterCar.z + m * 9.81, fx.x, fx.y, fx.z, car.vCog.x, car.vCog.y, car.vCog.z, car.wheels[0].omega);
+      (void)p; (void)zl;
+    }
+  }
+  double yc = 0;
+  for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) yc += sim.pos[i].y * sim.mass[i];
+  printf("  y cog %.4f  mass %.1f  FL %.0f FR %.0f RL %.0f RR %.0f  y hub %.3f %.3f\n", yc / m, m, car.wheels[0].Fz, car.wheels[1].Fz, car.wheels[2].Fz, car.wheels[3].Fz, car.wheels[0].hub.y, car.wheels[1].hub.y);
+}
+
+void testVibe() {
+  Bench b;
+  printf("== Tyre force statistics at rest over 1 s (mean, rms, zero crossings per second) ==\n");
+  const char* nm[4] = {"FL", "FR", "RL", "RR"};
+  double mFy[4] = {}, sFy[4] = {}, mFx[4] = {}, sFx[4] = {}, mFz[4] = {}, sFz[4] = {}, prevY[4] = {};
+  int cross[4] = {};
+  const int N = 2000;
+  double mStroke[4] = {};
+  b.run(N * kDt, [&](double, Controls&) {
+    for (int i = 0; i < 4; i++) {
+      const Wheel& w = b.car.wheels[i];
+      mFy[i] += w.Fy; sFy[i] += w.Fy * w.Fy;
+      mFx[i] += w.Fx; sFx[i] += w.Fx * w.Fx;
+      mFz[i] += w.Fz; sFz[i] += w.Fz * w.Fz;
+      const double y = w.Fy - mFy[i] / std::max(1.0, double(N));
+      if (y * prevY[i] < 0) cross[i]++;
+      prevY[i] = y;
+    }
+  });
+  for (int i = 0; i < 4; i++) {
+    const double ay = mFy[i] / N, ax = mFx[i] / N, az = mFz[i] / N;
+    printf("  %s Fy mean %+7.0f rms %6.0f  Fx mean %+7.0f rms %6.0f  Fz mean %6.0f rms %6.0f  crossings %d  toe-ish uy %.4f\n", nm[i], ay, std::sqrt(std::max(0.0, sFy[i] / N - ay * ay)), ax, std::sqrt(std::max(0.0, sFx[i] / N - ax * ax)), az, std::sqrt(std::max(0.0, sFz[i] / N - az * az)), cross[i], b.car.wheels[i].uy);
+  }
+  V3 lv = b.car.vCog;
+  printf("  vCog (%.3f %.3f %.3f) rms hub vel: ", lv.x, lv.y, lv.z);
+  for (const Wheel& w : b.car.wheels) printf("%.3f ", len(b.sim.vel[w.axIn]));
+  printf("\n");
+}
+
+void testImpulse() {
+  Bench b;
+  Sim& S = b.sim;
+  const Obj& o = S.objs[b.car.obj];
+  auto momentum = [&] {
+    V3 p{};
+    for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) p += S.vel[i] * S.mass[i];
+    return p;
+  };
+  auto total = [&] {
+    V3 f{};
+    for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) f += S.force[i];
+    return f;
+  };
+  V3 p0 = momentum(), iBeam{}, iVeh{}, iContact{}, tyres{};
+  Controls c;
+  const int N = 4000;
+  std::vector<double> perNode(S.pos.size(), 0.0);
+  for (int i = 0; i < N; i++) {
+    S.forces(kDt);
+    const V3 f1 = total();
+    b.car.update(S, c, kDt);
+    const V3 f2 = total();
+    std::vector<V3> before = S.force;
+    S.finish(kDt);
+    const V3 f3 = total();
+    for (u32 k = o.nodeStart; k < o.nodeStart + o.nodeCount; k++) perNode[k] += len(S.force[k] - before[k]) * kDt;
+    iBeam += f1 * kDt;
+    iVeh += (f2 - f1) * kDt;
+    iContact += (f3 - f2) * kDt;
+    for (const Wheel& w : b.car.wheels) tyres.z += w.Fz * kDt;
+  }
+  const double T = N * kDt;
+  const V3 dp = momentum() - p0;
+  printf("== Impulse balance over %.1f s (mean force in N) ==\n", T);
+  printf("  beams+gravity (%+.1f %+.1f %+.1f)\n  vehicle       (%+.1f %+.1f %+.1f)\n  contacts      (%+.1f %+.1f %+.1f)\n  dp/dt         (%+.1f %+.1f %+.1f)\n  mean sum Fz %.0f\n",
+         iBeam.x / T, iBeam.y / T, iBeam.z / T, iVeh.x / T, iVeh.y / T, iVeh.z / T, iContact.x / T, iContact.y / T, iContact.z / T, dp.x / T, dp.y / T, dp.z / T, tyres.z / T);
+  std::vector<u32> idx;
+  for (u32 k = o.nodeStart; k < o.nodeStart + o.nodeCount; k++) if (perNode[k] > 0.1) idx.push_back(k);
+  std::sort(idx.begin(), idx.end(), [&](u32 a, u32 b_) { return perNode[a] > perNode[b_]; });
+  for (size_t j = 0; j < idx.size() && j < 12; j++)
+    printf("   contact node %u design (%.2f %+.2f %.2f) mean |F| %.0f N mass %.1f flags %d now z %.3f\n", idx[j], 2.26 - (S.rest[idx[j]].x + 90), S.rest[idx[j]].y, S.rest[idx[j]].z, perNode[idx[j]] / T, S.mass[idx[j]], S.flags[idx[j]], S.pos[idx[j]].z);
+}
+
+void testIntegrator() {
+  Bench b;
+  Sim& S = b.sim;
+  const Obj& o = S.objs[b.car.obj];
+  Controls c;
+  S.forces(kDt);
+  b.car.update(S, c, kDt);
+  std::vector<V3> v0 = S.vel;
+  std::vector<V3> f0 = S.force;
+  S.finish(kDt);
+  double worst = 0;
+  u32 wn = 0;
+  V3 sumF{}, sumDp{};
+  int bad = 0;
+  for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) {
+    const V3 dv = S.vel[i] - v0[i];
+    const V3 expect = S.force[i] * (kDt / S.mass[i]);
+    const double e = len(dv - expect);
+    sumF += S.force[i];
+    sumDp += dv * (S.mass[i] / kDt);
+    if (e > 1e-9) bad++;
+    if (e > worst) {
+      worst = e;
+      wn = i;
+    }
+  }
+  printf("== Integrator check: %d nodes differ, worst %.3g at node %u (mass %.2f invMass %.4f, 1/m %.4f, flags %d)\n  sum F (%.1f %.1f %.1f)  sum dp/dt (%.1f %.1f %.1f)\n", bad, worst, wn, S.mass[wn], S.invMass[wn], 1.0 / S.mass[wn], S.flags[wn], sumF.x, sumF.y, sumF.z, sumDp.x, sumDp.y, sumDp.z);
+  printf("  obj nodes start %u count %u, total nodes %zu, active %zu\n", o.nodeStart, o.nodeCount, S.pos.size(), S.active.size());
+  int nFixed = 0;
+  for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) nFixed += S.invMass[i] == 0 ? 1 : 0;
+  printf("  nodes with zero inverse mass: %d\n", nFixed);
+  for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) {
+    const double a = len(S.force[i]) / S.mass[i] * kDt;
+    if (a > 5.0) {
+      printf("   node %u mass %.2f design (%.2f %+.2f %.2f) now (%.2f %+.2f %.2f) |F| %.0f dv %.1f\n", i, S.mass[i], 2.26 - (S.rest[i].x + 90), S.rest[i].y, S.rest[i].z, S.pos[i].x, S.pos[i].y, S.pos[i].z, len(S.force[i]), a);
+      for (u32 bi = o.beamStart; bi < o.beamStart + o.beamCount; bi++) {
+        const Beam& B = S.beams[bi];
+        if ((B.a == i || B.b == i) && std::fabs(B.force) > 30000.0)
+          printf("      beam to %u k %.1e L0 %.3f now %.3f force %.0f\n", B.a == i ? B.b : B.a, B.k, B.L0, len(S.pos[B.b] - S.pos[B.a]), double(B.force));
+      }
+    }
+  }
+}
+
+void testGlass() {
+  Bench b;
+  CarMesh mesh;
+  mesh.load("assets/xantia.mesh");
+  mesh.bind(b.sim.rest, b.skin.groups, {-90, 0, 0});
+  printf("== Mesh strain at rest after settling ==\n");
+  constexpr int K = CarMesh::kK;
+  std::vector<V3> v(mesh.restPos.size() / 3);
+  for (const MeshPart& p : mesh.parts) {
+    if (!p.bound) continue;
+    for (u32 i = p.firstVert; i < p.firstVert + p.vertCount; i++) {
+      V3 q{};
+      for (int k = 0; k < K; k++) q += b.sim.pos[mesh.bindNode[size_t(i) * K + k]] * double(mesh.bindWeight[size_t(i) * K + k]);
+      v[i] = q;
+    }
+  }
+  for (const MeshPart& p : mesh.parts) {
+    if (!p.bound || (p.mat != MM_GLASS && p.name != "hood" && p.name != "gate_top" && p.name != "door_fl" && p.name != "roof")) continue;
+    double worst = 0;
+    int over = 0;
+    for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++) {
+      const u32 a = mesh.tris[t * 3], c = mesh.tris[t * 3 + 1], d = mesh.tris[t * 3 + 2];
+      const double r[3] = {len2(v[c] - v[a]) / std::max<double>(mesh.restEdge2[size_t(t) * 3], 1e-7), len2(v[d] - v[c]) / std::max<double>(mesh.restEdge2[size_t(t) * 3 + 1], 1e-7), len2(v[a] - v[d]) / std::max<double>(mesh.restEdge2[size_t(t) * 3 + 2], 1e-7)};
+      const double m = std::sqrt(std::max({r[0], r[1], r[2]}));
+      worst = std::max(worst, m);
+      over += m > 1.04;
+    }
+    printf("  %-12s group %-10s tris %5u  worst edge ratio %.3f  over 4%%: %d\n", p.name.c_str(), p.group.c_str(), p.triCount, worst, over);
+  }
+}
+
 void testDiag() {
+  testGlass();
+  return;
+  testImpulse();
+  testVibe();
+  return;
   testSpawn();
   Bench b;
   printf("  time series after settle (no input):\n");
@@ -476,9 +693,16 @@ void testPropRest() {
   // Regression: every prop, woken with nothing touching it, must simply stay standing.
   Bench b({-90, 0, 0}, 0, true);
   printf("== Props at rest, all awake ==\n");
-  u32 worst = 0;
-  const double lam = b.sim.maxAccelEstimate(&worst);
-  printf("  stability bound %.3g of %.3g, worst node mass %.2f\n", lam, 4.0 / (kDt * kDt), b.sim.mass[worst]);
+  double lam = 0;
+  u32 worstObj = 0;
+  for (u32 oi = 0; oi < b.sim.objs.size(); oi++) {
+    const double l = b.sim.maxEigenvalue(oi);
+    if (l > lam) {
+      lam = l;
+      worstObj = oi;
+    }
+  }
+  printf("  stability: largest eigenvalue %.3g of %.3g (object %u)\n", lam, 4.0 / (kDt * kDt), worstObj);
   for (size_t i = 1; i < b.sim.objs.size(); i++) b.sim.wake(u16(i));
   const u32 before = b.sim.brokenBeams;
   auto t0 = std::chrono::steady_clock::now();
@@ -497,6 +721,7 @@ void testPropRest() {
     if (br > 0 || vo > 0.5)
       printf("   obj %zu nodes %u beams %u broken %d vmax %.1f at (%.0f %.0f) r=%.0f max rest-depth below terrain %.3f\n", oi, O.nodeCount, O.beamCount, br, vo, b.sim.rest[O.nodeStart].x, b.sim.rest[O.nodeStart].y, std::hypot(b.sim.rest[O.nodeStart].x, b.sim.rest[O.nodeStart].y), under);
   }
+  printf("  velocity guard activations %llu\n", (unsigned long long)b.sim.clampedSteps);
   printf("  after 1 s: broken %u  vmax %.3f m/s  still awake %zu of %zu  (%.1f s of wall time)\n", b.sim.brokenBeams - before, vm, b.sim.active.size(), b.sim.objs.size(), ms);
 }
 

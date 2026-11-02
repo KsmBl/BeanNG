@@ -5,7 +5,6 @@
 // around half a section (mirrored). Everything is built in "design" coordinates, with x measured
 // from the nose rearwards, then mapped into the world with +X pointing forwards.
 #include <algorithm>
-#include <map>
 #include <set>
 #include "vehicle.h"
 
@@ -110,11 +109,18 @@ const Mat mCarrier{3.2e6, 420, 90e3, 110e3, 4e5, 0.20, 0};
 const Mat mTie{3.0e6, 360, 26e3, 34e3, 1e5, 0.12, 0};
 const Mat mBlock{6e6, 900, 240e3, 240e3, 6e5, 0.0, 0};
 const Mat mMount{4.5e5, 500, 16e3, 18e3, 3e4, 0.45, 0};
+const Mat mCase{5.0e6, 800, 160e3, 160e3, 5e5, 0.0, 0};
+const Mat mBellBolts{5.0e6, 800, 0, 0, 0, 0, 120e3};
+const Mat mRadCore{0.5e6, 90, 6e3, 8e3, 1e4, 0.20, 0};
+const Mat mRadMount{1.0e6, 160, 0, 0, 0, 0, 14e3};
+const Mat mTank{1.2e6, 240, 18e3, 22e3, 3e4, 0.30, 0};
+const Mat mFlange{1.5e6, 200, 0, 0, 0, 0, 0};
+const Mat mBattery{0.8e6, 150, 0, 0, 0, 0, 0};
 const Mat mDoor{0.8e6, 150, 5e3, 11e3, 3e4, 0.50, 0};
 const Mat mDoorBar{1.0e6, 180, 28e3, 50e3, 1e5, 0.40, 0};
 const Mat mHinge{1.2e6, 220, 0, 0, 0, 0, 17e3};
 const Mat mLatch{0.8e6, 160, 0, 0, 0, 0, 9e3};
-const Mat mPanel{0.4e6, 90, 1.8e3, 5e3, 1e4, 0.60, 0};
+const Mat mPanel{0.7e6, 110, 1.8e3, 5e3, 1e4, 0.60, 0};
 const Mat mPanelHinge{0.8e6, 140, 0, 0, 0, 0, 9e3};
 const Mat mPanelLatch{0.5e6, 100, 0, 0, 0, 0, 5e3};
 const Mat mClip{0.2e6, 60, 0, 0, 0, 0, 2.2e3};
@@ -128,7 +134,7 @@ struct Builder {
   int body[NS][NR][2];
   int hood[NS][NR][2];
   int lid[NS][NR][2];
-  struct Door { int s0, s1; int n[4][4]; };  // n[station-s0][row-3]
+  struct Door { int s0, s1; int n[4][4]; std::vector<u32> inner; };  // n[station-s0][row-3]
   Door doors[2][2];  // [door][side]
   std::vector<u32> bodyNodes;
 
@@ -178,7 +184,7 @@ struct Builder {
 };
 }  // namespace
 
-Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
+Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
   Vehicle veh;
   veh.obj = sim.beginObj(OBJ_CAR, true);
   Builder B{sim, spawn, std::cos(yaw), std::sin(yaw), {}, {}, {}, {}, {}, {}};
@@ -320,6 +326,7 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
       V3 p = (design(s0 + i, 3) + design(s0 + i, 4)) * 0.5;
       p.y -= 0.11;
       const int in = int(sim.addNode(B.world(p, side), 1.6, NF_COLLIDE, 0.45f));
+      D.inner.push_back(u32(in));
       B.ibeam(in, D.n[i][0], mDoor);
       B.ibeam(in, D.n[i][1], mDoor);
       B.ibeam(in, D.n[i][2], mDoor);
@@ -396,6 +403,37 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
   };
   panelLattice(B.hood);
   panelLattice(B.lid);
+  std::vector<u32> hoodInner, lidInner;
+  auto innerFrame = [&](int (&P)[NS][NR][2], std::vector<u32>& out, std::initializer_list<int> stations, int rowOuter, double depth, double mass) {
+    for (int s : stations)
+      for (int side = 0; side < 2; side++) {
+        V3 d = design(s, rowOuter);
+        d.y *= 0.72;
+        d.z -= depth;
+        const u32 in = sim.addNode(B.world(d, side), mass, NF_COLLIDE, 0.45f);
+        out.push_back(in);
+        for (int ss = s - 1; ss <= s + 1; ss++)
+          for (int r = rowOuter; r < NR; r++) B.ibeam(int(in), P[std::clamp(ss, 0, NS - 1)][r][side], mPanel);
+      }
+  };
+  innerFrame(B.hood, hoodInner, {3, 5, 7}, 7, 0.07, 1.0);
+  innerFrame(B.lid, lidInner, {15, 17, 19}, 7, 0.07, 1.2);
+  // The tailgate is as wide as the roof rails, far wider than its centre rows: give it an outer edge.
+  for (int s = 14; s <= 20; s++)
+    for (int side = 0; side < 2; side++) {
+      V3 d = design(s, 6);
+      d.y -= 0.03;
+      const u32 e = sim.addNode(B.world(d, side), 0.9, NF_COLLIDE, 0.45f);
+      lidInner.push_back(e);
+      B.ibeam(int(e), B.lid[s][7][side], mPanel);
+      B.ibeam(int(e), B.lid[s][8][side], mPanel);
+      if (s > 14) {
+        B.ibeam(int(e), B.lid[s - 1][7][side], mPanel);
+        B.beam(e, lidInner[lidInner.size() - 3], mPanel);  // same side, previous station
+      }
+      if (s < 20) B.ibeam(int(e), B.lid[s + 1][7][side], mPanel);
+      B.ibeam(int(e), B.body[s][6][side], mClip);
+    }
   for (int side = 0; side < 2; side++) {
     // Hood: hinges at the cowl, latch at the front, clips along the fenders.
     const int hr = B.hood[7][7][side];
@@ -431,22 +469,17 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
     }
   }
 
-  // ---- Engine and gearbox: a heavy, nearly rigid block on breakable mounts.
-  {
-    const double x0 = 0.47, x1 = 0.93, y0 = -0.30, y1 = 0.30, z0 = 0.30, z1 = 0.68;
+  // ---- Engine and gearbox: two heavy, nearly rigid blocks bolted together, on breakable mounts.
+  auto rigidBlock = [&](double x0, double x1, double y0, double y1, double z0, double z1, double mass, std::vector<u32>& out, const Mat& m, std::vector<u32>* beamList) {
     u32 e[8];
     for (int i = 0; i < 8; i++) {
       const V3 d{(i & 1) ? x1 : x0, ((i & 2) ? y1 : y0), (i & 4) ? z1 : z0};
-      const double y = d.y;
-      e[i] = sim.addNode(B.world({d.x, y, d.z}, 0), 215.0 / 8.0, NF_COLLIDE, 0.4f);
-      veh.engineNodes.push_back(e[i]);
+      e[i] = sim.addNode(B.world(d, 0), mass / 8.0, NF_COLLIDE, 0.4f);
+      out.push_back(e[i]);
     }
     for (int i = 0; i < 8; i++)
-      for (int j = i + 1; j < 8; j++) B.beam(e[i], e[j], mBlock, &veh.engineBlockBeams);
-    for (int i = 0; i < 8; i++) B.anchor(e[i], 2, mMount, &veh.engineMountBeams);
-    // Block faces are hard: rails and the firewall stack up against the engine.
-    static const int faces[6][4] = {{0, 2, 3, 1}, {4, 5, 7, 6}, {0, 1, 5, 4},
-                                    {2, 6, 7, 3}, {0, 4, 6, 2}, {1, 3, 7, 5}};
+      for (int j = i + 1; j < 8; j++) B.beam(e[i], e[j], m, beamList);
+    static const int faces[6][4] = {{0, 2, 3, 1}, {4, 5, 7, 6}, {0, 1, 5, 4}, {2, 6, 7, 3}, {0, 4, 6, 2}, {1, 3, 7, 5}};
     V3 c{};
     for (u32 n : e) c += sim.pos[n];
     c = c * 0.125;
@@ -455,10 +488,39 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
       B.orientedTri(e[f[0]], e[f[1]], e[f[2]], fc - c, TF_HARD | TF_NOVIS);
       B.orientedTri(e[f[0]], e[f[2]], e[f[3]], fc - c, TF_HARD | TF_NOVIS);
     }
-  }
+  };
+  rigidBlock(0.52, 0.88, -0.33, 0.15, 0.24, 0.72, 165.0, veh.engineNodes, mBlock, &veh.engineBlockBeams);
+  rigidBlock(0.55, 0.86, 0.19, 0.46, 0.22, 0.56, 45.0, veh.gearboxNodes, mCase, &veh.gearboxBeams);
+  // Bell housing bolts: the two units only part company in a very heavy impact.
+  for (int i : {2, 3, 6, 7})
+    for (int j : {0, 1, 4, 5}) B.beam(veh.engineNodes[size_t(i)], veh.gearboxNodes[size_t(j)], mBellBolts, &veh.bellBeams);
+  for (u32 n : veh.engineNodes) B.anchor(n, 2, mMount, &veh.engineMountBeams);
+  for (u32 n : veh.gearboxNodes) B.anchor(n, 1, mMount, &veh.engineMountBeams);
+
+  // Halfshaft output flanges on the differential.
+  const u32 outL = sim.addNode(B.world({0.78, 0.46, 0.30}, 0), 4.0, 0, 0.4f);
+  const u32 outR = sim.addNode(B.world({0.78, -0.30, 0.30}, 0), 4.0, 0, 0.4f);
+  for (int j : {1, 3, 5, 7}) B.beam(outL, veh.gearboxNodes[size_t(j)], mFlange);
+  for (int j : {1, 0, 5, 3}) B.beam(outR, veh.engineNodes[size_t(j)], mFlange);
+  veh.shaftNode[0] = outL;
+  veh.shaftNode[1] = outR;
+
+  // Radiator pack: light and fragile, right behind the bumper.
+  std::vector<u32> radNodes;
+  rigidBlock(0.27, 0.34, -0.55, 0.55, 0.26, 0.68, 14.0, radNodes, mRadCore, &veh.radiatorBeams);
+  for (u32 n : radNodes) B.anchor(n, 3, mRadMount);
+  // Battery on the left of the bay, fuel tank under the rear seat.
+  std::vector<u32> batNodes, tankNodes;
+  rigidBlock(0.95, 1.13, 0.37, 0.63, 0.49, 0.67, 18.0, batNodes, mBattery, nullptr);
+  for (u32 n : batNodes) B.anchor(n, 2, mRadMount);
+  rigidBlock(2.95, 3.55, -0.56, 0.56, 0.20, 0.38, 60.0, tankNodes, mTank, &veh.tankBeams);
+  for (u32 n : tankNodes) B.anchor(n, 3, mRadMount);
 
   // ---- Suspension and wheels.
   struct Sub { u32 uf = 0, ur = 0, rack = 0, po = 0, pi = 0; } sub[2];
+  auto addLink = [&](u32 a, u32 b, float r, u8 mat, u8 kind = 0) {
+    if (rig) rig->links.push_back({a, b, r, mat, kind});
+  };
   auto makeWheel = [&](bool front, int side) {
     Wheel w;
     w.front = front;
@@ -533,6 +595,14 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
       B.ibeam(rack, B.body[8][1][side], mAnchor);
       B.ibeam(rack, B.body[8][2][side], mAnchor);
       veh.tieBeam[side] = sim.addBeam(ks, rack, mTie);
+      addLink(ks, rack, 0.012f, MM_METAL);
+      addLink(kl, u32(B.body[4][1][side]), 0.016f, MM_DARK);
+      addLink(kl, u32(B.body[6][1][side]), 0.016f, MM_DARK);
+      addLink(ku, uf, 0.011f, MM_DARK);
+      addLink(ku, ur, 0.011f, MM_DARK);
+      addLink(w.axIn, veh.shaftNode[side], 0.019f, MM_METAL);
+      addLink(kl, w.axIn, 0.03f, MM_ALU);
+      addLink(ku, w.axIn, 0.03f, MM_ALU);
 
       // Strut tower, part of the inner wing.
       const u32 tower = node(0.92, 0.60, 0.74, 4.0, 0);
@@ -542,6 +612,7 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
       // Inner wing: the load path from the strut top into the rails and the firewall.
       for (auto [ss, rr] : {std::pair{4, 2}, {5, 2}, {6, 2}, {7, 2}, {8, 2}, {8, 3}, {8, 4}, {8, 5}, {3, 2}})
         B.ibeam(int(tower), B.body[ss][rr][side], mInnerWing);
+      addLink(tower, kl, 0.022f, MM_METAL, 1);
       st.top = tower;
       st.low = kl;
       st.A = 3.85e-4;
@@ -575,6 +646,11 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
       B.anchor(tower, 4, mAnchor, &veh.hydraulicBeams);
       for (auto [ss, rr] : {std::pair{13, 2}, {13, 3}, {13, 5}, {14, 2}, {16, 2}, {18, 2}, {14, 6}, {18, 6}, {16, 1}})
         B.ibeam(int(tower), B.body[ss][rr][side], mInnerWing);
+      addLink(tower, kb, 0.02f, MM_METAL, 1);
+      addLink(w.axIn, po, 0.03f, MM_DARK);
+      addLink(w.axIn, pi, 0.022f, MM_DARK);
+      addLink(kb, po, 0.024f, MM_DARK);
+      addLink(kt, po, 0.016f, MM_DARK);
       st.top = tower;
       st.low = kb;
       st.A = 2.75e-4;
@@ -615,6 +691,9 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
     B.ibeam(pl1, pl2, mSubframe);
     B.ibeam(pr1, pr2, mSubframe);
     B.beam(rl, rr, mSubframe);
+    addLink(rl, rr, 0.02f, MM_DARK);
+    addLink(u32(pl1), u32(pr1), 0.028f, MM_DARK);
+    addLink(u32(pl2), u32(pr2), 0.028f, MM_DARK);
     for (int a : {pl1, pl2, pr1, pr2}) {
       B.ibeam(int(rl), a, mSubframe);
       B.ibeam(int(rr), a, mSubframe);
@@ -632,6 +711,7 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
     }
     // Rear: both trailing arm bearings on one crossbeam, tied to the rear floor.
     B.beam(sub[0].pi, sub[1].pi, mSubframe);
+    addLink(sub[0].po, sub[1].po, 0.045f, MM_DARK);
     B.beam(sub[0].po, sub[1].po, mSubframe);
     B.beam(sub[0].po, sub[1].pi, mSubframe);
     B.beam(sub[0].pi, sub[1].po, mSubframe);
@@ -648,21 +728,10 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
   veh.refRearL = B.body[13][2][0];
   veh.refRearR = B.body[13][2][1];
 
-  // Radiator: the support structure right behind the bumper.
-  for (int side = 0; side < 2; side++) {
-    for (int r = 2; r <= 5; r++) {
-      const int a = B.body[1][r][side], b = B.body[2][r][side];
-      if (a >= 0 && b >= 0) {
-        const u32 id = sim.addBeam(u32(a), u32(b), mFender);
-        veh.radiatorBeams.push_back(id);
-      }
-    }
-  }
-
   // ---- Mass tuning: solve a linear mass ramp over the shell for total mass and axle split.
   sim.endObj();
   {
-    constexpr double kTarget = 1500.0;
+    constexpr double kTarget = 1530.0;  // listed kerb weights are 1526 to 1543 kg
     const double frontLoad = 0.58;
     const V3 axisX = B.worldDir(-1, 0);  // towards increasing design x
     const V3 ox = B.world({0, 0, 0}, 0);
@@ -721,61 +790,21 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
         B.orientedTri(u32(a), u32(c), u32(d), upDir, TF_HARD | TF_NOVIS);
       }
 
-  // ---- Skin: quads for rendering, the same quads split into triangles for collision.
+  // ---- Outer collision surface. The visible mesh is far finer; collisions use the structure.
   auto nodeFor = [&](int s, int r, int side) -> int {
     if (B.hood[s][r][side] >= 0) return B.hood[s][r][side];
     if (B.lid[s][r][side] >= 0) return B.lid[s][r][side];
     return B.body[s][r][side];
   };
-
-  auto addQuad = [&](const int n[4], u8 mat, u8 pane, int s, int r, int side, bool smooth) {
+  auto addQuad = [&](const int n[4], int s, bool cap) {
     for (int i = 0; i < 4; i++)
       if (n[i] < 0) return;
-    // Outward normal: away from the car's axis.
     const V3 c = (sim.pos[n[0]] + sim.pos[n[1]] + sim.pos[n[2]] + sim.pos[n[3]]) * 0.25;
     const V3 axisPt = B.world({lerpd(X[s], X[std::min(s + 1, NS - 1)], 0.5), 0.0, 0.70}, 0);
     V3 out = c - axisPt;
-    if (s == 0 && !smooth) out = toNose;
-    if (s == NS - 1 && !smooth) out = -toNose;
+    if (cap) out = s == 0 ? toNose : -toNose;
     B.orientedTri(u32(n[0]), u32(n[1]), u32(n[2]), out, TF_NOVIS, 0.5f);
     B.orientedTri(u32(n[0]), u32(n[2]), u32(n[3]), out, TF_NOVIS, 0.5f);
-    if (!skin) return;
-
-    SkinQuad q{};
-    for (int i = 0; i < 4; i++) {
-      q.n[i] = u32(n[i]);
-      q.L[i] = len(sim.pos[n[(i + 1) % 4]] - sim.pos[n[i]]);
-    }
-    q.mat = mat;
-    q.pane = pane;
-    q.flip = dot(cross(sim.pos[n[1]] - sim.pos[n[0]], sim.pos[n[3]] - sim.pos[n[0]]), out) < 0;
-    q.firstVert = u32(skin->verts.size());
-
-    const V3 p0 = sim.pos[n[0]], p1 = sim.pos[n[1]], p2 = sim.pos[n[2]], p3 = sim.pos[n[3]];
-    constexpr int kS = CarSkin::kSub;
-    for (int j = 0; j <= kS; j++)
-      for (int i = 0; i <= kS; i++) {
-        const double u = double(i) / kS, v = double(j) / kS;
-        SkinVert sv{};
-        sv.u = float(u);
-        sv.v = float(v);
-        if (smooth) {
-          const V3 q0 = lerpv(lerpv(p0, p1, u), lerpv(p3, p2, u), v);
-          V3 d = smoothSurface(s + u, r + v);
-          const V3 target = B.world(d, side);
-          const V3 du = lerpv(p1 - p0, p2 - p3, v);
-          const V3 dv = lerpv(p3 - p0, p2 - p1, u);
-          const V3 nrm = norm(cross(du, dv));
-          const V3 e1 = norm(du);
-          const V3 e2 = cross(nrm, e1);
-          const V3 off = target - q0;
-          sv.ox = float(dot(off, e1));
-          sv.oy = float(dot(off, e2));
-          sv.on = float(dot(off, nrm));
-        }
-        skin->verts.push_back(sv);
-      }
-    skin->quads.push_back(q);
   };
 
   auto doorOf = [&](int s) { return s >= 11 ? 1 : 0; };
@@ -799,45 +828,63 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarSkin* skin) {
           n[3] = nodeFor(s, r + 1, side);
         }
 
-        u8 mat = MAT_PAINT, pane = 0;
-        if (r <= 1) mat = MAT_LINER;
-        if (r == 2) mat = archStation(s) && archStation(s + 1) ? MAT_LINER : MAT_BLACK;
-        if (r == 3 && s <= 1) mat = MAT_BLACK;
-        if (s == 0 && r >= 6) mat = MAT_GRILLE;
-        if (s <= 1 && r == 5) mat = MAT_HEADLIGHT;
-        if (s >= 19 && s <= 20 && r == 5) mat = MAT_TAILLIGHT;
-        if (s >= 8 && s <= 9 && r >= 6) {  // windscreen
-          mat = MAT_GLASS;
-          pane = 1;
-        }
-        if (s >= 13 && s <= 16 && r >= 6) {  // rear window
-          mat = MAT_GLASS;
-          pane = 2;
-        }
-        if (doorSpan && r == 5) {  // door glass
-          mat = MAT_GLASS;
-          pane = u8(3 + d * 2 + side);
-        }
-        if (s == 13 && r == 5) {  // rear quarter glass
-          mat = MAT_GLASS;
-          pane = u8(7 + side);
-        }
-        addQuad(n, mat, pane, s, r, side, true);
+        addQuad(n, s, false);
       }
     }
   }
 
   // End caps closing the nose and the tail.
-  for (int s : {0, NS - 1}) {
+  for (int s : {0, NS - 1})
     for (int r = 2; r <= 6; r++) {
-      int n[4] = {nodeFor(s, r, 0), nodeFor(s, r + 1, 0), nodeFor(s, r + 1, 1), nodeFor(s, r, 1)};
-      u8 mat = MAT_PAINT;
-      if (r <= (s == 0 ? 3 : 2)) mat = MAT_BLACK;
-      if (s == 0 && r >= 4) mat = MAT_GRILLE;
-      if (s != 0 && r == 5) mat = MAT_TAILLIGHT;
-      addQuad(n, mat, 0, s, r, 0, false);
+      const int n[4] = {nodeFor(s, r, 0), nodeFor(s, r + 1, 0), nodeFor(s, r + 1, 1), nodeFor(s, r, 1)};
+      addQuad(n, s, true);
     }
+
+  // ---- Node groups the visible mesh binds to.
+  if (rig) {
+    auto group = [&](const char* name, std::vector<u32> nodes) { rig->groups.push_back({name, std::move(nodes)}); };
+    group("body", shell);
+    auto collect = [&](int (&P)[NS][NR][2], std::vector<u32> extra) {
+      std::set<u32> u(extra.begin(), extra.end());
+      for (auto& a : P) for (auto& b : a) for (int v : b) if (v >= 0) u.insert(u32(v));
+      return std::vector<u32>(u.begin(), u.end());
+    };
+    group("hood", collect(B.hood, hoodInner));
+    group("tailgate", collect(B.lid, lidInner));
+    auto doorNodes = [&](int d, int side) {
+      std::vector<u32> v;
+      const auto& D = B.doors[d][side];
+      for (int i = 0; i <= D.s1 - D.s0; i++)
+        for (int k = 0; k < 4; k++) v.push_back(u32(D.n[i][k]));
+      v.insert(v.end(), D.inner.begin(), D.inner.end());
+      return v;
+    };
+    group("door_fl", doorNodes(0, 0));
+    group("door_fr", doorNodes(0, 1));
+    group("door_rl", doorNodes(1, 0));
+    group("door_rr", doorNodes(1, 1));
+    std::vector<u32> bf, br;
+    for (int s = 0; s <= 3; s++)
+      for (int r = 2; r <= 5; r++)
+        for (int side = 0; side < 2; side++)
+          if (B.body[s][r][side] >= 0) bf.push_back(u32(B.body[s][r][side]));
+    for (int s = 18; s < NS; s++)
+      for (int r = 2; r <= 5; r++)
+        for (int side = 0; side < 2; side++)
+          if (B.body[s][r][side] >= 0) br.push_back(u32(B.body[s][r][side]));
+    std::vector<u32> ws;  // the aperture around the windscreen
+    for (int s = 8; s <= 11; s++)
+      for (int r = 5; r <= 8; r++)
+        for (int side = 0; side < (r == 8 ? 1 : 2); side++)
+          if (B.body[s][r][side] >= 0) ws.push_back(u32(B.body[s][r][side]));
+    group("windscreen", ws);
+    group("bumper_f", bf);
+    group("bumper_r", br);
+    group("engine", veh.engineNodes);
+    group("gearbox", veh.gearboxNodes);
+    group("radiator", radNodes);
+    group("battery", batNodes);
+    group("tank", tankNodes);
   }
-  if (skin) skin->paneCount = 9;
   return veh;
 }

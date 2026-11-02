@@ -17,7 +17,7 @@ find_package(Threads REQUIRED)
 
 # Physics core: no graphics dependency, so the headless test bench links only this.
 add_library(core STATIC
-  src/sim.cpp src/world.cpp src/vehicle.cpp src/xantia.cpp src/props.cpp)
+  src/sim.cpp src/world.cpp src/vehicle.cpp src/xantia.cpp src/props.cpp src/carmesh.cpp)
 target_link_libraries(core PUBLIC Threads::Threads)
 
 add_executable(beanng-test src/tests.cpp)

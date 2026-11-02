@@ -116,6 +116,7 @@ class Sim {
   u32 brokenBeams = 0;
   u64 stepCount = 0;
   size_t statTriPairs = 0, statBlockPairs = 0;
+  u64 clampedSteps = 0;  // times the per-step velocity guard had to act: should stay at zero
 
   // Building.
   u16 beginObj(ObjKind kind, bool alwaysAwake);
@@ -131,7 +132,9 @@ class Sim {
   void finish(double dt);
 
   void wake(u16 obj);
-  double maxAccelEstimate(u32* worstNode = nullptr) const;  // Gershgorin stability bound
+  // Largest eigenvalue of M^-1 K for one object at its current shape, by power iteration. A
+  // symplectic Euler step is stable only while this stays below (2/dt)^2.
+  double maxEigenvalue(u32 obj, u32* worstNode = nullptr) const;
 
  private:
   struct Pair { u32 node, prim; };

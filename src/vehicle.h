@@ -5,6 +5,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include "carmesh.h"
 #include "sim.h"
 #include "world.h"
 
@@ -81,11 +82,12 @@ class Vehicle {
   u16 obj = 0;
   std::vector<Wheel> wheels;
   HydroAxle axle[2];  // 0 front, 1 rear
-  std::vector<u32> engineNodes;
+  std::vector<u32> engineNodes, gearboxNodes;
   u32 refFrontL = 0, refFrontR = 0, refRearL = 0, refRearR = 0;  // body frame reference
   u32 tieBeam[2] = {};
   double steerTravel = 0.066;  // rack travel at full lock [m]
-  std::vector<u32> radiatorBeams, engineMountBeams, hydraulicBeams, engineBlockBeams;
+  std::vector<u32> radiatorBeams, engineMountBeams, hydraulicBeams, engineBlockBeams, gearboxBeams, bellBeams, tankBeams;
+  u32 shaftNode[2] = {};  // halfshaft flanges on the differential, left and right
   double dragArea = 0.63;      // Cd * A, Xantia ~0.30 * 2.1 m^2
   double totalMass = 0;
 
@@ -126,9 +128,10 @@ class Vehicle {
   double rpm() const { return engineOmega * 60.0 / (2.0 * PI); }
 
  private:
-  V3 prevV_;
+  V3 prevV_, prevFwd_{1, 0, 0};
+  double yawRate_ = 0;
   double prevThrottle_ = 0, prevSteer_ = 0;
-  double ramCmd_ = 0;
+  double ramCmd_ = 0, ramTrim_ = 0;
   double hbAct_ = 0;
   double rackPrev_ = 0;
   double stuckTime_ = 0;
@@ -142,35 +145,22 @@ class Vehicle {
   void note(const char* msg);
 };
 
-// Output of the Xantia builder for rendering the deforming skin.
-enum SkinMat : u8 {
-  MAT_PAINT, MAT_GLASS, MAT_BLACK, MAT_LINER, MAT_HEADLIGHT, MAT_TAILLIGHT, MAT_GRILLE, MAT_PLATE,
-  MAT_CHROME
+// What the builder hands to the renderer: node groups the mesh binds to, and running gear drawn as
+// rods between nodes, so that arms, shafts and struts visibly follow the suspension.
+struct VisLink {
+  u32 a, b;
+  float radius;
+  u8 mat;        // MeshMat
+  u8 kind;       // 0 solid rod, 1 strut (thin rod near a, thick cylinder near b)
 };
 
-struct SkinQuad {
-  u32 n[4];       // corner nodes: (s,r), (s+1,r), (s+1,r+1), (s,r+1)
-  double L[4];    // rest lengths of the 4 edges, for tear detection
-  u32 firstVert;  // index of the first subdivided vertex
-  u8 mat;
-  u8 pane;        // nonzero: glass pane id
-  bool flip;      // grid winding faces inwards here (mirrored half of the car)
-};
-
-struct SkinVert {
-  float u, v;
-  float ox, oy, on;  // smooth-surface offset in the deforming quad's local frame
-};
-
-struct CarSkin {
-  std::vector<SkinQuad> quads;
-  std::vector<SkinVert> verts;  // (kSub+1)^2 per quad
-  static constexpr int kSub = 4;
-  int paneCount = 0;
+struct CarRig {
+  std::vector<NodeGroup> groups;
+  std::vector<VisLink> links;
 };
 
 // Spawns a Citroen Xantia Activa into the sim at the given position and yaw.
-Vehicle buildXantia(Sim& sim, V3 pos, double yaw, CarSkin* skin);
+Vehicle buildXantia(Sim& sim, V3 pos, double yaw, CarRig* rig);
 
 // Runs the car for a moment so it rests at its equilibrium ride height.
 void settleVehicle(Sim& sim, Vehicle& v, double seconds);

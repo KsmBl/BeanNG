@@ -1,2 +1,4 @@
 build/
 *.png
+assets/*.mesh
+__pycache__/

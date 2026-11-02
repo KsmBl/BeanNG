@@ -178,11 +178,16 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
       // Camber thrust.
       Fy += -0.8 * Fz * dot(a, n);
 
-      // Viscous bristle damping, which only matters near standstill.
+      // Viscous bristle damping, which only matters near standstill. It acts on the axle, not at
+      // the patch: through the lever of the hub a patch force reaches the hub nodes amplified, and
+      // a damper applied there would exceed the explicit stability limit and ring at 1 kHz.
       const double lowV = clampd(1.0 - std::hypot(Vx, Vy) / 2.5, 0, 1);
       const double cLow = 2600.0 * clampd(Fz / kFz0, 0, 1.5) * lowV;
+      const double VyAxle = dot(vC, l);
       Fx += -cLow * Vsx;
-      Fy += -cLow * Vy;
+      const V3 Fdamp = l * (-cLow * VyAxle * 0.5);
+      sim.force[w.axIn] += Fdamp;
+      sim.force[w.axOut] += Fdamp;
 
       w.Fx = Fx;
       w.Fy = Fy;
@@ -315,14 +320,26 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
   const double rollErr = 0.5 * (dF + dR);
   const bool activaLive = activaOn && accumulator > 90e5 && !dmg.hydraulics;
   if (activaLive) {
-    const double dead = 0.0015;
+    // Feed-forward from lateral acceleration provides nearly all of the correction, because it
+    // cannot oscillate with the body. The slow integral part trims what remains. A fast integral
+    // alone would add 90 degrees of phase lag right at the roll resonance and shake the car.
+    constexpr double kRollArm = 0.40;  // CoG height above the roll axis [m]
+    const double barMoment = (axle[0].kBar * 1.0 + axle[1].kBar * 1.25) * 1.49;
+    // Lateral acceleration of the car's path: speed times yaw rate. Measuring acceleration at the
+    // centre of gravity instead would also see the body's own sway and feed the roll back into
+    // the controller.
+    const double ff = -totalMass * kRollArm * speed * yawRate_ / barMoment;
+    const double dead = 0.002;
     const double e = std::fabs(rollErr) < dead ? 0.0 : rollErr - std::copysign(dead, rollErr);
-    const double rate = clampd(-14.0 * e, -0.22, 0.22);
-    ramCmd_ = clampd(ramCmd_ + rate * dt, -0.14, 0.14);
+    ramTrim_ = clampd(ramTrim_ - 0.9 * e * dt, -0.05, 0.05);
+    const double target = clampd(ff + ramTrim_, -0.14, 0.14);
+    const double rate = clampd((target - ramCmd_) * 25.0, -0.25, 0.25);
+    ramCmd_ += rate * dt;
     accumulator -= std::fabs(rate) * 2.5e5 * dt;
   } else {
     // Rams bleed down: the bars stay passive and the car rolls like a normal one.
     ramCmd_ += (0.0 - ramCmd_) * clampd(dt * 3.0, 0, 1);
+    ramTrim_ = 0;
   }
   axle[0].ram = ramCmd_;
   axle[1].ram = ramCmd_ * 1.25;  // with the bar rates this splits the roll moment ~57/43
@@ -588,6 +605,10 @@ void Vehicle::updateBodyFrame(Sim& sim, double dt) {
   lonAcc += (dot(acc, fwd) - lonAcc) * alpha;
   const double aNow = len(acc) / 9.81;
   peakG = std::max(aNow > 200 ? peakG : aNow, peakG * (1.0 - period * 0.5));
+
+  const double yawNow = dot(cross(prevFwd_, fwd), up) / period;
+  prevFwd_ = fwd;
+  yawRate_ += (clampd(yawNow, -5.0, 5.0) - yawRate_) * clampd(period * 15.0, 0, 1);
 
   rollAngle = std::atan2(left.z, up.z);
   pitchAngle = std::atan2(fwd.z, up.z);

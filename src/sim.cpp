@@ -1,5 +1,6 @@
 #include "sim.h"
 #include <algorithm>
+#include <random>
 #include "world.h"
 
 namespace {
@@ -92,6 +93,21 @@ void Sim::addBlock(const u32 n[8]) {
 }
 
 void Sim::finalize() {
+  // Explicit dampers have a stability limit of their own: dt * sum(c) / m must stay well below 1 at
+  // every node. Many stiff beams meeting at a light node would otherwise turn their dampers into a
+  // source of energy. Scaling here keeps that true for anything anyone ever builds.
+  constexpr double kPhysDt = 1.0 / 2000.0;
+  constexpr double kMaxDampRatio = 0.35;
+  std::vector<double> sumC(pos.size(), 0.0);
+  for (const Beam& b : beams) {
+    sumC[b.a] += b.c;
+    sumC[b.b] += b.c;
+  }
+  std::vector<double> scale(pos.size(), 1.0);
+  for (size_t i = 0; i < pos.size(); i++)
+    if (invMass[i] > 0 && sumC[i] > 0) scale[i] = std::min(1.0, kMaxDampRatio * mass[i] / (kPhysDt * sumC[i]));
+  for (Beam& b : beams) b.c *= std::min(scale[b.a], scale[b.b]);
+
   active.clear();
   for (size_t i = 0; i < objs.size(); i++)
     if (objs[i].awake) active.push_back(u32(i));
@@ -118,23 +134,43 @@ void Sim::wake(u16 id) {
   active.push_back(id);
 }
 
-double Sim::maxAccelEstimate(u32* worstNode) const {
-  // Upper bound on the largest eigenvalue of M^-1 K. A symplectic Euler step is stable while
-  // lambda < (2/dt)^2. Summing |k| per node overestimates by roughly the 3D projection factor.
-  std::vector<double> sum(pos.size(), 0.0);
-  for (const Beam& b : beams) {
-    sum[b.a] += b.k;
-    sum[b.b] += b.k;
-  }
-  double best = 0;
-  for (size_t i = 0; i < pos.size(); i++) {
-    double l = sum[i] * invMass[i];
-    if (l > best) {
-      best = l;
-      if (worstNode) *worstNode = u32(i);
+double Sim::maxEigenvalue(u32 obj, u32* worstNode) const {
+  const Obj& o = objs[obj];
+  const u32 n = o.nodeCount;
+  std::vector<V3> x(n), y(n);
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<double> uni(-1, 1);
+  for (u32 i = 0; i < n; i++) x[i] = {uni(rng), uni(rng), uni(rng)};
+  double lambda = 0;
+  for (int it = 0; it < 400; it++) {
+    std::fill(y.begin(), y.end(), V3{});
+    for (u32 bi = o.beamStart; bi < o.beamStart + o.beamCount; bi++) {
+      const Beam& b = beams[bi];
+      if (b.flags & BF_BROKEN) continue;
+      const V3 d = norm(pos[b.b] - pos[b.a]);
+      const u32 ia = b.a - o.nodeStart, ib = b.b - o.nodeStart;
+      const double ext = dot(x[ib] - x[ia], d) * b.k;
+      y[ia] += d * ext;
+      y[ib] -= d * ext;
     }
+    double norm2 = 0;
+    for (u32 i = 0; i < n; i++) {
+      y[i] = -y[i] * invMass[o.nodeStart + i];
+      norm2 += len2(y[i]);
+    }
+    lambda = std::sqrt(norm2);
+    if (lambda < 1e-9) return 0;
+    for (u32 i = 0; i < n; i++) x[i] = y[i] / lambda;
   }
-  return best;
+  if (worstNode) {
+    double best = 0;
+    for (u32 i = 0; i < n; i++)
+      if (len2(x[i]) > best) {
+        best = len2(x[i]);
+        *worstNode = o.nodeStart + i;
+      }
+  }
+  return lambda;
 }
 
 void Sim::forces(double dt) {
@@ -565,7 +601,10 @@ void Sim::integrate(double dt) {
       // Last line of defence: no legitimate force changes a node's speed this much in 0.5 ms. It
       // keeps one numerically bad contact from running away and taking the whole car with it.
       const double dv2 = len2(dv);
-      if (dv2 > kMaxDv * kMaxDv) dv = dv * (kMaxDv / std::sqrt(dv2));
+      if (dv2 > kMaxDv * kMaxDv) {
+        dv = dv * (kMaxDv / std::sqrt(dv2));
+        clampedSteps++;
+      }
       V3 v = vel[i] + dv;
       const double s2 = len2(v);
       if (s2 > kMaxSpeed * kMaxSpeed) v = v * (kMaxSpeed / std::sqrt(s2));

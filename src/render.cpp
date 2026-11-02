@@ -139,8 +139,11 @@ void main(){
   if(gloss>0.05){
     vec3 R = reflect(-V,N);
     float fres = pow(1.0-max(dot(N,V),0.0),4.0);
-    float k = mix(0.05,0.75,fres)*gloss*1.4;
-    c = mix(c, sky(R), clamp(k,0.0,1.0));
+    bool metal = gloss > 0.97;
+    float k = metal ? mix(0.70,0.95,fres) : mix(0.04,0.70,fres)*gloss*1.25;
+    vec3 env = sky(R);
+    if(metal) env *= vCol.rgb*1.35;
+    c = mix(c, env, clamp(k,0.0,1.0));
     c += vec3(1.0,0.95,0.85)*pow(max(dot(R,uSun),0.0),90.0)*gloss*diff;
   }
   float d = length(uEye-vPos);
@@ -242,20 +245,35 @@ struct Particle {
 };
 inline u8 U8(float v) { return u8(std::clamp(v, 0.f, 1.f) * 255.f); }
 
-void matColor(u8 mat, float& r, float& g, float& b, float& gloss) {
-  gloss = 0;
-  switch (mat) {
-    case MAT_PAINT: r = 0.30f; g = 0.035f; b = 0.05f; gloss = 0.85f; break;  // deep red metallic
-    case MAT_GLASS: r = 0.03f; g = 0.05f; b = 0.06f; gloss = 1.0f; break;
-    case MAT_BLACK: r = 0.03f; g = 0.03f; b = 0.03f; gloss = 0.1f; break;
-    case MAT_LINER: r = 0.015f; g = 0.015f; b = 0.015f; break;
-    case MAT_HEADLIGHT: r = 0.85f; g = 0.85f; b = 0.80f; gloss = 1.0f; break;
-    case MAT_TAILLIGHT: r = 0.55f; g = 0.02f; b = 0.02f; gloss = 1.0f; break;
-    case MAT_GRILLE: r = 0.02f; g = 0.02f; b = 0.022f; gloss = 0.2f; break;
-    case MAT_PLATE: r = 0.85f; g = 0.82f; b = 0.25f; gloss = 0.2f; break;
-    default: r = 0.6f; g = 0.6f; b = 0.6f; gloss = 0.9f; break;
-  }
-}
+// Base colour, and in the last channel the finish: 0 matte, up to 0.9 paint or plastic with a clear
+// highlight, 1.0 for metal, which mirrors its surroundings.
+struct MatDef {
+  float r, g, b, gloss;
+};
+const MatDef kMats[MM_COUNT] = {
+    {0.24f, 0.014f, 0.026f, 0.92f},  // paint: Citroen dark metallic red
+    {0.012f, 0.02f, 0.024f, 0.90f},  // glass
+    {0.016f, 0.016f, 0.017f, 0.18f}, // black plastic
+    {0.012f, 0.012f, 0.012f, 0.0f},  // liner
+    {0.72f, 0.72f, 0.74f, 1.0f},     // chrome
+    {0.30f, 0.32f, 0.33f, 0.90f},    // headlight lens (drawn translucent)
+    {0.60f, 0.020f, 0.022f, 0.85f},  // rear light
+    {0.75f, 0.33f, 0.03f, 0.85f},    // indicator
+    {0.018f, 0.018f, 0.019f, 0.05f}, // tyre rubber
+    {0.55f, 0.56f, 0.58f, 1.0f},     // alloy wheel
+    {0.10f, 0.095f, 0.09f, 0.0f},    // seat fabric
+    {0.04f, 0.04f, 0.04f, 0.0f},     // carpet
+    {0.78f, 0.76f, 0.20f, 0.2f},     // number plate
+    {0.25f, 0.25f, 0.26f, 0.45f},    // steel
+    {0.48f, 0.49f, 0.50f, 0.55f},    // cast aluminium
+    {0.09f, 0.33f, 0.10f, 0.70f},    // LHM green spheres
+    {0.035f, 0.035f, 0.037f, 0.25f}, // dark grey
+    {0.33f, 0.33f, 0.34f, 1.0f},     // brake disc
+    {0.72f, 0.72f, 0.70f, 0.85f},    // reversing light
+    {0.80f, 0.80f, 0.78f, 1.0f},     // lamp reflector
+    {0.20f, 0.13f, 0.09f, 0.1f},     // exhaust steel
+};
+
 void propColor(u8 c, float& r, float& g, float& b, float& gloss) {
   gloss = 0;
   switch (c) {
@@ -278,7 +296,6 @@ void propColor(u8 c, float& r, float& g, float& b, float& gloss) {
 struct Renderer::Impl {
   const World* world = nullptr;
   const Sim* sim = nullptr;
-  const CarSkin* skin = nullptr;
 
   GLuint progMesh = 0, progDepth = 0, progSky = 0, progPart = 0, progLine = 0, progHud = 0;
   GLuint shadowFbo = 0, shadowTex = 0;
@@ -294,17 +311,25 @@ struct Renderer::Impl {
   GLsizei staticCount = 0;  // roads, markings and static boxes
   V3 origin;                // static meshes are stored relative to the world origin
 
+  // Flexbody mesh, deformed on the CPU from the node snapshot every frame.
+  const CarRig* rig = nullptr;
+  const CarMesh* mesh = nullptr;
   GLuint carVao = 0, carVbo = 0, carIbo = 0, carGlassVao = 0, carGlassIbo = 0;
   std::vector<Vtx> carVerts;
-  std::vector<u32> carIdx, glassIdx;
-  std::vector<V3> skinPos;
-  std::vector<u8> paneBroken;
+  std::vector<u32> carIdx, glassIdx, lensIdx;
+  GLuint lensVao = 0, lensIbo = 0;
+  std::vector<float> nrmAccum;
+  std::vector<u8> partHidden;
+  std::vector<const MeshPart*> wheelParts, wheelStaticParts;
+  GLuint wheelVao2 = 0, wheelVbo2 = 0, wheelIbo2 = 0;
+  std::vector<int> wheelDrawFirst, wheelDrawCount, staticDrawFirst, staticDrawCount;
+  // Unit rod for arms, shafts and struts.
+  GLuint rodVao = 0, rodVbo = 0;
+  GLsizei rodCount = 0;
+  float rodColor[MM_COUNT][4];
 
   GLuint propVao = 0, propVbo = 0;
   std::vector<Vtx> propVerts;
-
-  GLuint wheelVao = 0, wheelVbo = 0;
-  GLsizei wheelCount = 0;
 
   GLuint partVao = 0, partVbo = 0;
   std::vector<Particle> particles;
@@ -487,133 +512,101 @@ struct Renderer::Impl {
     setupVtxAttribs();
   }
 
-  void buildWheelMesh() {
-    // Lathe profile in unit space: x = across the tyre, r = radius. Scaled at draw time.
-    std::vector<Vtx> v;
-    constexpr int kSeg = 32;
-    struct P { float x, r; float cr, cg, cb, gloss; };
-    const float t = .025f;
-    const P prof[] = {
-        {-0.5f, 0.62f, t, t, t, 0}, {-0.5f, 0.92f, t, t, t, 0},  {-0.42f, 1.0f, t, t, t, 0},
-        {0.42f, 1.0f, t, t, t, 0},  {0.5f, 0.92f, t, t, t, 0},   {0.5f, 0.62f, t, t, t, 0},
-        {0.5f, 0.62f, .55f, .56f, .58f, .7f}, {0.36f, 0.56f, .5f, .51f, .53f, .7f},
-        {0.42f, 0.18f, .45f, .46f, .48f, .7f}, {0.47f, 0.0f, .4f, .4f, .42f, .7f}};
-    constexpr int kP = int(sizeof(prof) / sizeof(prof[0]));
-    for (int i = 0; i < kSeg; i++) {
-      const float a0 = 2.f * float(PI) * i / kSeg, a1 = 2.f * float(PI) * (i + 1) / kSeg;
-      // Spokes: every fourth segment of the rim face is darker, so wheel spin is visible.
-      const bool slot = (i / 2) % 4 == 0;
-      for (int p = 0; p + 1 < kP; p++) {
-        if (p == 5) continue;
-        const P& A = prof[p];
-        const P& B = prof[p + 1];
-        auto ring = [](float x, float r, float ang) { return V3{r * std::cos(ang), x, r * std::sin(ang)}; };
-        V3 q0 = ring(A.x, A.r, a0), q1 = ring(B.x, B.r, a0), q2 = ring(B.x, B.r, a1), q3 = ring(A.x, A.r, a1);
-        const float dark = (slot && p >= 6) ? 0.18f : 1.f;
-        const float sx = (p >= 6) ? 1.f : 1.f;
-        (void)sx;
-        addQuad(v, q0, q1, q2, q3, A.cr * dark, A.cg * dark, A.cb * dark, A.gloss);
+  // Deform the flexbody from the node snapshot.
+  void updateCar(const Snapshot& s) {
+    const CarMesh& M = *mesh;
+    const size_t nv = M.restPos.size() / 3;
+    if (carVerts.size() != nv) {
+      carVerts.resize(nv);
+      nrmAccum.assign(nv * 3, 0.f);
+      for (const MeshPart& p : M.parts) {
+        const MatDef& md = kMats[p.mat];
+        for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++) {
+          carVerts[v].r = U8(md.r);
+          carVerts[v].g = U8(md.g);
+          carVerts[v].b = U8(md.b);
+          carVerts[v].a = U8(md.gloss);
+        }
       }
     }
-    // Inner face so that you cannot see through a wheel from behind.
-    for (int i = 0; i < kSeg; i++) {
-      const float a0 = 2.f * float(PI) * i / kSeg, a1 = 2.f * float(PI) * (i + 1) / kSeg;
-      const V3 c{0, -0.5, 0};
-      addQuad(v, c, V3{0.62 * std::cos(a0), -0.5, 0.62 * std::sin(a0)}, V3{0.62 * std::cos(a1), -0.5, 0.62 * std::sin(a1)}, c, .01f, .01f, .01f, 0);
+    constexpr int K = CarMesh::kK;
+    const V3* pos = s.pos.data();
+    for (const MeshPart& p : M.parts) {
+      if (!p.bound) continue;
+      for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++) {
+        const u32* idx = &M.bindNode[size_t(v) * K];
+        const float* wg = &M.bindWeight[size_t(v) * K];
+        double x = 0, y = 0, z = 0;
+        for (int i = 0; i < K; i++) {
+          const V3& q = pos[idx[i]];
+          const double w = wg[i];
+          x += q.x * w;
+          y += q.y * w;
+          z += q.z * w;
+        }
+        carVerts[v].x = float(x);
+        carVerts[v].y = float(y);
+        carVerts[v].z = float(z);
+      }
     }
-    wheelCount = GLsizei(v.size());
-    glGenVertexArrays(1, &wheelVao);
-    glGenBuffers(1, &wheelVbo);
-    glBindVertexArray(wheelVao);
-    glBindBuffer(GL_ARRAY_BUFFER, wheelVbo);
-    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(Vtx)), v.data(), GL_STATIC_DRAW);
-    setupVtxAttribs();
-  }
 
-  // Deform the subdivided skin from the node snapshot.
-  void updateCar(const Snapshot& s) {
-    constexpr int kS = CarSkin::kSub;
-    constexpr int kRow = kS + 1;
-    carVerts.resize(skin->verts.size());
+    // Area-weighted normals from the deformed surface, so that every dent catches the light.
+    // Torn triangles are dropped rather than stretched into long rubber sheets. Glass shatters at a
+    // strain far below what sheet steel accepts.
     carIdx.clear();
     glassIdx.clear();
-    for (const SkinQuad& q : skin->quads) {
-      const V3 p0 = s.pos[q.n[0]], p1 = s.pos[q.n[1]], p2 = s.pos[q.n[2]], p3 = s.pos[q.n[3]];
-
-      // Torn sheet disappears instead of stretching into long rubber triangles; glass shatters at
-      // a much smaller strain than steel can tolerate.
-      const V3 pc[4] = {p0, p1, p2, p3};
-      double strain = 0;
-      for (int e = 0; e < 4; e++) {
-        const double L = len(pc[(e + 1) % 4] - pc[e]);
-        if (q.L[e] > 1e-3) strain = std::max(strain, std::fabs(L / q.L[e] - 1.0));
+    lensIdx.clear();
+    std::fill(nrmAccum.begin(), nrmAccum.end(), 0.f);
+    constexpr float kTear = 1.45f * 1.45f;
+    constexpr float kShatter = 1.04f * 1.04f;
+    for (size_t pi = 0; pi < M.parts.size(); pi++) {
+      const MeshPart& p = M.parts[pi];
+      if (!p.bound) continue;
+      const bool isGlass = p.mat == MM_GLASS;
+      if (partHidden[pi]) continue;
+      auto& list = isGlass ? glassIdx : (p.mat == MM_LENS ? lensIdx : carIdx);
+      u32 overstrained = 0;
+      for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++) {
+        const u32 a = M.tris[t * 3], b = M.tris[t * 3 + 1], c = M.tris[t * 3 + 2];
+        const Vtx& A = carVerts[a];
+        const Vtx& B = carVerts[b];
+        const Vtx& C = carVerts[c];
+        const float e1x = B.x - A.x, e1y = B.y - A.y, e1z = B.z - A.z;
+        const float e2x = C.x - A.x, e2y = C.y - A.y, e2z = C.z - A.z;
+        const float e3x = C.x - B.x, e3y = C.y - B.y, e3z = C.z - B.z;
+        const float l1 = e1x * e1x + e1y * e1y + e1z * e1z;
+        const float l2 = e3x * e3x + e3y * e3y + e3z * e3z;
+        const float l3 = e2x * e2x + e2y * e2y + e2z * e2z;
+        const float* rest = &M.restEdge2[size_t(t) * 3];
+        if (isGlass) {
+          // A pane breaks when a real share of it is stretched, not because of one sliver triangle.
+          if (l1 > kShatter * rest[0] + 1e-5f || l2 > kShatter * rest[1] + 1e-5f || l3 > kShatter * rest[2] + 1e-5f) {
+            if (++overstrained > std::max(4u, p.triCount / 25)) {
+              partHidden[pi] = 1;
+              spawnGlass(V3{A.x, A.y, A.z}, s.carVel);
+              break;
+            }
+          }
+        } else if (l1 > kTear * rest[0] + 1e-4f || l2 > kTear * rest[1] + 1e-4f || l3 > kTear * rest[2] + 1e-4f) {
+          continue;
+        }
+        const float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+        for (u32 q : {a, b, c}) {
+          nrmAccum[q * 3] += nx;
+          nrmAccum[q * 3 + 1] += ny;
+          nrmAccum[q * 3 + 2] += nz;
+        }
+        list.push_back(a);
+        list.push_back(b);
+        list.push_back(c);
       }
-      bool hidden = strain > 0.5;
-      if (q.pane) {
-        if (strain > 0.035 && !paneBroken[q.pane]) {
-          paneBroken[q.pane] = 1;
-          spawnGlass((p0 + p2) * 0.5, s.carVel);
-        }
-        hidden = hidden || paneBroken[q.pane];
-      }
-
-      float cr, cg, cb, gloss;
-      matColor(q.mat, cr, cg, cb, gloss);
-      if (q.mat == MAT_PAINT) {
-        // Dirty, scraped paint where the panel has been deformed.
-        const float scratch = float(std::clamp((strain - 0.03) * 8.0, 0.0, 0.65));
-        cr += (0.35f - cr) * scratch;
-        cg += (0.33f - cg) * scratch;
-        cb += (0.31f - cb) * scratch;
-        gloss *= 1.f - scratch;
-      }
-
-      const SkinVert* sv = &skin->verts[q.firstVert];
-      Vtx* out = &carVerts[q.firstVert];
-      for (int j = 0; j <= kS; j++)
-        for (int i = 0; i <= kS; i++) {
-          const SkinVert& v = sv[j * kRow + i];
-          const double u = v.u, w = v.v;
-          const V3 base = lerpv(lerpv(p0, p1, u), lerpv(p3, p2, u), w);
-          const V3 du = lerpv(p1 - p0, p2 - p3, w);
-          const V3 dv = lerpv(p3 - p0, p2 - p1, u);
-          const V3 nrm = norm(cross(du, dv));
-          const V3 e1 = norm(du);
-          const V3 e2 = cross(nrm, e1);
-          const V3 world = base + e1 * double(v.ox) + e2 * double(v.oy) + nrm * double(v.on);
-          Vtx& t = out[j * kRow + i];
-          t.x = float(world.x - origin.x);
-          t.y = float(world.y - origin.y);
-          t.z = float(world.z - origin.z);
-          t.nx = t.ny = t.nz = 0;
-          t.r = U8(cr);
-          t.g = U8(cg);
-          t.b = U8(cb);
-          t.a = U8(gloss);
-        }
-      // Normals from the deformed grid so dents show up in the shading.
-      for (int j = 0; j <= kS; j++)
-        for (int i = 0; i <= kS; i++) {
-          const Vtx& l = out[j * kRow + std::max(i - 1, 0)];
-          const Vtx& r = out[j * kRow + std::min(i + 1, kS)];
-          const Vtx& d = out[std::max(j - 1, 0) * kRow + i];
-          const Vtx& up = out[std::min(j + 1, kS) * kRow + i];
-          const float ax = r.x - l.x, ay = r.y - l.y, az = r.z - l.z;
-          const float bx = up.x - d.x, by = up.y - d.y, bz = up.z - d.z;
-          float nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
-          const float n = (std::sqrt(nx * nx + ny * ny + nz * nz) + 1e-9f) * (q.flip ? -1.f : 1.f);
-          Vtx& t = out[j * kRow + i];
-          t.nx = nx / n;
-          t.ny = ny / n;
-          t.nz = nz / n;
-        }
-      if (hidden) continue;
-      auto& list = q.mat == MAT_GLASS ? glassIdx : carIdx;
-      for (int j = 0; j < kS; j++)
-        for (int i = 0; i < kS; i++) {
-          const u32 a = q.firstVert + u32(j * kRow + i), b = a + 1, c = a + u32(kRow), d = c + 1;
-          list.insert(list.end(), {a, b, d, a, d, c});
-        }
+    }
+    for (size_t v = 0; v < nv; v++) {
+      const float nx = nrmAccum[v * 3], ny = nrmAccum[v * 3 + 1], nz = nrmAccum[v * 3 + 2];
+      const float l = std::sqrt(nx * nx + ny * ny + nz * nz) + 1e-12f;
+      carVerts[v].nx = nx / l;
+      carVerts[v].ny = ny / l;
+      carVerts[v].nz = nz / l;
     }
     glBindBuffer(GL_ARRAY_BUFFER, carVbo);
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(carVerts.size() * sizeof(Vtx)), carVerts.data(), GL_STREAM_DRAW);
@@ -623,6 +616,95 @@ struct Renderer::Impl {
     glBindVertexArray(carGlassVao);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, carGlassIbo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(glassIdx.size() * sizeof(u32)), glassIdx.data(), GL_STREAM_DRAW);
+    glBindVertexArray(lensVao);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lensIbo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(lensIdx.size() * sizeof(u32)), lensIdx.data(), GL_STREAM_DRAW);
+  }
+
+  void buildWheelParts() {
+    // Wheels are rigid: their parts live in one static buffer and are drawn with a matrix.
+    const CarMesh& M = *mesh;
+    std::vector<Vtx> v;
+    std::vector<u32> idx;
+    for (const MeshPart& p : M.parts) {
+      if (p.bound) continue;
+      const bool isStatic = p.group == "wheel_static";
+      if (p.group.rfind("wheel", 0) != 0) continue;
+      const u32 base = u32(v.size());
+      const MatDef& md = kMats[p.mat];
+      for (u32 q = p.firstVert; q < p.firstVert + p.vertCount; q++) {
+        Vtx t{};
+        t.x = M.restPos[q * 3];
+        t.y = M.restPos[q * 3 + 1];
+        t.z = M.restPos[q * 3 + 2];
+        t.nx = M.restNormal[q * 3];
+        t.ny = M.restNormal[q * 3 + 1];
+        t.nz = M.restNormal[q * 3 + 2];
+        t.r = U8(md.r);
+        t.g = U8(md.g);
+        t.b = U8(md.b);
+        t.a = U8(md.gloss);
+        v.push_back(t);
+      }
+      (isStatic ? staticDrawFirst : wheelDrawFirst).push_back(int(idx.size()));
+      for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++)
+        for (int k = 0; k < 3; k++) idx.push_back(M.tris[t * 3 + k] - p.firstVert + base);
+      (isStatic ? staticDrawCount : wheelDrawCount).push_back(int(p.triCount * 3));
+    }
+    glGenVertexArrays(1, &wheelVao2);
+    glGenBuffers(1, &wheelVbo2);
+    glGenBuffers(1, &wheelIbo2);
+    glBindVertexArray(wheelVao2);
+    glBindBuffer(GL_ARRAY_BUFFER, wheelVbo2);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(Vtx)), v.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, wheelIbo2);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(idx.size() * sizeof(u32)), idx.data(), GL_STATIC_DRAW);
+    setupVtxAttribs();
+  }
+
+  void buildRod() {
+    // Unit cylinder along +z, radius 1, length 1, with end caps. Colour comes from a uniform-free
+    // trick: one copy per material, stored consecutively.
+    std::vector<Vtx> v;
+    constexpr int kSeg = 12;
+    for (int m = 0; m < MM_COUNT; m++) {
+      const MatDef& md = kMats[m];
+      for (int i = 0; i < kSeg; i++) {
+        const float a0 = 2.f * float(PI) * i / kSeg, a1 = 2.f * float(PI) * (i + 1) / kSeg;
+        const float c0 = std::cos(a0), s0 = std::sin(a0), c1 = std::cos(a1), s1 = std::sin(a1);
+        auto push = [&](float x, float y, float z, float nx, float ny, float nz) {
+          Vtx t{};
+          t.x = x; t.y = y; t.z = z; t.nx = nx; t.ny = ny; t.nz = nz;
+          t.r = U8(md.r); t.g = U8(md.g); t.b = U8(md.b); t.a = U8(md.gloss);
+          v.push_back(t);
+        };
+        push(c0, s0, 0, c0, s0, 0); push(c1, s1, 0, c1, s1, 0); push(c1, s1, 1, c1, s1, 0);
+        push(c0, s0, 0, c0, s0, 0); push(c1, s1, 1, c1, s1, 0); push(c0, s0, 1, c0, s0, 0);
+        push(0, 0, 1, 0, 0, 1); push(c0, s0, 1, 0, 0, 1); push(c1, s1, 1, 0, 0, 1);
+        push(0, 0, 0, 0, 0, -1); push(c1, s1, 0, 0, 0, -1); push(c0, s0, 0, 0, 0, -1);
+      }
+    }
+    rodCount = GLsizei(v.size() / MM_COUNT);
+    glGenVertexArrays(1, &rodVao);
+    glGenBuffers(1, &rodVbo);
+    glBindVertexArray(rodVao);
+    glBindBuffer(GL_ARRAY_BUFFER, rodVbo);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(Vtx)), v.data(), GL_STATIC_DRAW);
+    setupVtxAttribs();
+  }
+
+  Mat4 rodMatrix(V3 a, V3 b, float radius) {
+    const V3 ax = b - a;
+    const V3 z = norm(ax);
+    V3 x = norm(cross(z, std::fabs(z.z) < 0.9 ? V3{0, 0, 1} : V3{1, 0, 0}));
+    const V3 y = cross(z, x);
+    Mat4 m;
+    m.m[0] = float(x.x * radius); m.m[1] = float(x.y * radius); m.m[2] = float(x.z * radius);
+    m.m[4] = float(y.x * radius); m.m[5] = float(y.y * radius); m.m[6] = float(y.z * radius);
+    m.m[8] = float(ax.x); m.m[9] = float(ax.y); m.m[10] = float(ax.z);
+    m.m[12] = float(a.x); m.m[13] = float(a.y); m.m[14] = float(a.z);
+    m.m[15] = 1;
+    return m;
   }
 
   void updateProps(const Snapshot& s, const V3& camPos) {
@@ -926,7 +1008,7 @@ struct Renderer::Impl {
     const double c = std::cos(wv.theta), sn = std::sin(wv.theta) * (wv.left ? 1.0 : -1.0);
     const V3 ex = xAxis * c + zAxis * sn;
     const V3 ez = zAxis * c - xAxis * sn;
-    const double r = wv.radius, w = wv.width;
+    const double r = wv.radius / 0.312, w = 1.0;
     Mat4 m;
     m.m[0] = float(ex.x * r); m.m[1] = float(ex.y * r); m.m[2] = float(ex.z * r);
     m.m[4] = float(yAxis.x * w); m.m[5] = float(yAxis.y * w); m.m[6] = float(yAxis.z * w);
@@ -943,12 +1025,13 @@ struct Renderer::Impl {
   }
 };
 
-bool Renderer::init(const World& world, const Sim& sim, const CarSkin& skin) {
+bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, const CarMesh& mesh) {
   d = new Impl();
   d->world = &world;
   d->sim = &sim;
-  d->skin = &skin;
-  d->paneBroken.assign(size_t(skin.paneCount) + 1, 0);
+  d->rig = &rig;
+  d->mesh = &mesh;
+  d->partHidden.assign(mesh.parts.size(), 0);
 
   d->progMesh = program(kMeshVS, kMeshFS);
   d->progDepth = program(kDepthVS, kDepthFS);
@@ -975,7 +1058,8 @@ bool Renderer::init(const World& world, const Sim& sim, const CarSkin& skin) {
 
   d->buildTerrain();
   d->buildStatic();
-  d->buildWheelMesh();
+  d->buildWheelParts();
+  d->buildRod();
 
   glGenVertexArrays(1, &d->carVao);
   glGenVertexArrays(1, &d->carGlassVao);
@@ -986,6 +1070,10 @@ bool Renderer::init(const World& world, const Sim& sim, const CarSkin& skin) {
   glBindVertexArray(d->carVao);
   d->setupVtxAttribs();
   glBindVertexArray(d->carGlassVao);
+  d->setupVtxAttribs();
+  glGenVertexArrays(1, &d->lensVao);
+  glGenBuffers(1, &d->lensIbo);
+  glBindVertexArray(d->lensVao);
   d->setupVtxAttribs();
 
   glGenVertexArrays(1, &d->propVao);
@@ -1029,7 +1117,7 @@ bool Renderer::init(const World& world, const Sim& sim, const CarSkin& skin) {
 }
 
 void Renderer::resetDamage() {
-  std::fill(d->paneBroken.begin(), d->paneBroken.end(), u8(0));
+  std::fill(d->partHidden.begin(), d->partHidden.end(), u8(0));
   d->particles.clear();
 }
 
@@ -1061,11 +1149,33 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     glDrawElements(GL_TRIANGLES, GLsizei(D.carIdx.size()), GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(D.propVao);
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.propVerts.size()));
-    glBindVertexArray(D.wheelVao);
+    glBindVertexArray(D.wheelVao2);
     for (const WheelView& wv : s.wheels) {
-      const Mat4 m = D.wheelMatrix(wv, D.origin);
-      D.setMat(prog, "uModel", m);
-      glDrawArrays(GL_TRIANGLES, 0, D.wheelCount);
+      D.setMat(prog, "uModel", D.wheelMatrix(wv, D.origin));
+      for (size_t i = 0; i < D.wheelDrawFirst.size(); i++)
+        glDrawElements(GL_TRIANGLES, D.wheelDrawCount[i], GL_UNSIGNED_INT, (void*)(size_t(D.wheelDrawFirst[i]) * sizeof(u32)));
+      WheelView fixed = wv;
+      fixed.theta = 0;
+      D.setMat(prog, "uModel", D.wheelMatrix(fixed, D.origin));
+      for (size_t i = 0; i < D.staticDrawFirst.size(); i++)
+        glDrawElements(GL_TRIANGLES, D.staticDrawCount[i], GL_UNSIGNED_INT, (void*)(size_t(D.staticDrawFirst[i]) * sizeof(u32)));
+    }
+    // Running gear: arms, shafts and struts between their real nodes.
+    glBindVertexArray(D.rodVao);
+    for (const VisLink& l : D.rig->links) {
+      const V3 a = s.pos[l.a], b = s.pos[l.b];
+      const double restL = len(D.sim->rest[l.b] - D.sim->rest[l.a]);
+      if (len(b - a) > restL * 1.6) continue;  // torn off
+      if (l.kind == 1) {
+        // Strut: slim chrome rod from the top, body over the lower part.
+        const V3 mid = lerpv(a, b, 0.42);
+        D.setMat(prog, "uModel", D.rodMatrix(a, mid, l.radius * 0.45f));
+        glDrawArrays(GL_TRIANGLES, MM_CHROME * D.rodCount, D.rodCount);
+        D.setMat(prog, "uModel", D.rodMatrix(mid, b, l.radius));
+      } else {
+        D.setMat(prog, "uModel", D.rodMatrix(a, b, l.radius));
+      }
+      glDrawArrays(GL_TRIANGLES, l.mat * D.rodCount, D.rodCount);
     }
     D.setMat(prog, "uModel", I);
   };
@@ -1168,7 +1278,10 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glDepthMask(GL_FALSE);
   glUseProgram(D.progMesh);
   D.setMat(D.progMesh, "uModel", I);
-  glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), 0.72f);
+  glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), 0.30f);
+  glBindVertexArray(D.lensVao);
+  glDrawElements(GL_TRIANGLES, GLsizei(D.lensIdx.size()), GL_UNSIGNED_INT, nullptr);
+  glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), 0.80f);
   glBindVertexArray(D.carGlassVao);
   glDrawElements(GL_TRIANGLES, GLsizei(D.glassIdx.size()), GL_UNSIGNED_INT, nullptr);
 

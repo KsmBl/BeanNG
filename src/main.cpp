@@ -31,7 +31,8 @@ struct Game {
   World world;
   Sim sim;
   Vehicle car;
-  CarSkin skin;
+  CarRig rig;
+  CarMesh mesh;
   Sim simStart;
   Vehicle carStart;
 
@@ -277,12 +278,18 @@ int main(int argc, char** argv) {
   printf("Baue Welt und Fahrzeug...\n");
   G.world.build();
   G.sim.world = &G.world;
-  G.car = buildXantia(G.sim, kSpawn, 0.0, &G.skin);
+  G.car = buildXantia(G.sim, kSpawn, 0.0, &G.rig);
   populateWorld(G.sim, G.world);
   G.sim.finalize();
   settleVehicle(G.sim, G.car, 4.0);
   G.simStart = G.sim;
   G.carStart = G.car;
+  if (!G.mesh.load("assets/xantia.mesh")) {
+    fprintf(stderr, "assets/xantia.mesh fehlt. Starte das Spiel mit ./run.sh, das erzeugt das Modell.\n");
+    return 1;
+  }
+  // Bind to the as-built pose: that is what the mesh was modelled against.
+  G.mesh.bind(G.simStart.rest, G.rig.groups, kSpawn);
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());
 
   // Scripted runs have no window focus, and SDL drops joystick input without focus.
@@ -319,7 +326,7 @@ int main(int argc, char** argv) {
   Renderer renderer;
   // The renderer reads only topology from this immutable copy (rest pose, triangle list, beam end
   // points). Everything that moves arrives through snapshots, so it never races the physics.
-  renderer.init(G.world, G.simStart, G.skin);
+  renderer.init(G.world, G.simStart, G.rig, G.mesh);
 
   G.fillSnapshot(0);
   std::thread physics([&] { G.physicsLoop(); });

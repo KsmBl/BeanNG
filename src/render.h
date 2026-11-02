@@ -44,7 +44,7 @@ struct HudOptions {
 
 class Renderer {
  public:
-  bool init(const World& world, const Sim& sim, const CarSkin& skin);
+  bool init(const World& world, const Sim& sim, const CarRig& rig, const CarMesh& mesh);
   void resetDamage();
   void draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt);
   // Returns the nearest node under a screen position, for the mouse grabber.
