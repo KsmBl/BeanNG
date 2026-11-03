@@ -749,7 +749,7 @@ struct Game {
         in = input;
         input.chatOut.clear();
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = false;
       }
       if (!in.chatOut.empty() && state == NET_IN) {
         saying = in.chatOut;
@@ -772,6 +772,7 @@ struct Game {
       if (in.c.setup) out.setupCount++;
       if (in.c.placeFoot) out.mineFootCount++;
       if (in.c.placeTank) out.mineTankCount++;
+      if (in.c.query) out.queryCount++;
       if (in.c.strike) {
         out.strikeCount++;
         out.strikeX = float(in.c.strikeAt.x);
@@ -926,6 +927,20 @@ struct Game {
             duel.players[mySlot].tankShells = shells;
             duel.players[mySlot].tankMissiles = missiles;
             duel.players[mySlot].strikeCodes = codes;
+            u8 tap = 0;
+            float tapClock = 0, fixWait = 0, fixAge = 0;
+            r.get(tap);
+            r.get(tapClock);
+            r.get(fixWait);
+            r.get(fixAge);
+            const V3 fix = r.getV3();
+            Duel::Player& self = duel.players[mySlot];
+            self.tapped = tap & 1;
+            self.hasFix = tap & 2;
+            self.tapClock = tapClock;
+            self.fixWait = fixWait;
+            self.fixAge = fixAge;
+            self.fix = fix;
           }
           u32 first = 0;
           u8 count = 0;
@@ -1188,6 +1203,9 @@ struct Game {
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
         else if (vehicleNow >= 0) snprintf(msg, sizeof msg, "E: aussteigen");
+        else if (duel.players[mySlot].tapClock > 0) snprintf(msg, sizeof msg, "Hauptcomputer wird angezapft  ·  %.0f s", duel.players[mySlot].tapClock);
+        else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && !duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "E: Hauptcomputer anzapfen");
+        else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "Angezapft  ·  J fragt den Standort des Gegners ab, K zeigt ihn");
         else if (phaseNow == Duel::PLAYING && duel.nearCrate(me.p + V3{0, 0, 0.3}) >= 0) {
           char what[64];
           snprintf(msg, sizeof msg, "E: nehmen  ·  %s", Duel::crateLabel(duel.crates[size_t(duel.nearCrate(me.p + V3{0, 0, 0.3}))], what, sizeof what));
@@ -1205,6 +1223,11 @@ struct Game {
         snap.foot.wind = duel.wind;
         const Duel::Player& who = duel.players[mySlot];
         snap.foot.ammo = in.weapon == WP_KNIFE ? -1 : (in.weapon == WP_SNIPER ? who.sniperAmmo : (in.weapon == WP_RPG ? who.rpgAmmo : who.smallAmmo));
+        snap.foot.tapped = who.tapped;
+        snap.foot.hasFix = who.hasFix;
+        snap.foot.fix = who.fix;
+        snap.foot.fixAge = who.fixAge;
+        snap.foot.fixWait = who.fixWait;
         snap.foot.shells = who.tankShells;
         snap.foot.missiles = who.tankMissiles;
         snap.foot.codes = who.strikeCodes;
@@ -1545,6 +1568,7 @@ static void runGame() {
       key("Waffe wählen", "1 2 3 4 5");
       key("Tretmine, Panzermine legen", "M, N");
       key("Bombencode auf den Punkt der Karte", "K, Klick, B");
+      key("Beim Gegner anzapfen, dann Standort abfragen", "E am Computer, J");
       key("Scharfschützengewehr aufbauen, Zielfernrohr, Zoom", "X, rechte Maustaste, Mausrad");
       key("Rennen, springen", "Umschalt, Leertaste");
       key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
@@ -1761,6 +1785,7 @@ static void runGame() {
                 mapOpen = true;
               }
               break;
+            case SDLK_J: edges.query = true; break;
             case SDLK_M: edges.placeFoot = true; break;
             case SDLK_N: edges.placeTank = true; break;
             case SDLK_F12: wantShot = true; break;
@@ -1932,6 +1957,7 @@ static void runGame() {
       c.setup |= sendC.setup;
       c.placeFoot |= sendC.placeFoot;
       c.placeTank |= sendC.placeTank;
+      c.query |= sendC.query;
       if (sendC.strike) {
         c.strike = true;
         c.strikeAt = sendC.strikeAt;
@@ -2103,6 +2129,10 @@ static void runGame() {
     hud.map.open = mapOpen && panelKind == 0;
     hud.map.hasMark = hasMark;
     hud.map.mark = markPoint;
+    hud.map.hasEnemy = view.foot.hasFix;
+    hud.map.enemy = view.foot.fix;
+    hud.map.fixAge = view.foot.fixAge;
+    hud.map.fixWait = view.foot.tapped ? view.foot.fixWait : -1.0;
     hud.map.me = view.carCog;
     hud.map.meYaw = std::atan2(view.carFwd.y, view.carFwd.x);
     hud.cameraName = kCamNames[rig.mode];

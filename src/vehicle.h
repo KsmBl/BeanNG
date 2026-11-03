@@ -30,6 +30,7 @@ struct Controls {
   bool setup = false;     // edge-triggered: lying down behind the big rifle, or getting up
   bool placeFoot = false, placeTank = false;  // edge-triggered: mines
   bool strike = false;    // edge-triggered: a strike code used on strikeAt
+  bool query = false;     // edge-triggered: asks the tapped computer where the enemy is
   V3 strikeAt;
 };
 

@@ -80,6 +80,13 @@ class Duel {
     Soldier soldier;
     int vehicle = -1;  // what they sit in, -1 on foot
     double walkDebt = 0;
+    // The enemy's main computer: a few seconds at it, and from then on it says roughly where they are.
+    bool tapped = false;
+    double tapClock = 0;
+    double fixWait = 0;
+    bool hasFix = false;
+    V3 fix;
+    double fixAge = 0;
     int weapon = WP_PISTOL;
     bool hasWeapon[WP_COUNT] = {true, true, false, false, false};
     int smallAmmo = 24;  // pistol and assault rifle: what one starts with, and what the loadout adds
@@ -102,6 +109,7 @@ class Duel {
     bool fireHeld = false;
     bool placeFoot = false, placeTank = false;
     bool strike = false;    // a code used on the point marked on the map
+    bool query = false;     // asks a tapped computer where the enemy is
     V3 strikeAt;
     bool setup = false;     // lies down behind the big rifle, or gets up again
     int weapon = WP_PISTOL;
@@ -208,6 +216,8 @@ class Duel {
   // Moves a soldier one time step. Used by the server, and by a player's own machine to answer at once.
   void walk(Soldier& s, const WalkInput& in, double dt) const;
   static constexpr double kWalkDt = 0.01;
+  static constexpr double kTapTime = 5.0, kQueryWait = 30.0, kFixError = 70.0, kComputerReach = 2.6;
+  bool atEnemyComputer(int p, V3 at) const { return len(at + V3{0, 0, 1.0} - world.base(1 - p).computer) < kComputerReach; }
   static constexpr double kSetupTime = 3.0;  // to get down and have the big rifle on its bipod
   static constexpr double kRepairTime = 6.0;
   int nearestToRepair(V3 p) const;

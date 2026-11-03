@@ -813,7 +813,9 @@ void Duel::stepPlayers(const Intent in[2]) {
       } else if (phase == PLAYING) {
         // A crate within reach comes first; it is the smaller thing to aim for.
         const int c = nearCrate(s.p + V3{0, 0, 0.3});
-        if (c >= 0) {
+        if (!pl.tapped && atEnemyComputer(i, s.p)) {
+          pl.tapClock = kTapTime;
+        } else if (c >= 0) {
           give(i, kGiveNames[crates[size_t(c)].what], crates[size_t(c)].count);
           moveMarker(sim, crates[size_t(c)].marker, V3{0, 0, kMarkerDepth});
         } else {
@@ -821,6 +823,32 @@ void Duel::stepPlayers(const Intent in[2]) {
           if (v >= 0) boardVehicle(i, v);
         }
       }
+    }
+    // Tapping takes staying at the keyboard.
+    if (pl.tapClock > 0) {
+      if (pl.vehicle >= 0 || !atEnemyComputer(i, s.p)) {
+        pl.tapClock = 0;
+      } else {
+        pl.tapClock -= kDt;
+        if (pl.tapClock <= 0) {
+          pl.tapClock = 0;
+          pl.tapped = true;
+        }
+      }
+    }
+    pl.fixWait = std::max(0.0, pl.fixWait - kDt);
+    pl.fixAge += kDt;
+    if (in[i].query && pl.tapped && pl.fixWait <= 0 && phase == PLAYING) {
+      const Player& other = players[1 - i];
+      const V3 where = other.vehicle >= 0 ? frames[other.vehicle].cog : other.soldier.p;
+      randState = randState * 1664525u + 1013904223u;
+      const double a = double(randState >> 16) / 65535.0 * 2.0 * PI;
+      randState = randState * 1664525u + 1013904223u;
+      const double r = double(randState >> 16) / 65535.0 * kFixError;
+      pl.fix = where + V3{std::cos(a) * r, std::sin(a) * r, 0};
+      pl.hasFix = true;
+      pl.fixAge = 0;
+      pl.fixWait = kQueryWait;
     }
     if (pl.vehicle >= 0) {
       // Inside what goes up, one goes up with it.
@@ -921,6 +949,9 @@ void Duel::placePlayers() {
     p.ready = false;
     p.repairClock = 0;
     p.repairing = -1;
+    p.tapped = false;
+    p.tapClock = p.fixWait = p.fixAge = 0;
+    p.hasFix = false;
     p.weapon = WP_PISTOL;
     p.smallAmmo = 24;
     p.sniperAmmo = p.rpgAmmo = 0;

@@ -72,6 +72,7 @@ Im Spiel: **Online spielen**, Adresse und Port eintragen, **Verbinden**. Oder di
 | Tretmine, Panzermine legen | M, N | – |
 | Bombencode auf den markierten Kartenpunkt: vier Raketen, ungenau | K, Klick, B | – |
 | Scharfschützengewehr aufbauen, Zielfernrohr, Zoom 6x bis 24x | X, rechte Maustaste, Mausrad | – |
+| Beim Gegner anzapfen, dann Standort abfragen (alle 30 s) | E am Computer, J | – |
 | Chat | Enter | – |
 | Screenshot | F12 | – |
 

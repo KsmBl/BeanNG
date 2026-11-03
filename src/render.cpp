@@ -2178,6 +2178,7 @@ struct Renderer::Impl {
   }
   enum { IC_WATER = 0xE000, IC_OIL, IC_FUEL, IC_WRENCH, IC_ENGINE, IC_TYRE, IC_WARN, IC_BRAKE, IC_SKID, IC_CAMERA, IC_CLOCK, IC_SHELL, IC_TURRET, IC_PAD };
 
+  static constexpr double Duel_kFixError = 70.0;
   std::vector<Col> mapColors;
   V3 camEye, camTarget;
   void buildHud(const Snapshot& s, const HudOptions& o, int w, int h) {
@@ -2566,7 +2567,21 @@ struct Renderer::Impl {
         circle(sx, sy, r, c);
       };
       for (int side = 0; side < 2; side++) dot2(world->base(side).centre, 7 * u, {.95f, .95f, .95f, .9f});
-      if (o.map.hasEnemy) dot2(o.map.enemy, 7 * u, {.95f, .25f, .2f, 1});
+      if (o.map.hasEnemy) {
+        // Only roughly: a patch, not a point, and it gets stale.
+        const float radius = float(Duel_kFixError / (2.0 * kMapHalf)) * ms;
+        float sx, sy;
+        toMap(o.map.enemy.x, o.map.enemy.y, sx, sy);
+        circle(sx, sy, radius, {.95f, .25f, .2f, .28f});
+        arc(sx, sy, radius, 1.5f * u, 0, kPi2, {.95f, .25f, .2f, 1});
+        snprintf(buf, sizeof buf, "vor %.0f s", o.map.fixAge);
+        labelMid(sx, sy - radius - 8 * u, buf, 13 * u, {1, 1, 1, .95f});
+      }
+      if (o.map.fixWait >= 0) {
+        if (o.map.fixWait > 0) snprintf(buf, sizeof buf, "Nächste Abfrage in %.0f s", o.map.fixWait);
+        else snprintf(buf, sizeof buf, "J: Standort des Gegners abfragen");
+        label(mx0 + 14 * u, my0 + 22 * u, buf, 15 * u, white);
+      }
       if (o.map.hasMark) {
         float sx, sy;
         toMap(o.map.mark.x, o.map.mark.y, sx, sy);

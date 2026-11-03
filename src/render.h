@@ -63,6 +63,9 @@ struct Snapshot {
     int ammo = 0;  // for what is in the hand, -1 if it needs none
     int has = 3;
     int shells = 0, missiles = 0, codes = 0;
+    bool tapped = false, hasFix = false;
+    V3 fix;
+    double fixAge = 0, fixWait = 0;
     double prone = 0;
     V3 wind;
     V3 p;
@@ -144,6 +147,8 @@ struct UiMap {
   double meYaw = 0;
   bool hasEnemy = false;
   V3 enemy;
+  double fixAge = 0;
+  double fixWait = -1;  // until the next question may be asked; negative while the computer has not been tapped
 };
 constexpr double kMapHalf = 900.0;
 inline void mapLayout(int w, int h, float& x, float& y, float& size) {
