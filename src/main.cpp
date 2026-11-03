@@ -529,11 +529,16 @@ struct Game {
   }
 
   // Asked for from the window's thread.
-  enum Command { CMD_NONE, CMD_CONNECT, CMD_LEAVE };
+  enum Command { CMD_NONE, CMD_CONNECT, CMD_LEAVE, CMD_REPLAY };
   std::atomic<int> command{CMD_NONE};
 
   // What the window's thread reads, under snapMutex.
-  enum NetState { NET_OFF, NET_CONNECTING, NET_IN };
+  enum NetState { NET_OFF, NET_CONNECTING, NET_IN, NET_REPLAY };
+  // Whose match to look at in a replay, and how fast. Asked for from the window's thread.
+  std::atomic<int> replayWatch{0};
+  std::atomic<int> replaySpeed{100};  // percent
+  bool hasReplay = false;
+  double replayLeft = 0;
   int netState = NET_OFF;
   std::string netError;
   std::string names[2];
@@ -731,6 +736,17 @@ struct Game {
     };
     std::deque<Past> past;
     double walkDebt = 0;
+    // The last match, as it arrived: everything needed to see it again, from any side.
+    struct Taped {
+      double at;
+      std::vector<u8> bytes;
+    };
+    std::vector<Taped> tape, lastTape;
+    size_t tapeBytes = 0;
+    double tapeOffset = 0, lastTapeOffset = 0;
+    size_t replayAt = 0;
+    double replayNow = 0;
+    bool wasReplay = false;
     // How long a question takes to come back: from when an input went out to when the server says it has used it.
     std::deque<std::pair<u32, double>> sentAt;
     double rtt = 0.05;
@@ -786,6 +802,14 @@ struct Game {
     std::string error;
     u64 servedFrame = 0;
 
+    const auto keepTape = [&] {
+      if (tape.size() > 200) {
+        lastTape = std::move(tape);
+        lastTapeOffset = tapeOffset;
+      }
+      tape.clear();
+      tapeBytes = 0;
+    };
     const auto resetWorld = [&] {
       world.clearCraters();
       sim = simStart;
@@ -807,6 +831,7 @@ struct Game {
       resetVisuals = true;
     };
     const auto disconnect = [&](const std::string& why) {
+      if (state == NET_IN) keepTape();
       if (sock && state == NET_IN) {
         net::Writer bye(net::P_BYE);
         bye.put(token);
@@ -828,6 +853,26 @@ struct Game {
       last = now;
       const int cmd = command.exchange(CMD_NONE);
       if (cmd == CMD_LEAVE) disconnect("");
+      if (cmd == CMD_REPLAY && !lastTape.empty()) {
+        disconnect("");
+        state = NET_REPLAY;
+        replayAt = 0;
+        replayNow = lastTape.front().at;
+        timeOffset = lastTapeOffset;
+        haveOffset = true;
+      }
+      const bool replaying = state == NET_REPLAY;
+      if (replaying) {
+        // Time in the replay goes at the speed asked for, and whichever player is being watched is "me" for all of it.
+        replayNow += dt * double(replaySpeed.load()) / 100.0;
+        mySlot = replayWatch.load() & 1;
+        if (replayAt >= lastTape.size()) {
+          state = NET_OFF;
+          match = 0;
+          phaseNow = Duel::WAITING;
+          resetWorld();
+        }
+      }
       if (cmd == CMD_CONNECT) {
         disconnect("");
         std::string host;
@@ -911,7 +956,13 @@ struct Game {
         while ((n = sock->recv(buf, sizeof buf, from)) >= 0) held.push_back({now + fakeLag, std::vector<u8>(buf, buf + n), from});
       }
       for (;;) {
-        if (fakeLag > 0) {
+        if (replaying) {
+          if (replayAt >= lastTape.size() || lastTape[replayAt].at > replayNow) break;
+          const std::vector<u8>& b = lastTape[replayAt++].bytes;
+          n = int(std::min(b.size(), sizeof buf));
+          memcpy(buf, b.data(), size_t(n));
+          from = server;
+        } else if (fakeLag > 0) {
           if (held.empty() || held.front().at > now || !sock) break;
           n = int(held.front().bytes.size());
           memcpy(buf, held.front().bytes.data(), size_t(n));
@@ -929,6 +980,12 @@ struct Game {
           r.get(why);
           disconnect(why ? "Der Server hat eine andere Spielversion" : "Der Server ist voll");
           break;
+        }
+        if (state == NET_IN && kind != net::P_WELCOME && tapeBytes < (size_t(300) << 20)) {
+          // On tape, for seeing it again afterwards. What came in for the other tanks is on it too.
+          tape.push_back({now, std::vector<u8>(buf, buf + n)});
+          tapeBytes += size_t(n);
+          tapeOffset = timeOffset;
         }
         if (kind == net::P_WELCOME) {
           u16 protocol = 0;
@@ -952,12 +1009,20 @@ struct Game {
           haveOffset = false;
           continue;
         }
-        if (state != NET_IN) continue;
+        if (state != NET_IN && state != NET_REPLAY) continue;
         u32 tick = 0, id = 0;
         r.get(tick);
         r.get(id);
         if (!r.ok() || id < match) continue;
         if (id > match) {
+          // The match before this one is finished: that is the one to look at again.
+          if (state == NET_IN && match != 0) {
+            std::vector<Taped> current;
+            current.push_back(std::move(tape.back()));
+            tape.pop_back();
+            keepTape();
+            tape = std::move(current);
+          }
           resetWorld();
           match = id;
           // Everyone's dice are the same.
@@ -985,8 +1050,10 @@ struct Game {
           while (q.size() > 16) q.pop_front();
           // Where this machine's clock stands against the server's, without the jitter of any one packet.
           const double seen = now - double(tick) / net::kSendRate;
-          timeOffset = haveOffset ? timeOffset + (seen - timeOffset) * 0.01 : seen;
-          haveOffset = true;
+          if (!replaying) {
+            timeOffset = haveOffset ? timeOffset + (seen - timeOffset) * 0.01 : seen;
+            haveOffset = true;
+          }
         } else if (kind == net::P_META) {
           if (tick <= metaTick) continue;
           u8 ph = 0, mask = 0;
@@ -1239,7 +1306,7 @@ struct Game {
       if (state == NET_IN && now - lastHeard > 5.0) disconnect("Verbindung zum Server verloren");
 
       // Every tank we have word of, at the moment a little in the past that lies between two frames.
-      const double viewTime = (now - timeOffset - kViewDelay) * net::kSendRate;
+      const double viewTime = ((replaying ? replayNow : now) - timeOffset - kViewDelay) * net::kSendRate;
       u32 viewTick = 0;
       for (int side = 0; side < Duel::kTanks; side++) {
         const auto& q = frames[side];
@@ -1254,7 +1321,7 @@ struct Game {
         Tank& t = duel.tanks[side];
         const u32 first = duel.tankFirst[side];
         const size_t count = fb.offsets.size() / 3;
-        if (side == vehicleNow && q.size() >= 2) {
+        if (side == vehicleNow && q.size() >= 2 && !replaying) {
           // One's own tank is not shown late but early: where it will be by the time one's latest input has arrived.
           // That is what makes it answer at once instead of after the ping.
           const NetFrame& last = q.back();
@@ -1310,7 +1377,7 @@ struct Game {
         const u32 first = duel.carFirst[k];
         const size_t count = fb.offsets.size() / 3;
         double ownTurn = 0;
-        if (vehicleNow == Duel::kTanks + k && q.size() >= 2) {
+        if (vehicleNow == Duel::kTanks + k && q.size() >= 2 && !replaying) {
           // One's own car, like one's own tank: shown ahead, not behind.
           const CarFrame& last = q.back();
           const CarFrame& before = q[q.size() - 2];
@@ -1379,9 +1446,9 @@ struct Game {
 
       // On foot one's own legs answer at once.
       duel.players[mySlot].vehicle = vehicleNow;
-      const bool playingNow = state == NET_IN && (phaseNow == Duel::PLAYING || phaseNow == Duel::CHOOSING || phaseNow == Duel::FINISHED);
+      const bool playingNow = (state == NET_IN || replaying) && (phaseNow == Duel::PLAYING || phaseNow == Duel::CHOOSING || phaseNow == Duel::FINISHED);
       const bool canWalk = state == NET_IN && phaseNow == Duel::PLAYING && !droneShown[mySlot].live;
-      if (vehicleNow >= 0) {
+      if (vehicleNow >= 0 || replaying) {
         me = shownSoldier[mySlot];
         past.clear();
       } else if (playingNow) {
@@ -1462,7 +1529,7 @@ struct Game {
       for (int i = 0; i < 2; i++) {
         // Through the scope one's own head would be in the way.
         // Someone who has died on foot falls as a body from then on.
-        const bool deadOnFoot = state == NET_IN && duel.players[i].soldier.hp <= 0 && duel.players[i].vehicle < 0;
+        const bool deadOnFoot = (state == NET_IN || replaying) && duel.players[i].soldier.hp <= 0 && duel.players[i].vehicle < 0;
         if (deadOnFoot && !bodies[i].on) {
           Soldier last = i == mySlot ? me : shownSoldier[i];
           Duel::ragdollStart(bodies[i], last, i == mySlot ? in.weapon : weaponShown[i], blowShown[i]);
@@ -1487,11 +1554,11 @@ struct Game {
           }
           continue;
         }
-        const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0 || (i == mySlot && in.scoped);
-        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot ? in.weapon : weaponShown[i], i == mySlot && in.aiming && !in.scoped, ghillieShown[i]);
+        const bool hidden = (state != NET_IN && !replaying) || !playingNow || duel.players[i].vehicle >= 0 || (i == mySlot && !replaying && in.scoped);
+        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot && !replaying ? in.weapon : weaponShown[i], i == mySlot && !replaying && in.aiming && !in.scoped, ghillieShown[i]);
       }
 
-      if (state == NET_IN && now >= nextInput) {
+      if (state == NET_IN && now >= nextInput && sock) {
         nextInput = now + 1.0 / 60.0;
         out.seq++;
         sentAt.push_back({out.seq, now});
@@ -1560,7 +1627,9 @@ struct Game {
         carWatched = -1;
       }
       char msg[128] = "";
-      if (state == NET_IN && now < alertUntil) {
+      if (replaying) {
+        snprintf(msg, sizeof msg, "Replay  ·  noch %.0f s  ·  %s  ·  TAB wechselt die Sicht  ·  [ ] Tempo %d %%", lastTape.back().at - replayNow, names[mySlot].c_str(), replaySpeed.load());
+      } else if (state == NET_IN && now < alertUntil) {
         snprintf(msg, sizeof msg, "%s", alert.c_str());
       } else if (state == NET_IN) {
         const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
@@ -1617,7 +1686,8 @@ struct Game {
         phaseClock = clockNow;
         slot = mySlot;
         myVehicle = vehicleNow;
-        playing = state == NET_IN && phaseNow == Duel::PLAYING;
+        playing = (state == NET_IN || replaying) && phaseNow == Duel::PLAYING;
+        hasReplay = !lastTape.empty();
       }
       fillSnapshot(msg);
       {
@@ -1837,6 +1907,9 @@ static void runGame() {
   // What a heavy shot does to whoever fires it, as far as the eye can tell.
   double gunKick = 0;
   int kickAmmo = -1, kickWeapon = -1;
+  // In a replay: following one of the two, or flying about freely.
+  bool replayFree = false;
+  V3 freeEye;
   // Along the sights, with the right mouse button: every gun, on foot and in a tank. A short weapon just comes up to
   // the eye; the big rifle's scope is its own thing, once it is set up.
   double aimBlend = 0;
@@ -1865,6 +1938,7 @@ static void runGame() {
     }
 
     int netState, phase, slot, myVehicle;
+    bool hasReplayNow = false;
     double phaseClock;
     std::string netError;
     {
@@ -1875,8 +1949,10 @@ static void runGame() {
       slot = G.slot;
       myVehicle = G.myVehicle;
       netError = G.netError;
+      hasReplayNow = G.hasReplay;
     }
-    const bool inMatch = netState == Game::NET_IN && phase == Duel::PLAYING;
+    const bool replayOn = netState == Game::NET_REPLAY;
+    const bool inMatch = (netState == Game::NET_IN || replayOn) && phase == Duel::PLAYING;
     const bool inVehicle = inMatch && myVehicle >= 0, onFoot = inMatch && myVehicle < 0;
     const bool inTank = inVehicle && myVehicle < Duel::kTanks;
     // Nothing to do on foot before or after the match itself: one waits where one stands.
@@ -1958,12 +2034,21 @@ static void runGame() {
         panelKind = PANEL_NONE;
       });
     } else if (panelKind == PANEL_MAIN) {
-      if (netState == Game::NET_IN) {
+      if (netState == Game::NET_REPLAY) {
+        page("Weiter ansehen", [&] { panelKind = PANEL_NONE; });
+        page("Replay beenden", [&] { leave(); });
+      } else if (netState == Game::NET_IN) {
         page("Weiterspielen", [&] { panelKind = PANEL_NONE; });
         if (phase == Duel::CHOOSING) page("Ausrüstung wählen", [&] { panelKind = PANEL_LOADOUT; panelSel = 0; pickReady = false; });
         page("Spiel verlassen", [&] { leave(); });
       } else {
         page("Online spielen", [&] { openPage(PANEL_ONLINE); });
+        if (hasReplayNow) page("Letztes Match ansehen", [&] {
+          replayFree = false;
+          G.replayWatch = 0;
+          G.command = Game::CMD_REPLAY;
+          panelKind = PANEL_NONE;
+        });
       }
       page("Spiel-Einstellungen", [&] { openPage(PANEL_GAME); });
       page("Steuerung", [&] { openPage(PANEL_KEYS); });
@@ -2191,6 +2276,22 @@ static void runGame() {
         case SDL_EVENT_KEY_DOWN:
           if (e.key.repeat) break;
           switch (e.key.key) {
+            case SDLK_TAB:
+              if (replayOn) {
+                // One, the other, then free.
+                if (replayFree) {
+                  replayFree = false;
+                  G.replayWatch = 0;
+                } else if (G.replayWatch.load() == 0) {
+                  G.replayWatch = 1;
+                } else {
+                  replayFree = true;
+                  freeEye = cam.eye;
+                }
+              }
+              break;
+            case SDLK_LEFTBRACKET: if (replayOn) G.replaySpeed = std::max(25, G.replaySpeed.load() / 2); break;
+            case SDLK_RIGHTBRACKET: if (replayOn) G.replaySpeed = std::min(800, G.replaySpeed.load() * 2); break;
             case SDLK_ESCAPE:
               if (mapOpen) mapOpen = false;
               else {
@@ -2410,6 +2511,27 @@ static void runGame() {
         sprintScript = true;
         if (tNow < 4.5) rig.yaw += 1.0;  // first out past the row of vehicles
         gas = 1.0;
+      }
+    }
+    if (scriptMode == 59) {
+      // A match, then seeing it again from both sides and from above.
+      static bool left = false, watching = false;
+      if (netState == Game::NET_IN && phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      if (netState == Game::NET_IN && inMatch && !left) {
+        gas = 1.0;
+        const V3 to = G.world.base(slot).slot(1) - view.foot.p;
+        if (onFoot) rig.yaw = std::atan2(-to.y, -to.x);
+        if (onFoot && len(V3{to.x, to.y, 0}) < 4.5) sendC.use = true;
+        static double since = tNow;
+        if (tNow - since > 9.0) {
+          left = true;
+          G.command = Game::CMD_LEAVE;
+        }
+      } else if (left && netState == Game::NET_OFF && hasReplayNow && !watching) {
+        watching = true;
+        G.command = Game::CMD_REPLAY;
+        printf("Replay beginnt bei t=%.1f\n", tNow);
       }
     }
     if (scriptMode == 58 && netState == Game::NET_IN) {
@@ -2810,7 +2932,19 @@ static void runGame() {
       cam.target = view.missileP - back * 30.0;
       cam.up = {0, 0, 1};
     }
-    if (view.foot.droneLive && !mapOpen) {
+    if (replayOn && replayFree) {
+      // Flying about: where one looks, as fast as one likes.
+      const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+      const V3 right{-std::sin(rig.yaw), std::cos(rig.yaw), 0};
+      const double fly = keys[SDL_SCANCODE_LSHIFT] ? 80.0 : 25.0;
+      freeEye -= back * ((keys[SDL_SCANCODE_W] ? fly : 0.0) - (keys[SDL_SCANCODE_S] ? fly : 0.0)) * dt;
+      freeEye += right * ((keys[SDL_SCANCODE_D] ? fly : 0.0) - (keys[SDL_SCANCODE_A] ? fly : 0.0)) * dt;
+      cam.eye = freeEye;
+      cam.target = freeEye - back * 30.0;
+      cam.up = {0, 0, 1};
+      cam.inside = false;
+      cam.fovY = 62.0 * PI / 180.0;
+    } else if (view.foot.droneLive && !mapOpen) {
       // Through the drone's camera, looking where it is told to.
       const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
       cam.eye = view.foot.droneP - V3{0, 0, 0.1};

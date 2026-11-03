@@ -57,6 +57,8 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Computer:** Im Kommandozentrum des Gegners lässt sich der Hauptcomputer in 5 Sekunden anzapfen. Danach zeigt die Karte alle 30 Sekunden auf Anfrage ungefähr, wo er ist.
 
+**Replay:** Nach dem Verlassen eines Matches zeigt das Hauptmenü **Letztes Match ansehen**, aus der Sicht beider Spieler oder frei fliegend.
+
 **Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill`, `/kick`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt beiden von Anfang an alle Waffen, zum Ausprobieren.
 
 ## Steuerung
@@ -84,6 +86,7 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 | Beim Gegner anzapfen, dann Standort abfragen (alle 30 s) | E am Computer, J | – |
 | Visier auf Entfernung einstellen | Pfeil hoch, runter | – |
 | Chat | Enter | – |
+| Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | – |
 | Screenshot | F12 | – |
 
 ## Aufbau
