@@ -63,10 +63,31 @@ double yardBlend(double x, double y) {
 double arenaTerrain(double x, double y) {
   // Long rolling ground, and a few real hills between the bases.
   double h = 19.0 + 13.0 * vnoise(x / 260.0 + 3.1, y / 260.0 - 7.7) + 4.5 * vnoise(x / 90.0, y / 90.0 + 11.0) + 0.5 * vnoise(x / 23.0 + 5.0, y / 23.0);
-  static constexpr double kHills[6][4] = {{-210, 300, 190, 46}, {240, -310, 210, 52}, {-40, -60, 130, 22}, {430, 330, 170, 38}, {-470, -330, 180, 40}, {60, 560, 200, 34}};
+  // {x, y, radius, height}: big ones to go round, and many small ones a tank can just about hide behind.
+  static constexpr double kHills[22][4] = {
+      {-210, 300, 190, 46}, {240, -310, 210, 52}, {-40, -60, 130, 22}, {430, 330, 170, 38}, {-470, -330, 180, 40}, {60, 560, 200, 34},
+      {-560, 210, 70, 13}, {-420, 90, 60, 11}, {-280, -170, 65, 12}, {-150, 170, 55, 10}, {130, -120, 60, 11}, {300, 130, 70, 13},
+      {520, -160, 65, 12}, {590, 130, 55, 10}, {-610, -130, 60, 11}, {-330, 500, 75, 15}, {330, -520, 75, 15}, {130, 300, 60, 11},
+      {-110, -320, 70, 13}, {470, -360, 60, 10}, {-500, 560, 80, 16}, {560, 520, 80, 16},
+  };
   for (const auto& hill : kHills) {
     const double d = std::hypot(x - hill[0], y - hill[1]) / hill[2];
     if (d < 1.0) h += hill[3] * std::pow(1.0 - d * d, 2.0);
+  }
+  // Earth banks along the fields, as long as a street and higher than a tank: {x0, y0, x1, y1}.
+  static constexpr double kBanks[14][4] = {
+      {-640, 34, -640, 92}, {640, 34, 640, 92}, {-500, 110, -400, 190}, {-500, -110, -400, -190}, {400, 190, 500, 110}, {400, -190, 500, -110},
+      {-250, -80, -190, 30}, {190, -30, 250, 80}, {-260, 150, -150, 110}, {150, -110, 260, -150}, {-80, 170, 70, 200}, {-70, -190, 80, -170},
+      {-330, -330, -220, -420}, {220, 420, 330, 330},
+  };
+  for (const auto& bank : kBanks) {
+    const double dx = bank[2] - bank[0], dy = bank[3] - bank[1];
+    const double t = clampd(((x - bank[0]) * dx + (y - bank[1]) * dy) / (dx * dx + dy * dy), 0, 1);
+    const double d = std::hypot(x - (bank[0] + dx * t), y - (bank[1] + dy * t)) / 11.0;
+    if (d < 1.0) {
+      const double ends = smoothstepd(0.0, 0.12, t) * smoothstepd(0.0, 0.12, 1.0 - t);
+      h += 4.6 * ends * std::pow(1.0 - d * d, 1.5);
+    }
   }
   // The rim. It starts gently, so that it looks like land, and ends far too steep to drive.
   const double out = std::max({std::fabs(x), std::fabs(y)}) - 820.0;
@@ -708,6 +729,8 @@ void World::buildArena() {
       for (int i = 1; i < n; i++) z[size_t(i)] = clampd(z[size_t(i)], z[size_t(i - 1)] - kGrade, z[size_t(i - 1)] + kGrade);
       for (int i = n - 2; i >= 0; i--) z[size_t(i)] = clampd(z[size_t(i)], z[size_t(i + 1)] - kGrade, z[size_t(i + 1)] + kGrade);
     }
+    // Into a yard it comes at the yard's own height.
+    for (int i = 0; i < n; i++) z[size_t(i)] = lerpd(z[size_t(i)], kYardZ, yardBlend(pts[size_t(i)].x, pts[size_t(i)].y));
     // Over a river the way runs dead level, from bank to bank and a little beyond, well clear of the water.
     for (int i = 1; i < n; i++) {
       const double a = pts[size_t(i - 1)].x - riverX(pts[size_t(i - 1)].y), b = pts[size_t(i)].x - riverX(pts[size_t(i)].y);
@@ -738,7 +761,7 @@ void World::buildArena() {
       const double d = dist[id];
       const double blend = 1.0 - smoothstepd(0.0, 13.0, d);
       const double yard = yardBlend(x, y);
-      h_[id] = float(lerpd(lerpd(arenaTerrain(x, y), double(roadH[id]), blend), kYardZ, yard > 0.98 ? 1.0 : yard * yard));
+      h_[id] = float(yard > 0.98 ? kYardZ : lerpd(arenaTerrain(x, y), double(roadH[id]), blend));
       const bool flatYard = (std::fabs(std::fabs(x) - kBaseX) < kYardHalfX && std::fabs(y) < kYardHalfY);
       if (flatYard) surf_[id] = SURF_CONCRETE;
       else if (onTrail[id] && d < 1.6) surf_[id] = SURF_GRAVEL;
@@ -748,6 +771,9 @@ void World::buildArena() {
       if (h_[id] > 215.0 + vnoise(x / 31.0, y / 31.0 + 8.0) * 20.0) surf_[id] = SURF_SNOW;
     }
 
+  // What is drawn as road lies exactly on the ground the wheels roll on, wherever that was changed around it.
+  for (Road& r : roads_)
+    for (RoadPoint& p : r.pts) p.z = height(p.x, p.y);
   // The river is cut last, through whatever land and roads lie in its way. Where a road crosses it stands a bridge.
   for (int iy = 0; iy < N; iy++)
     for (int ix = 0; ix < N; ix++) {
@@ -857,15 +883,41 @@ void World::buildArena() {
   for (const auto& w : wrecks) wreckSites_.push_back({w[0], w[1], height(w[0], w[1])});
 
   // Woods in clumps, the only cover there is besides the hills. Each tree is a soft body, so there are not too many.
-  constexpr int kClumps = 26;
+  constexpr int kClumps = 95;
   for (int c = 0; c < kClumps; c++) {
-    const double cx = rnd(-790, 790), cy = rnd(-790, 790), radius = rnd(25, 75);
-    const int count = int(radius * 0.32);
+    const double cx = rnd(-790, 790), cy = rnd(-790, 790), radius = rnd(22, 85);
+    const int count = int(radius * 0.42);
     for (int n = 0; n < count; n++) {
       const double a = rnd(0, 6.283), r = radius * std::sqrt(rnd(0, 1));
       const double x = cx + std::cos(a) * r, y = cy + std::sin(a) * r;
       if (std::max(std::fabs(x), std::fabs(y)) > 830.0 || nearRoad(x, y, 5.0) || nearBase(x, y, 70.0) || nearSite(x, y, 14.0) || inTheWay(x, y, 5.0)) continue;
       trees_.push_back({x, y, height(x, y)});
+    }
+  }
+
+  // Hedgerows: lines of trees across the open ground, so that nobody can see from one end of a field to the other.
+  constexpr int kRows = 46;
+  for (int c = 0; c < kRows; c++) {
+    const double cx = rnd(-760, 760), cy = rnd(-760, 760), a = rnd(0, 3.1416), length = rnd(50, 170);
+    const int count = int(length / 6.5);
+    for (int n = 0; n < count; n++) {
+      const double t = (double(n) / count - 0.5) * length;
+      const double x = cx + std::cos(a) * t + rnd(-1.5, 1.5), y = cy + std::sin(a) * t + rnd(-1.5, 1.5);
+      if (std::max(std::fabs(x), std::fabs(y)) > 830.0 || nearRoad(x, y, 5.0) || nearBase(x, y, 70.0) || nearSite(x, y, 14.0) || inTheWay(x, y, 5.0)) continue;
+      trees_.push_back({x, y, height(x, y)});
+    }
+  }
+
+  // Outcrops of big rock: cover that stays, until something hits it hard.
+  constexpr int kOutcrops = 42;
+  for (int c = 0; c < kOutcrops; c++) {
+    const double cx = rnd(-720, 720), cy = rnd(-720, 720);
+    if (nearRoad(cx, cy, 10.0) || nearBase(cx, cy, 90.0) || nearSite(cx, cy, 18.0) || inTheWay(cx, cy, 10.0)) continue;
+    const float g = float(rnd(0.3, 0.44));
+    const int pieces = 3 + int(rnd(0, 4));
+    for (int n = 0; n < pieces; n++) {
+      const double x = cx + rnd(-5, 5), y = cy + rnd(-5, 5), size = rnd(1.6, 3.6);
+      addBox({x, y, height(x, y) + size * 0.45}, {size * rnd(0.8, 1.3), size * rnd(0.7, 1.2), size * rnd(0.8, 1.2)}, rnd(0, 3.1), rnd(-0.2, 0.2), SURF_ROCK, g, g * 0.97f, g * 0.92f);
     }
   }
 

@@ -596,17 +596,20 @@ bool Tank::pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at) const {
   const double dl2 = std::max(len2(d), 1e-9);
   const u32 ownFirst = sim.objs[hullObj].nodeStart;
   const u32 ownEnd = sim.objs[turretObj].nodeStart + sim.objs[turretObj].nodeCount;
-  const u32 n = u32(sim.pos.size());
-  for (u32 k = 0; k < n; k++) {
-    if (skipOwn && k == ownFirst) {
-      k = ownEnd - 1;
-      continue;
-    }
-    const V3 r = sim.pos[k] - a;
-    const double t = clampd(dot(r, d) / dl2, 0, 1);
-    if (len2(r - d * t) < 0.25) {
-      at = a + d * t;
-      return true;
+  // Bounds first: they may be a moment old, so with something to spare. Most of the world is nowhere near.
+  constexpr double kSpare = 2.5;
+  const V3 lo{std::min(a.x, b.x) - kSpare, std::min(a.y, b.y) - kSpare, std::min(a.z, b.z) - kSpare};
+  const V3 hi{std::max(a.x, b.x) + kSpare, std::max(a.y, b.y) + kSpare, std::max(a.z, b.z) + kSpare};
+  for (const Obj& o : sim.objs) {
+    if (o.bbMin.x > hi.x || o.bbMax.x < lo.x || o.bbMin.y > hi.y || o.bbMax.y < lo.y || o.bbMin.z > hi.z || o.bbMax.z < lo.z) continue;
+    for (u32 k : o.nodes) {
+      if (skipOwn && k >= ownFirst && k < ownEnd) continue;
+      const V3 r = sim.pos[k] - a;
+      const double t = clampd(dot(r, d) / dl2, 0, 1);
+      if (len2(r - d * t) < 0.25) {
+        at = a + d * t;
+        return true;
+      }
     }
   }
   return false;
