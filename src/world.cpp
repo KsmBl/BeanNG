@@ -90,10 +90,11 @@ double arenaTerrain(double x, double y) {
     }
   }
   // The rim. It starts gently, so that it looks like land, and ends far too steep to drive.
-  const double out = std::max({std::fabs(x), std::fabs(y)}) - 820.0;
+  // Past the map's edge it stays up there, as a ridge with peaks on it: nobody gets to see behind it.
+  const double out = std::min(std::max({std::fabs(x), std::fabs(y)}) - 820.0, 240.0);
   if (out > 0) {
     const double t = out / 200.0;
-    h += 300.0 * t * t * (1.0 + 0.15 * vnoise(x / 70.0, y / 70.0));
+    h += 300.0 * t * t * (1.0 + 0.15 * vnoise(x / 70.0, y / 70.0)) + 90.0 * t * (0.5 + 0.5 * vnoise(x / 150.0 + 40.0, y / 150.0 - 11.0));
   }
   const double yard = yardBlend(x, y);
   return lerpd(h, kYardZ, yard);

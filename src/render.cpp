@@ -39,6 +39,8 @@ Mat4 lookAt(V3 eye, V3 target, V3 up) {
   r.m[15] = 1;
   return r;
 }
+// As much depth precision as a 24-bit buffer can give at kilometres, and far enough to reach the mountains.
+constexpr double kZNear = 0.3, kZFar = 4200.0;
 Mat4 perspective(double fovy, double aspect, double zn, double zf) {
   const double f = 1.0 / std::tan(fovy * 0.5);
   Mat4 r;
@@ -555,9 +557,9 @@ struct Renderer::Impl {
     GLuint vao = 0, vbo = 0, ibo = 0;
     GLsizei count = 0;
     V3 center;
-    int cx = 0, cy = 0, lod = 0;
+    int cx = 0, cy = 0;
   };
-  std::vector<Chunk> chunks[2];  // near/far LOD
+  std::vector<Chunk> chunks;
   GLuint staticVao = 0, staticVbo = 0;
   GLsizei staticCount = 0;  // roads, markings and static boxes
   u32 builtBoxGeneration = 0;
@@ -1041,23 +1043,21 @@ struct Renderer::Impl {
   void buildTerrain() {
     constexpr int kChunk = 64;
     const int N = World::N;
-    for (int lod = 0; lod < 2; lod++)
-      for (int cy = 0; cy + kChunk < N; cy += kChunk)
-        for (int cx = 0; cx + kChunk < N; cx += kChunk) {
-          Chunk ch;
-          ch.lod = lod;
-          ch.cx = cx;
-          ch.cy = cy;
-          buildChunk(ch);
-          chunks[lod].push_back(ch);
-        }
+    for (int cy = 0; cy + kChunk < N; cy += kChunk)
+      for (int cx = 0; cx + kChunk < N; cx += kChunk) {
+        Chunk ch;
+        ch.cx = cx;
+        ch.cy = cy;
+        buildChunk(ch);
+        chunks.push_back(ch);
+      }
   }
   // The land beyond the map: the same hills as the physics, on a coarser grid, slipping just under the edge
   // of the detailed terrain so that no gap can open between the two.
   GLuint outerVao = 0, outerVbo = 0, outerIbo = 0;
   GLsizei outerCount = 0;
   void buildOuter() {
-    constexpr double kStep = 16.0, kFar = 3300.0;
+    constexpr double kStep = 16.0, kFar = 3328.0;  // the grid meets the map's edge exactly
     const int n = int(2.0 * kFar / kStep) + 1;
     std::vector<Vtx> v(size_t(n) * n);
     std::vector<u32> idx;
@@ -1065,7 +1065,7 @@ struct Renderer::Impl {
       for (int i = 0; i < n; i++) {
         const double x = -kFar + i * kStep, y = -kFar + j * kStep;
         const bool under = std::fabs(x) < World::kHalf && std::fabs(y) < World::kHalf;
-        const double z = world->outerHeight(x, y) - (under ? 0.3 : 0.0);
+        const double z = world->outerHeight(x, y) - (under ? 2.0 : 0.0);
         const double e = 8.0;
         const V3 nr = norm({world->outerHeight(x - e, y) - world->outerHeight(x + e, y), world->outerHeight(x, y - e) - world->outerHeight(x, y + e), 2.0 * e});
         const u32 h = u32(i) * 374761393u + u32(j) * 668265263u;
@@ -1077,16 +1077,18 @@ struct Renderer::Impl {
         q.nx = float(nr.x);
         q.ny = float(nr.y);
         q.nz = float(nr.z);
-        q.r = U8(.12f + t * .05f);
-        q.g = U8(.24f + t * .07f);
-        q.b = U8(.07f + t * .03f);
+        // Bare rock and snow up where the map's own mountains have them.
+        q.r = U8(z > 215.0 ? .85f : (z > 95.0 ? .42f + t * .05f : .12f + t * .05f));
+        q.g = U8(z > 215.0 ? .87f : (z > 95.0 ? .40f + t * .05f : .24f + t * .07f));
+        q.b = U8(z > 215.0 ? .90f : (z > 95.0 ? .37f + t * .05f : .07f + t * .03f));
         q.a = 0;
       }
     for (int j = 0; j + 1 < n; j++)
       for (int i = 0; i + 1 < n; i++) {
         const double x0 = -kFar + i * kStep, y0 = -kFar + j * kStep;
-        // Nothing where the detailed terrain covers it completely.
-        if (x0 > -World::kHalf + kStep && x0 + kStep < World::kHalf - kStep && y0 > -World::kHalf + kStep && y0 + kStep < World::kHalf - kStep) continue;
+        // Nothing where the detailed terrain lies: two surfaces at the same height, this far off, would fight
+        // over every pixel.
+        if (x0 >= -World::kHalf && x0 + kStep <= World::kHalf && y0 >= -World::kHalf && y0 + kStep <= World::kHalf) continue;
         const u32 a = u32(j * n + i), b = a + 1, c = a + u32(n), d = c + 1;
         idx.insert(idx.end(), {a, b, c, b, d, c});
       }
@@ -1104,8 +1106,8 @@ struct Renderer::Impl {
   void buildChunk(Chunk& ch) {
     constexpr int kChunk = 64;
     const int N = World::N;
-    const int lod = ch.lod, cx = ch.cx, cy = ch.cy;
-    const int step = lod == 0 ? 1 : 4;
+    const int cx = ch.cx, cy = ch.cy;
+    constexpr int step = 1;
     {
       {
         {
@@ -1140,7 +1142,7 @@ struct Renderer::Impl {
               // Same diagonal as World::height so that the wheels sit on what is drawn.
               idx.insert(idx.end(), {a, b, c, b, d, c});
             }
-          // Skirt hides the cracks between LODs.
+          // The land beyond the map is on a coarser grid: a skirt along the map's edge hides any crack to it.
           auto skirt = [&](int ax, int ay, int dx, int dy) {
             const u32 base = u32(v.size());
             for (int k = 0; k < n; k++) v.push_back(vert(cx + (ax + dx * k) * step, cy + (ay + dy * k) * step, -2.5f));
@@ -1150,12 +1152,10 @@ struct Renderer::Impl {
               idx.insert(idx.end(), {top0, top1, base + u32(k), top1, base + u32(k) + 1, base + u32(k)});
             }
           };
-          if (lod == 1) {
-            skirt(0, 0, 1, 0);
-            skirt(0, n - 1, 1, 0);
-            skirt(0, 0, 0, 1);
-            skirt(n - 1, 0, 0, 1);
-          }
+          if (cy == 0) skirt(0, 0, 1, 0);
+          if (cy + kChunk == N - 1) skirt(0, n - 1, 1, 0);
+          if (cx == 0) skirt(0, 0, 0, 1);
+          if (cx + kChunk == N - 1) skirt(n - 1, 0, 0, 1);
           ch.count = GLsizei(idx.size());
           ch.center = {cx + kChunk * 0.5 - World::kHalf, cy + kChunk * 0.5 - World::kHalf, world->gridHeight(cx + kChunk / 2, cy + kChunk / 2)};
           if (!ch.vao) {
@@ -1179,8 +1179,7 @@ struct Renderer::Impl {
   std::vector<World::Crater> cratersKnown;
   void rebuildAround(const World::Crater& c) {
     const double reach = c.r * 1.5 + 2.0;
-    for (auto& list : chunks)
-      for (Chunk& ch : list) {
+    for (Chunk& ch : chunks) {
         const double x0 = ch.cx - World::kHalf, y0 = ch.cy - World::kHalf;
         if (c.x + reach < x0 - 1 || c.x - reach > x0 + 65 || c.y + reach < y0 - 1 || c.y - reach > y0 + 65) continue;
         buildChunk(ch);
@@ -1700,14 +1699,18 @@ struct Renderer::Impl {
     return m;
   }
 
-  void updateProps(const Snapshot& s, const V3& camPos) {
-    propVerts.clear();
-    constexpr double kDraw2 = 1000.0 * 1000.0;
+  V3 propPrint{1e30, 0, 0};
+  void updateProps(const Snapshot& s, const V3&) {
     const u32 firstProp = std::max(sim->firstSceneryNode, sim->objs[0].nodeCount);
+    // Everything out there is drawn wherever it is, so most of the time nothing has to be redone at all.
+    V3 print{};
+    for (size_t i = firstProp; i < s.pos.size(); i++) print += s.pos[i];
+    if (print.x == propPrint.x && print.y == propPrint.y && print.z == propPrint.z) return;
+    propPrint = print;
+    propVerts.clear();
     for (const Tri& t : sim->tris) {
       if ((t.flags & TF_NOVIS) || t.a < firstProp) continue;
       const V3& a = s.pos[t.a];
-      if (len2(a - camPos) > kDraw2) continue;
       const V3& b = s.pos[t.b];
       const V3& c = s.pos[t.c];
       // Hide triangles whose beams have torn.
@@ -2912,7 +2915,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   auto tp2 = std::chrono::steady_clock::now();
   D.updateProps(s, cam.eye);
   D.updateTrack(s);
-  D.camVP = mul(perspective(cam.fovY, double(w) / double(h), 0.12, 2500.0), lookAt(cam.eye, cam.target, cam.up));
+  D.camVP = mul(perspective(cam.fovY, double(w) / double(h), kZNear, kZFar), lookAt(cam.eye, cam.target, cam.up));
   auto tp3 = std::chrono::steady_clock::now();
   D.stepParticles(dt);
   D.addSkidMarks(s);
@@ -2921,7 +2924,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
 
   // Eye-relative view would be more precise, but +-500 m with 1 mm float steps is good enough.
   const Mat4 view = lookAt(cam.eye, cam.target, cam.up);
-  const Mat4 proj = perspective(cam.fovY, double(w) / double(h), 0.12, 2500.0);
+  const Mat4 proj = perspective(cam.fovY, double(w) / double(h), kZNear, kZFar);
   const Mat4 vp = mul(proj, view);
   D.updateMotion(s, cam, proj, dt);
   D.ensureTargets(w, h);
@@ -3114,14 +3117,12 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     if (nc > 0) glUniform3fv(glGetUniformLocation(D.progMesh, "uCraters"), nc, cv);
   }
 
-  // Terrain chunks by distance, with the far LOD beyond 220 m.
+  // The terrain, at full detail everywhere. Only what lies behind the camera is left out.
   const V3 viewDir = norm(cam.target - cam.eye);
-  for (size_t i = 0; i < D.chunks[0].size(); i++) {
-    const V3 c = D.chunks[0][i].center;
-    const V3 toC = c - cam.eye;
+  for (const Impl::Chunk& ch : D.chunks) {
+    const V3 toC = ch.center - cam.eye;
     const double dist = len(toC);
-    if (dist > 90.0 && dot(toC, viewDir) / dist < 0.2) continue;  // cheap view culling
-    const Impl::Chunk& ch = dist < 220.0 ? D.chunks[0][i] : D.chunks[1][i];
+    if (dist > 90.0 && dot(toC, viewDir) / dist < 0.2) continue;
     glBindVertexArray(ch.vao);
     glDrawElements(GL_TRIANGLES, ch.count, GL_UNSIGNED_INT, nullptr);
   }
@@ -3237,8 +3238,8 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glUniform1i(glGetUniformLocation(D.progPost, "uDepth"), 2);
   glUniform2f(glGetUniformLocation(D.progPost, "uRes"), float(w), float(h));
   glUniform1f(glGetUniformLocation(D.progPost, "uBlur"), hud.motionBlur ? 1.f : 0.f);
-  glUniform1f(glGetUniformLocation(D.progPost, "uNear"), 0.12f);
-  glUniform1f(glGetUniformLocation(D.progPost, "uFar"), 2500.f);
+  glUniform1f(glGetUniformLocation(D.progPost, "uNear"), float(kZNear));
+  glUniform1f(glGetUniformLocation(D.progPost, "uFar"), float(kZFar));
   glUniform1f(glGetUniformLocation(D.progPost, "uVignette"), hud.motionBlur ? float(0.28 * clampd((std::fabs(s.speedKmh) - 60.0) / 170.0, 0, 1)) : 0.f);
   D.flash *= float(std::exp(-dt * 9.0));
   glUniform1f(glGetUniformLocation(D.progPost, "uFlash"), D.flash * 0.75f);
@@ -3269,7 +3270,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
 }
 
 int Renderer::pickNode(const Snapshot& s, const Camera& cam, int w, int h, double mx, double my, double maxPx) const {
-  const Mat4 vp = mul(perspective(cam.fovY, double(w) / double(h), 0.12, 2500.0), lookAt(cam.eye, cam.target, cam.up));
+  const Mat4 vp = mul(perspective(cam.fovY, double(w) / double(h), kZNear, kZFar), lookAt(cam.eye, cam.target, cam.up));
   const u32 n = d->sim->objs[0].nodeCount;
   int best = -1;
   double bestD = maxPx * maxPx;

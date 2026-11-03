@@ -2207,6 +2207,17 @@ static void runGame() {
       panelKind = shotCount == 7 ? int(PANEL_NONE) : int(PANEL_NONE);
       hud.panel.open = false;
     }
+    if (scriptMode == 47) {
+      // Looking at the mountains over the map's edge while turning very slowly: anything that flickers shows up as a
+      // difference between one picture and the next.
+      panelKind = PANEL_NONE;
+      hud.panel.open = false;
+      cam.eye = V3{-300, -150, 60};
+      const double a = 2.4 + 0.0004 * double(shotCount);
+      cam.target = cam.eye + V3{std::cos(a), std::sin(a), 0.03} * 100.0;
+      cam.up = {0, 0, 1};
+      cam.fovY = 45.0 * PI / 180.0;
+    }
     if (scriptMode == 44) {
       panelKind = PANEL_NONE;
       hud.panel.open = false;
@@ -2247,8 +2258,8 @@ static void runGame() {
         renderer.savePng(path, w, h);
         printf("fps %.0f t=%.1f v=%.0f km/h pos %.0f %.0f %.1f Phase %d Fahrzeug %d Munition %d Leben %.0f\n", hud.fps, tNow, view.speedKmh, view.carCog.x, view.carCog.y, view.carCog.z, phase, myVehicle, view.tankAmmo, view.foot.hp);
         fflush(stdout);
-        nextShot += 1.0;
-        const int enough = scriptMode == 43 ? 7 : (scriptMode == 44 ? 2 : 60);
+        nextShot += scriptMode == 47 ? 0.3 : 1.0;
+        const int enough = scriptMode == 43 ? 7 : (scriptMode == 44 ? 2 : (scriptMode == 47 ? 6 : 60));
         if (shotCount >= enough) quit = true;
       }
     }
