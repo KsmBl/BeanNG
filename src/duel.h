@@ -23,6 +23,29 @@ inline int slotsUsed(const u8 items[IT_COUNT]) {
   return n;
 }
 
+// The player when not inside anything: a point with a body drawn around it, moved kinematically.
+struct Soldier {
+  V3 p;     // the feet
+  V3 v;
+  double yaw = 0, pitch = 0;  // where the camera looks; yaw as the camera's, in the world
+  double hp = 100;
+  double stride = 0;          // how far the legs have walked, for drawing them
+  bool grounded = true;
+  static constexpr double kRadius = 0.32, kHeight = 1.8;
+};
+struct WalkInput {
+  double forward = 0, strafe = 0;  // -1..1; strafe positive to the left
+  double yaw = 0;
+  bool jump = false, sprint = false;
+};
+
+// Where a vehicle is, as far as those on foot are concerned. The same on the server and on a player's machine.
+struct VehicleFrame {
+  V3 cog, fwd{1, 0, 0}, left{0, 1, 0}, up{0, 0, 1};
+  double speed = 0;
+  double halfLength = 2.3, halfWidth = 1.0, height = 1.6;
+};
+
 class Duel {
  public:
   static constexpr double kDt = 1.0 / 2000.0;
@@ -37,9 +60,19 @@ class Duel {
 
   struct Player {
     bool present = false, ready = false;
-    int turret = TK_STANDARD;
     u8 items[IT_COUNT] = {};
-    int tank = -1;  // which of the tanks is theirs, once the match runs
+    Soldier soldier;
+    int vehicle = -1;  // what they sit in, -1 on foot
+    double walkDebt = 0;
+    u32 lastInput = 0;  // the input the soldier has last been moved by, for the player's prediction
+  };
+  // What a player does this step beyond the pedals of a vehicle.
+  struct Intent {
+    Controls c;
+    WalkInput walk;
+    double pitch = 0;
+    bool use = false;  // E: get in, get out
+    u32 seq = 0;
   };
 
   World world;
@@ -49,7 +82,13 @@ class Duel {
   CarRig rigs[kVehicles];
   V3 spawn[kVehicles];
   double yaw[kVehicles] = {};
-  u32 tankFirst[kTanks] = {}, tankNodes = 0, tanksEnd = 0;
+  u32 tankFirst[kTanks] = {}, tankNodes = 0, tanksEnd = 0, carsEnd = 0;
+  u32 carFirst[kCars] = {};
+  VehicleFrame frames[kVehicles];
+  // Eight nodes each, which only ever get drawn: a soldier is not part of the soft body world.
+  static constexpr int kSoldierNodes = 8;
+  u32 soldierFirst[2] = {};
+  size_t blastsDone = 0;
 
   Player players[2];
   Phase phase = WAITING;
@@ -61,12 +100,25 @@ class Duel {
 
   // Tanks first, then cars, then the scenery. Every machine ends up with the same node at the same index.
   void build();
-  void step(const Controls in[2]);
+  void step(const Intent in[2]);
+  void updateFrames();
+  static void poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon);
+  V3 vehicleExit(int v) const;
+  int nearestVehicle(V3 p, double reach) const;
+  bool occupied(int v) const { return players[0].vehicle == v || players[1].vehicle == v; }
+  bool vehicleDead(int v) const { return v < kTanks ? tanks[v].destroyed : cars[size_t(v - kTanks)].exploded; }
+  // Moves a soldier one time step. Used by the server, and by a player's own machine to answer at once.
+  void walk(Soldier& s, const WalkInput& in, double dt) const;
+  static constexpr double kWalkDt = 0.01;
   void restart();
-  bool choose(int player, int turret, const u8 items[IT_COUNT], bool ready);  // false if it does not fit
+  void placePlayers();
+  bool choose(int player, const u8 items[IT_COUNT], bool ready);  // false if it does not fit
   static int tankIndex(int side, int turret) { return side * TK_COUNT + turret; }
   void drainEvents(std::vector<SimEvent>& out);
 
  private:
   void startMatch();
+  void stepPlayers(const Intent in[2]);
+  void boardVehicle(int p, int v);
+  void leaveVehicle(int p);
 };

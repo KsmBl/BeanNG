@@ -26,7 +26,7 @@ struct Client {
   InputMsg in;
   bool haveInput = false;
   // One-shot controls, each seen once however many packets carry the same count.
-  bool fire = false, launch = false, repair = false;
+  bool fire = false, launch = false, repair = false, use = false;
   // Scenery that has moved, as far as this player has been told, and where the slow sweep has got to.
   std::vector<float> told;
   u32 sweep = 0;
@@ -129,6 +129,7 @@ int main(int argc, char** argv) {
           if (m.fireCount != c.in.fireCount) c.fire = true;
           if (m.launchCount != c.in.launchCount) c.launch = true;
           if (m.repairCount != c.in.repairCount) c.repair = true;
+          if (m.useCount != c.in.useCount) c.use = true;
         }
         c.in = m;
         c.haveInput = true;
@@ -136,7 +137,7 @@ int main(int argc, char** argv) {
           // A loadout that does not fit is simply not taken: the client knows the rules, a cheat gets nothing.
           u8 items[IT_COUNT];
           for (int k = 0; k < IT_COUNT; k++) items[k] = m.items[k];
-          duel->choose(slot, m.turret, items, m.ready != 0);
+          duel->choose(slot, items, m.ready != 0);
         }
       } else if (slot >= 0 && kind == P_BYE) {
         u32 token = 0;
@@ -174,6 +175,38 @@ int main(int argc, char** argv) {
     sock.send(w.data(), w.size(), to);
   };
 
+  const auto sendCar = [&](const Addr& to, int k) {
+    const u32 first = duel->carFirst[k];
+    const u32 end = k + 1 < Duel::kCars ? duel->carFirst[k + 1] : duel->carsEnd;
+    const VehicleFrame& f = duel->frames[Duel::kTanks + k];
+    const Vehicle& v = duel->cars[size_t(k)];
+    constexpr u32 kPerPacket = 160;
+    for (u32 at = first; at < end; at += kPerPacket) {
+      const u32 count = std::min(end - at, kPerPacket);
+      Writer w(P_CAR);
+      w.put(tick);
+      w.put(duel->matchId);
+      w.put(u8(k));
+      w.putV3(f.cog);
+      w.putV3(f.fwd);
+      w.putV3(f.left);
+      w.putV3(f.up);
+      w.put(float(f.speed));
+      w.put(float(v.rpm()));
+      w.put(i8(v.gear));
+      w.put(u8(v.exploded ? 1 : 0));
+      w.put(at - first);
+      w.put(u16(count));
+      for (u32 n = at; n < at + count; n++) {
+        const V3 d = duel->sim.pos[n] - f.cog;
+        w.put(packOffset(d.x));
+        w.put(packOffset(d.y));
+        w.put(packOffset(d.z));
+      }
+      sock.send(w.data(), w.size(), to);
+    }
+  };
+
   const auto sendMeta = [&](const Client& c, int slot) {
     Writer w(P_META);
     w.put(tick);
@@ -184,8 +217,16 @@ int main(int argc, char** argv) {
     w.put(duel->wins[1]);
     w.put(float(duel->phaseClock));
     w.put(u8((clients[0].used ? 1 : 0) | (clients[1].used ? 2 : 0) | (duel->players[0].ready ? 4 : 0) | (duel->players[1].ready ? 8 : 0)));
-    w.put(i8(duel->players[0].tank));
-    w.put(i8(duel->players[1].tank));
+    for (const Duel::Player& pl : duel->players) {
+      w.put(i8(pl.vehicle));
+      w.putV3(pl.soldier.p);
+      w.putV3(pl.soldier.v);
+      w.put(float(pl.soldier.yaw));
+      w.put(float(pl.soldier.pitch));
+      w.put(float(pl.soldier.hp));
+      w.put(float(pl.soldier.stride));
+    }
+    w.put(duel->players[slot].lastInput);
     // Blasts stay in the packet until the player says they have gone off there.
     const auto& log = duel->sim.blastLog;
     const u32 ack = c.in.ackMatch == duel->matchId ? c.in.ackBlasts : 0;
@@ -207,12 +248,11 @@ int main(int argc, char** argv) {
       w.put(u8(events[i].kind));
     }
     sock.send(w.data(), w.size(), c.addr);
-    (void)slot;
   };
 
   const auto sendScenery = [&](Client& c) {
     const Sim& s = duel->sim;
-    const u32 first = duel->tanksEnd;  // tanks go whole, in their own packets
+    const u32 first = s.firstSceneryNode;  // vehicles go whole, in their own packets
     const u32 n = u32(s.pos.size());
     std::vector<u32> moved;
     const auto farFromTold = [&](u32 k) {
@@ -271,24 +311,33 @@ int main(int argc, char** argv) {
     const auto q0 = Clock::now();
     int done = 0;
     while (simTime < t - wall0 && done < 40) {
-      Controls in[2];
+      Duel::Intent in[2];
       for (int i = 0; i < 2; i++) {
         Client& c = clients[i];
         if (!c.used || !c.haveInput) {
-          in[i].brake = 1;
+          in[i].c.brake = 1;
           continue;
         }
-        in[i].steer = c.in.steer;
-        in[i].throttle = c.in.throttle;
-        in[i].brake = c.in.brake;
-        in[i].handbrake = c.in.handbrake;
-        in[i].aimPoint = c.in.aim;
-        in[i].indirect = c.in.indirect;
-        if (c.in.requestGear == 1 || c.in.requestGear == -1) in[i].requestGear = c.in.requestGear;
-        in[i].launch = c.launch;
-        in[i].repair = c.repair;
-        in[i].fire = c.fire;
-        c.fire = c.launch = c.repair = false;
+        Controls& k = in[i].c;
+        k.steer = c.in.steer;
+        k.throttle = c.in.throttle;
+        k.brake = c.in.brake;
+        k.handbrake = c.in.handbrake;
+        k.aimPoint = c.in.aim;
+        k.indirect = c.in.indirect;
+        if (c.in.requestGear == 1 || c.in.requestGear == -1) k.requestGear = c.in.requestGear;
+        k.launch = c.launch;
+        k.repair = c.repair;
+        k.fire = c.fire;
+        in[i].use = c.use;
+        in[i].seq = c.in.seq;
+        in[i].pitch = c.in.pitch;
+        in[i].walk.forward = c.in.throttle - c.in.brake;
+        in[i].walk.strafe = c.in.steer;
+        in[i].walk.yaw = c.in.yaw;
+        in[i].walk.jump = c.in.handbrake > 0.5;
+        in[i].walk.sprint = c.in.sprint;
+        c.fire = c.launch = c.repair = c.use = false;
       }
       for (int i = 0; i < 2; i++) duel->players[i].present = clients[i].used;
       duel->step(in);
@@ -335,7 +384,12 @@ int main(int argc, char** argv) {
         // The tanks in play every time, and now and then the others, should a packet have gone astray.
         for (int k = 0; k < Duel::kTanks; k++) {
           const Tank& t = duel->tanks[k];
-          if (duel->players[0].tank == k || duel->players[1].tank == k || duel->sim.objs[t.hullObj].awake || duel->sim.objs[t.turretObj].awake || int(tick % 15) == k) sendTank(c.addr, k);
+          if (duel->occupied(k) || duel->sim.objs[t.hullObj].awake || duel->sim.objs[t.turretObj].awake || int(tick % 15) == k) sendTank(c.addr, k);
+        }
+        // Cars, in as many pieces as it takes, while they move and now and then otherwise.
+        for (int k = 0; k < Duel::kCars; k++) {
+          const Vehicle& v = duel->cars[size_t(k)];
+          if (duel->sim.objs[v.obj].awake || int((tick + 7) % 60) == k) sendCar(c.addr, k);
         }
         sendScenery(c);
       }

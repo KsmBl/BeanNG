@@ -2228,7 +2228,10 @@ struct Renderer::Impl {
         ry += 28 * u;
       };
       const float gx = x + 344 * u, gy = y + 62 * u, gr = 40 * u;
-      if (!s.tank) {
+      if (s.foot.inCar) {
+        snprintf(buf, sizeof buf, "%.0f %%", s.foot.hp);
+        row(IC_ENGINE, "Gesundheit", float(s.foot.hp / 100.0), s.foot.hp < 34 ? red : green, buf);
+      } else if (!s.tank) {
         snprintf(buf, sizeof buf, "%.0f °C", s.coolant);
         row(IC_WATER, "Wasser", float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? red : teal, buf);
         snprintf(buf, sizeof buf, "%.0f °C", s.oilTemp);
@@ -2319,6 +2322,16 @@ struct Renderer::Impl {
       }
     }
 
+    }
+    if (s.foot.onFoot) {
+      // On foot there is less to read: how one is doing, and what one carries.
+      const float cw = 300 * u, ch = 74 * u, cx0 = 24 * u, cy0 = H - ch - 24 * u;
+      rrect(cx0, cy0, cw, ch, 14 * u, card);
+      label(cx0 + 16 * u, cy0 + 22 * u, "Gesundheit", 14 * u, dim);
+      snprintf(buf, sizeof buf, "%.0f", std::max(s.foot.hp, 0.0));
+      labelRight(cx0 + cw - 16 * u, cy0 + 22 * u, buf, 16 * u, s.foot.hp < 34 ? red : white);
+      rrect(cx0 + 16 * u, cy0 + 40 * u, cw - 32 * u, 8 * u, 4 * u, {1, 1, 1, .15f});
+      rrect(cx0 + 16 * u, cy0 + 40 * u, std::max((cw - 32 * u) * float(std::clamp(s.foot.hp / 100.0, 0.0, 1.0)), 8 * u), 8 * u, 4 * u, s.foot.hp < 34 ? red : green);
     }
     // ---- Upper left: warnings, as pills with a symbol.
     {

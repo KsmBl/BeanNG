@@ -26,6 +26,7 @@ struct Controls {
   bool indirect = false;  // lob the shell over whatever is in between: artillery firing at a point on the map
   bool launch = false;    // edge-triggered: sends off a guided missile
   bool repair = false;    // edge-triggered: starts on the repair kit
+  bool use = false;       // edge-triggered: getting in and out
 };
 
 // What makes one car's powertrain and tyres different from another's. Defaults: the Xantia.

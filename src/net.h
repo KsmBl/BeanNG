@@ -13,11 +13,11 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 3;
+constexpr u16 kProtocol = 4;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1200;  // safely under any path's MTU
 
-enum PacketKind : u8 { P_HELLO, P_WELCOME, P_FULL, P_INPUT, P_TANK, P_META, P_SCENERY, P_BYE };
+enum PacketKind : u8 { P_HELLO, P_WELCOME, P_FULL, P_INPUT, P_TANK, P_META, P_SCENERY, P_BYE, P_CAR };
 
 struct Addr {
   u32 ip = 0;
@@ -109,11 +109,13 @@ struct InputMsg {
   u32 seq = 0;
   float steer = 0, throttle = 0, brake = 0, handbrake = 0;
   V3 aim;
-  u16 fireCount = 0, launchCount = 0, repairCount = 0;
+  u16 fireCount = 0, launchCount = 0, repairCount = 0, useCount = 0;
+  float yaw = 0, pitch = 0;  // the camera: where one walks and looks on foot
+  bool sprint = false;
   bool indirect = false;  // aim is a point marked on the map
   i8 requestGear = 0;  // 0 nothing, otherwise forward or reverse, for as long as it is wanted
   // What this player has chosen for the match, in every packet until the match has begun.
-  u8 turret = 0, ready = 0;
+  u8 ready = 0;
   u8 items[8] = {};
   u32 ackBlasts = 0;  // blasts of this match this player has already set off
   u32 ackMatch = 0;

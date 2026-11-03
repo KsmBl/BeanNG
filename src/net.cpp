@@ -78,9 +78,12 @@ void write(Writer& w, const InputMsg& m) {
   w.put(m.fireCount);
   w.put(m.launchCount);
   w.put(m.repairCount);
+  w.put(m.useCount);
+  w.put(m.yaw);
+  w.put(m.pitch);
+  w.put(u8(m.sprint ? 1 : 0));
   w.put(u8(m.indirect ? 1 : 0));
   w.put(m.requestGear);
-  w.put(m.turret);
   w.put(m.ready);
   for (u8 v : m.items) w.put(v);
   w.put(m.ackBlasts);
@@ -104,11 +107,16 @@ bool read(Reader& r, InputMsg& m) {
   r.get(m.fireCount);
   r.get(m.launchCount);
   r.get(m.repairCount);
+  r.get(m.useCount);
+  r.get(m.yaw);
+  r.get(m.pitch);
+  u8 sprint = 0;
+  r.get(sprint);
+  m.sprint = sprint != 0;
   u8 indirect = 0;
   r.get(indirect);
   m.indirect = indirect != 0;
   r.get(m.requestGear);
-  r.get(m.turret);
   r.get(m.ready);
   for (u8& v : m.items) r.get(v);
   r.get(m.ackBlasts);
@@ -117,6 +125,8 @@ bool read(Reader& r, InputMsg& m) {
   if (!r.ok()) return false;
   // The server must survive anything a player's machine sends it.
   m.steer = sane(m.steer, -1, 1);
+  m.yaw = sane(m.yaw, -1000, 1000);
+  m.pitch = sane(m.pitch, -2, 2);
   m.throttle = sane(m.throttle, 0, 1);
   m.brake = sane(m.brake, 0, 1);
   m.handbrake = sane(m.handbrake, 0, 1);

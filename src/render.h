@@ -48,6 +48,13 @@ struct Snapshot {
   std::vector<TankTrack> tankTracks;
   V3 trackLeft[2];
   float parkedScorch[16] = {};
+  // The one playing, when not inside a tank.
+  struct Foot {
+    bool onFoot = false, inCar = false;
+    double hp = 100;
+    u8 items[8] = {};
+    V3 p;
+  } foot;
   // The match, as far as the instruments care.
   bool missileLive = false;
   V3 missileP, missileV;

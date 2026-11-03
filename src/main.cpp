@@ -478,7 +478,8 @@ static void saveServerAddress() {
 struct SharedInput {
   Controls c;
   bool ready = false;
-  u8 turret = TK_STANDARD;
+  bool sprint = false;
+  double yaw = 0, pitch = 0;
   u8 items[IT_COUNT] = {};
 };
 
@@ -510,13 +511,11 @@ struct Game {
   int phase = Duel::WAITING;
   double phaseClock = 0;
   int slot = 0;
-  int myTank = -1;
-  bool myReady = false;
+  int myVehicle = -1;
+  bool playing = false;  // connected, and the match on
+  Soldier me;            // on foot: where this machine thinks it is, ahead of what the server has answered
 
-  // Which tank the camera and the instruments are on: one's own, or the one being chosen.
-  int viewTank(int turret) const { return myTank >= 0 ? myTank : Duel::tankIndex(slot, turret); }
-
-  void fillSnapshot(const char* message, int turret) {
+  void fillSnapshot(const char* message) {
     std::lock_guard<std::mutex> lock(snapMutex);
     Snapshot& s = snap;
     s.pos = sim.pos;
@@ -546,16 +545,23 @@ struct Game {
     s.damageMsg = message;
     s.damageAge = message[0] ? 0.0 : 99.0;
 
-    const Tank& tank = duel.tanks[viewTank(turret)];
-    s.carCog = tank.cog;
-    s.carFwd = tank.fwd;
-    s.carUp = tank.up;
-    s.carLeft = tank.left;
-    s.carVel = tank.vCog;
+    // The instruments go with whatever one is in. On foot only the camera's middle goes with one.
+    const Tank& tank = duel.tanks[myVehicle >= 0 && myVehicle < Duel::kTanks ? myVehicle : Duel::tankIndex(slot, TK_STANDARD)];
+    const VehicleFrame* frame = myVehicle >= 0 ? &duel.frames[myVehicle] : nullptr;
+    s.foot.onFoot = playing && myVehicle < 0;
+    s.foot.inCar = myVehicle >= Duel::kTanks;
+    s.foot.hp = duel.players[slot].soldier.hp;
+    s.foot.p = me.p;
+    memcpy(s.foot.items, duel.players[slot].items, IT_COUNT);
+    s.carCog = frame ? frame->cog : me.p;
+    s.carFwd = frame ? frame->fwd : V3{1, 0, 0};
+    s.carUp = frame ? frame->up : V3{0, 0, 1};
+    s.carLeft = frame ? frame->left : V3{0, 1, 0};
+    s.carVel = myVehicle >= 0 ? (frame->fwd * frame->speed) : me.v;
     s.tankArmour = clampd(1.0 - tank.damage, 0, 1);
     s.tankAmmo = tank.ammo;
     s.tankDead = tank.destroyed;
-    s.enemyCog = myTank >= 0 ? duel.tanks[Duel::tankIndex(1 - slot, duel.players[1 - slot].turret)].cog : V3{};
+    s.enemyCog = duel.frames[Duel::kTanks].cog;
     s.parts.clear();
     const auto part = [&](const char* label, float x, float y, float w, float h, double health) { s.parts.push_back({label, x, y, w, h, float(1.0 - health)}); };
     part("WANNE", 18, 34, 64, 170, 1.0 - tank.damage);
@@ -577,17 +583,17 @@ struct Game {
       v.surface = w.soft > 0.5 ? u8(SURF_GRAVEL) : u8(SURF_ASPHALT);
       v.skid = 0;
     }
-    s.speedKmh = tank.speed * 3.6;
-    s.rpm = myTank >= 0 ? tank.rpm() : 0;
-    s.rpmMax = 2500;
-    s.rpmRed = 2300;
+    s.speedKmh = frame ? frame->speed * 3.6 : 0.0;
+    s.rpm = myVehicle >= 0 ? (s.foot.inCar ? duel.cars[size_t(myVehicle - Duel::kTanks)].rpm() : tank.rpm()) : 0;
+    s.rpmMax = s.foot.inCar ? 7000 : 2500;
+    s.rpmRed = s.foot.inCar ? 6100 : 2300;
     s.throttle = tank.throttleAct;
     s.brake = tank.brakeAct;
     s.steer = tank.steerAct;
     s.latG = tank.latAcc / 9.81;
     s.lonG = tank.lonAcc / 9.81;
-    s.gear = tank.gear;
-    s.running = myTank >= 0;
+    s.gear = s.foot.inCar ? duel.cars[size_t(myVehicle - Duel::kTanks)].gear : tank.gear;
+    s.running = myVehicle >= 0;
     s.fuel = tank.fuel;
     s.engineLoad = tank.loadNow;
     s.inputRpm = 0;
@@ -625,7 +631,24 @@ struct Game {
     double connectStart = 0, nextHello = 0;
     std::deque<NetFrame> frames[Duel::kTanks];
     u32 match = 0, metaTick = 0, blastsDone = 0;
-    int phaseNow = Duel::WAITING, winner = -1, mySlot = 0, tankNow = -1;
+    int phaseNow = Duel::WAITING, winner = -1, mySlot = 0, vehicleNow = -1;
+    // What each car last said, and where it is shown: the middle follows smoothly, the shape comes with the packets.
+    struct CarShown {
+      V3 target, cog;
+      bool known = false;
+      std::vector<i16> offsets;
+    } shown[Duel::kCars];
+    // Walking answers at once, and is checked against the server's answer afterwards.
+    Soldier shownSoldier[2];
+    struct Past {
+      u32 seq;
+      V3 p;
+    };
+    std::deque<Past> past;
+    double walkDebt = 0;
+    u32 ackedInput = 0;
+    V3 serverP;
+    bool freshAnswer = false;
     u32 wins[2] = {};
     float clockNow = 0;
     double timeOffset = 0;
@@ -641,9 +664,15 @@ struct Game {
         duel.tanks[i] = duel.tanksStart[i];
         frames[i].clear();
       }
+      duel.cars = duel.carsStart;
+      duel.placePlayers();
+      duel.updateFrames();
+      for (CarShown& c : shown) c = CarShown{};
+      me = duel.players[mySlot].soldier;
+      past.clear();
       blastsDone = 0;
       metaTick = 0;
-      tankNow = -1;
+      vehicleNow = -1;
       resetVisuals = true;
     };
     const auto disconnect = [&](const std::string& why) {
@@ -694,11 +723,12 @@ struct Game {
         std::lock_guard<std::mutex> lock(inputMutex);
         in = input;
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = false;
       }
       if (in.c.fire) out.fireCount++;
       if (in.c.launch) out.launchCount++;
       if (in.c.repair) out.repairCount++;
+      if (in.c.use) out.useCount++;
 
       if (state == NET_CONNECTING) {
         if (now - connectStart > 4.0) {
@@ -767,6 +797,7 @@ struct Game {
           net::readState(r, f.state);
           u16 count = 0;
           r.get(count);
+          // Comes back around every now and then whether anything has happened or not.
           if (!r.ok() || idx >= Duel::kTanks || count != duel.tankNodes) continue;
           f.offsets.resize(size_t(count) * 3);
           for (i16& v : f.offsets) r.get(v);
@@ -782,7 +813,7 @@ struct Game {
         } else if (kind == net::P_META) {
           if (tick <= metaTick) continue;
           u8 ph = 0, mask = 0;
-          i8 win = 0, tanks[2] = {};
+          i8 win = 0;
           float pc = 0;
           r.get(ph);
           r.get(win);
@@ -790,8 +821,24 @@ struct Game {
           r.get(wins[1]);
           r.get(pc);
           r.get(mask);
-          r.get(tanks[0]);
-          r.get(tanks[1]);
+          i8 vehicles[2] = {};
+          for (int i = 0; i < 2; i++) {
+            r.get(vehicles[i]);
+            Soldier& sd = shownSoldier[i];
+            sd.p = r.getV3();
+            sd.v = r.getV3();
+            float yaw = 0, pitch = 0, hp = 0, stride = 0;
+            r.get(yaw);
+            r.get(pitch);
+            r.get(hp);
+            r.get(stride);
+            sd.yaw = yaw;
+            sd.pitch = pitch;
+            sd.hp = hp;
+            sd.stride = stride;
+          }
+          u32 ack = 0;
+          r.get(ack);
           u32 first = 0;
           u8 count = 0;
           r.get(first);
@@ -801,11 +848,14 @@ struct Game {
           phaseNow = ph;
           winner = win;
           clockNow = pc;
-          tankNow = tanks[mySlot];
+          vehicleNow = vehicles[mySlot];
+          ackedInput = ack;
+          serverP = shownSoldier[mySlot].p;
+          freshAnswer = true;
           for (int i = 0; i < 2; i++) {
-            duel.players[i].tank = tanks[i];
+            duel.players[i].vehicle = vehicles[i];
             duel.players[i].ready = mask & (4 << i);
-            if (tanks[i] >= 0) duel.players[i].turret = tanks[i] % TK_COUNT;
+            duel.players[i].soldier.hp = shownSoldier[i].hp;
           }
           for (u32 i = first; i < first + count; i++) {
             const V3 c = r.getV3();
@@ -830,6 +880,42 @@ struct Game {
             if (!r.ok() || evKind > EV_ROCK) break;
             sim.event(EventKind(evKind), p, v, strength);
           }
+        } else if (kind == net::P_CAR) {
+          u8 k = 0;
+          r.get(k);
+          V3 cog = r.getV3(), fwd = r.getV3(), left = r.getV3(), up = r.getV3();
+          float speed = 0, rpm = 0;
+          i8 gear = 0;
+          u8 exploded = 0;
+          r.get(speed);
+          r.get(rpm);
+          r.get(gear);
+          r.get(exploded);
+          u32 at = 0;
+          u16 count = 0;
+          r.get(at);
+          r.get(count);
+          if (!r.ok() || k >= Duel::kCars) continue;
+          const u32 first = duel.carFirst[k];
+          const u32 total = (k + 1 < Duel::kCars ? duel.carFirst[k + 1] : duel.carsEnd) - first;
+          if (u64(at) + count > total) continue;
+          CarShown& c = shown[k];
+          if (c.offsets.empty()) c.offsets.assign(size_t(total) * 3, 0);
+          bool whole = true;
+          for (size_t i = size_t(at) * 3; i < (size_t(at) + count) * 3; i++) r.get(c.offsets[i]);
+          whole = r.ok();
+          if (!whole) continue;
+          c.target = cog;
+          if (!c.known) c.cog = cog;
+          c.known = true;
+          Vehicle& v = duel.cars[k];
+          v.fwd = fwd;
+          v.left = left;
+          v.up = up;
+          v.speed = speed;
+          v.gear = gear;
+          v.exploded = exploded != 0;
+          v.engineOmega = rpm * 2.0 * PI / 60.0;
         } else if (kind == net::P_SCENERY) {
           u8 count = 0;
           r.get(count);
@@ -838,7 +924,7 @@ struct Game {
             r.get(k);
             const V3 p = r.getV3();
             if (!r.ok()) break;
-            if (k >= duel.tanksEnd && k < sim.pos.size()) sim.pos[k] = p;
+            if (k >= sim.firstSceneryNode && k < sim.pos.size()) sim.pos[k] = p;
           }
         }
       }
@@ -869,6 +955,65 @@ struct Game {
         t.applyNetState(sim, fb.state, dt);
       }
 
+      for (int k = 0; k < Duel::kCars; k++) {
+        CarShown& c = shown[k];
+        if (!c.known || c.offsets.empty()) continue;
+        c.cog += (c.target - c.cog) * clampd(dt * 22.0, 0, 1);
+        const u32 first = duel.carFirst[k];
+        const size_t count = c.offsets.size() / 3;
+        // Pieces of a car not yet heard of stay where they are.
+        for (size_t i = 0; i < count; i++) {
+          const V3 off{double(c.offsets[i * 3]), double(c.offsets[i * 3 + 1]), double(c.offsets[i * 3 + 2])};
+          if (off.x != 0 || off.y != 0 || off.z != 0) sim.pos[first + i] = c.cog + off * (1.0 / net::kNodeScale);
+        }
+        duel.cars[size_t(k)].cog = c.cog;
+      }
+      duel.updateFrames();
+
+      // On foot one's own legs answer at once.
+      duel.players[mySlot].vehicle = vehicleNow;
+      const bool playingNow = state == NET_IN && (phaseNow == Duel::PLAYING || phaseNow == Duel::CHOOSING || phaseNow == Duel::FINISHED);
+      if (vehicleNow >= 0) {
+        me = shownSoldier[mySlot];
+        past.clear();
+      } else if (playingNow) {
+        WalkInput wi;
+        wi.forward = in.c.throttle - in.c.brake;
+        wi.strafe = in.c.steer;
+        wi.yaw = in.yaw;
+        wi.jump = in.c.handbrake > 0.5;
+        wi.sprint = in.sprint;
+        walkDebt += dt;
+        walkDebt = std::min(walkDebt, 0.1);
+        while (walkDebt >= Duel::kWalkDt) {
+          walkDebt -= Duel::kWalkDt;
+          duel.walk(me, wi, Duel::kWalkDt);
+        }
+        me.pitch = in.pitch;
+        if (freshAnswer) {
+          freshAnswer = false;
+          // Where it thought it was when the server's answer was made, against the answer.
+          while (past.size() > 1 && int32_t(past.front().seq - ackedInput) < 0) past.pop_front();
+          const V3 was = past.empty() ? me.p : past.front().p;
+          const V3 err = serverP - was;
+          if (len(err) > 4.0) {
+            me.p = serverP;
+            past.clear();
+          } else {
+            const V3 fix = err * 0.15;
+            me.p += fix;
+            for (Past& q : past) q.p += fix;
+          }
+        }
+      } else {
+        me = duel.players[mySlot].soldier;
+      }
+      // Both soldiers drawn: oneself where one thinks one is, the other as the server last said.
+      for (int i = 0; i < 2; i++) {
+        const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0;
+        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, 1);
+      }
+
       if (state == NET_IN && now >= nextInput) {
         nextInput = now + 1.0 / 60.0;
         out.seq++;
@@ -882,7 +1027,11 @@ struct Game {
         out.ackBlasts = blastsDone;
         out.ackMatch = match;
         out.viewTick = viewTick;
-        out.turret = in.turret;
+        out.yaw = float(in.yaw);
+        out.pitch = float(in.pitch);
+        out.sprint = in.sprint;
+        if (vehicleNow < 0) past.push_back({out.seq, me.p});
+        while (past.size() > 200) past.pop_front();
         out.ready = in.ready ? 1 : 0;
         for (int i = 0; i < IT_COUNT; i++) out.items[i] = in.items[i];
         net::Writer w(net::P_INPUT);
@@ -892,12 +1041,17 @@ struct Game {
 
       char msg[128] = "";
       if (state == NET_IN) {
-        const Tank* mine = tankNow >= 0 ? &duel.tanks[tankNow] : nullptr;
+        const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
         if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf den zweiten Spieler");
         else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
         else if (phaseNow == Duel::FINISHED) snprintf(msg, sizeof msg, "%s  ·  Stand %u : %u", winner < 0 ? "Unentschieden" : (winner == mySlot ? "Sieg!" : "Niederlage"), wins[mySlot], wins[1 - mySlot]);
         else if (mine && mine->repairClock > 0) snprintf(msg, sizeof msg, "Reparatur  ·  %.0f s", mine->repairClock);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
+        else if (vehicleNow >= 0) snprintf(msg, sizeof msg, "E: aussteigen");
+        else if (phaseNow == Duel::PLAYING) {
+          const int v = duel.nearestVehicle(me.p, 2.5);
+          if (v >= 0) snprintf(msg, sizeof msg, "E: einsteigen  ·  %s", v < Duel::kTanks ? duel.tanks[v].spec().name : (v - Duel::kTanks) % Duel::kCarKinds == 0 ? "Xantia" : ((v - Duel::kTanks) % Duel::kCarKinds == 1 ? "One:1" : "Hummer"));
+        }
       }
       {
         std::lock_guard<std::mutex> lock(snapMutex);
@@ -906,9 +1060,10 @@ struct Game {
         phase = phaseNow;
         phaseClock = clockNow;
         slot = mySlot;
-        myTank = tankNow;
+        myVehicle = vehicleNow;
+        playing = state == NET_IN && phaseNow == Duel::PLAYING;
       }
-      fillSnapshot(msg, in.turret);
+      fillSnapshot(msg);
       std::this_thread::sleep_for(std::chrono::milliseconds(4));
     }
     if (state == NET_IN) disconnect("");
@@ -976,11 +1131,23 @@ static void runGame() {
       end = first + G.duel.tankNodes;
     } else {
       first = G.simStart.objs[G.duel.carsStart[size_t(k - Duel::kTanks)].obj].nodeStart;
-      end = k + 1 < Duel::kVehicles ? G.simStart.objs[G.duel.carsStart[size_t(k + 1 - Duel::kTanks)].obj].nodeStart : G.sim.firstSceneryNode;
+      end = k + 1 < Duel::kVehicles ? G.simStart.objs[G.duel.carsStart[size_t(k + 1 - Duel::kTanks)].obj].nodeStart : G.duel.carsEnd;
     }
     G.rig.parkedNodes.push_back({first, end - first});
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
+  // A soldier is rods between its eight nodes: body, head, legs, arms and what it holds.
+  for (int i = 0; i < 2; i++) {
+    const u32 f = G.duel.soldierFirst[i];
+    const u8 cloth = i == 0 ? MM_OLIVE : MM_SAND;
+    G.rig.links.push_back({f, f + 1, 0.19f, cloth, 0});
+    G.rig.links.push_back({f + 1, f + 2, 0.11f, MM_DARK, 0});
+    G.rig.links.push_back({f, f + 3, 0.09f, cloth, 0});
+    G.rig.links.push_back({f, f + 4, 0.09f, cloth, 0});
+    G.rig.links.push_back({f + 1, f + 5, 0.055f, cloth, 0});
+    G.rig.links.push_back({f + 1, f + 6, 0.055f, cloth, 0});
+    G.rig.links.push_back({f + 6, f + 7, 0.03f, MM_BLACK, 0});
+  }
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());
 
   SDL_GL_SetSwapInterval(gSet.vsync ? 1 : 0);
@@ -992,7 +1159,8 @@ static void runGame() {
   // points). Everything that moves arrives through snapshots, so it never races the physics.
   renderer.init(G.world, G.simStart, G.rig, G.mesh, origin);
 
-  G.fillSnapshot("", TK_STANDARD);
+  G.me = G.duel.players[0].soldier;
+  G.fillSnapshot("");
   std::thread network([&] { G.netLoop(); });
   if (gConnectNow) G.command = Game::CMD_CONNECT;
 
@@ -1037,7 +1205,6 @@ static void runGame() {
   bool wantShot = false;
   Snapshot view;
   // What this player is going to take into the match.
-  int pickTurret = gPickTurret;
   u8 pickItems[IT_COUNT] = {};
   bool pickReady = false;
   int lastPhase = -1;
@@ -1061,7 +1228,7 @@ static void runGame() {
       fpsClock = 0;
     }
 
-    int netState, phase, slot, myTank;
+    int netState, phase, slot, myVehicle;
     double phaseClock;
     std::string netError;
     {
@@ -1070,10 +1237,12 @@ static void runGame() {
       phase = G.phase;
       phaseClock = G.phaseClock;
       slot = G.slot;
-      myTank = G.myTank;
+      myVehicle = G.myVehicle;
       netError = G.netError;
     }
-    const bool inMatch = netState == Game::NET_IN && myTank >= 0;
+    const bool inMatch = netState == Game::NET_IN && phase == Duel::PLAYING;
+    const bool inVehicle = inMatch && myVehicle >= 0, onFoot = inMatch && myVehicle < 0;
+    const bool inTank = inVehicle && myVehicle < Duel::kTanks;
     // The choosing comes up by itself; afterwards it is gone by itself.
     if (phase != lastPhase) {
       if (phase == Duel::CHOOSING && netState == Game::NET_IN) {
@@ -1085,8 +1254,8 @@ static void runGame() {
         panelKind = PANEL_NONE;
       }
       if (phase == Duel::PLAYING) {
-        // Behind the tank, wherever it stands. The camera's yaw is in the world.
-        rig.yaw = view.carFwd.x > 0 ? PI : 0.0;
+        // Looking across the yard towards the enemy. The camera's yaw is in the world.
+        rig.yaw = G.world.base(slot).facing + PI;
         hasMark = false;
         mapOpen = false;
         rig.pitch = 0.20;
@@ -1124,10 +1293,6 @@ static void runGame() {
       });
       if (!netError.empty()) items.push_back({netError, "", -1.f, [](int) {}});
     } else if (panelKind == PANEL_LOADOUT) {
-      items.push_back({"Turm", turretSpec(TurretKind(pickTurret)).name, -1.f, [&](int d) {
-                         pickTurret = (pickTurret + d + TK_COUNT) % TK_COUNT;
-                         pickReady = false;
-                       }});
       for (int i = 0; i < IT_COUNT; i++) {
         char name[64], b[16];
         snprintf(name, sizeof name, "%s  (%d %s)", kItems[i].name, kItems[i].slots, kItems[i].slots == 1 ? "Slot" : "Slots");
@@ -1191,6 +1356,8 @@ static void runGame() {
       key("Zielen", "Maus");
       key("Feuer", "Linke Maustaste, F");
       key("Rakete starten, fliegt mit der Maus", "G");
+      key("Einsteigen und aussteigen", "E");
+      key("Rennen, springen", "Umschalt, Leertaste");
       key("Reparaturset, im Stand", "R");
       key("Karte, Ziel für die Artillerie", "K");
       key("Kamera", "C");
@@ -1354,6 +1521,7 @@ static void runGame() {
             case SDLK_K: mapOpen = !mapOpen; break;
             case SDLK_C: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.pitch = 0.22; break;
             case SDLK_F: edges.fire = true; break;
+            case SDLK_E: edges.use = true; break;
             case SDLK_F12: wantShot = true; break;
             default: break;
           }
@@ -1384,6 +1552,7 @@ static void runGame() {
     if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) keyDir -= 1;
     double gas = (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) ? 1.0 : 0.0;
     double brake = (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) ? 1.0 : 0.0;
+    const bool sprint = keys[SDL_SCANCODE_LSHIFT];
     double steer = keyDir, hb = keys[SDL_SCANCODE_SPACE] ? 1.0 : 0.0;
 
     hud.gamepad = false;
@@ -1406,7 +1575,7 @@ static void runGame() {
     // Holding the brake at a standstill selects reverse, holding the throttle selects drive. In reverse the
     // pedals swap, so that S always means "go backwards".
     Controls sendC = edges;
-    {
+    if (inVehicle) {
       const bool stopped = std::fabs(view.speedKmh) < 1.5;
       if (stopped && brake > 0.1 && gas < 0.05 && view.gear >= 0) sendC.requestGear = -1;
       if (stopped && gas > 0.1 && brake < 0.05 && view.gear <= 0) sendC.requestGear = 1;
@@ -1435,8 +1604,30 @@ static void runGame() {
         panelKind = PANEL_NONE;
       }
       if (inMatch) {
-        gas = 0.5;
-        if (std::fmod(tNow, 3.0) < dt) sendC.fire = true;
+        panelKind = PANEL_NONE;
+        if (onFoot) {
+          // To the tank with the chosen turret, and in.
+          const V3 to = G.world.base(slot).slot(gPickTurret) - view.foot.p;
+          rig.yaw = std::atan2(-to.y, -to.x);
+          rig.pitch = 0.2;
+          gas = 1.0;
+          static double lastUse = 0;
+          if (len(V3{to.x, to.y, 0}) < 4.5 && tNow - lastUse > 1.0) {
+            sendC.use = true;
+            lastUse = tNow;
+            printf("Einsteigen versucht bei t=%.1f\n", tNow);
+          }
+        } else {
+          static double boarded = tNow;
+          gas = tNow - boarded < 12.0 ? 0.5 : 0.0;
+          if (std::fmod(tNow, 3.0) < dt) sendC.fire = true;
+          static bool leftOnce = false;
+          if (tNow - boarded > 16.0 && !leftOnce) {
+            leftOnce = true;
+            sendC.use = true;
+            printf("Aussteigen bei t=%.1f\n", tNow);
+          }
+        }
       }
     }
 
@@ -1450,8 +1641,11 @@ static void runGame() {
       c.fire |= sendC.fire;
       c.launch |= sendC.launch;
       c.repair |= sendC.repair;
+      c.use |= sendC.use;
+      G.input.yaw = rig.yaw;
+      G.input.pitch = rig.pitch;
+      G.input.sprint = sprint;
       if (sendC.requestGear != 99) c.requestGear = sendC.requestGear;
-      G.input.turret = u8(pickTurret);
       G.input.ready = pickReady;
       for (int i = 0; i < IT_COUNT; i++) G.input.items[i] = pickItems[i];
       c.indirect = false;
@@ -1472,11 +1666,6 @@ static void runGame() {
           p += f * 3.0;
         }
         c.aimPoint = p;
-      }
-      if (scriptMode == 41) {
-        std::lock_guard<std::mutex> lock2(G.snapMutex);
-        c.aimPoint = G.snap.enemyCog + V3{0, 0, 1.0};
-        c.indirect = true;
       }
     }
 
@@ -1567,6 +1756,7 @@ static void runGame() {
       view.splitGeneration = G.snap.splitGeneration;
       view.carResets = G.snap.carResets;
       view.tankTracks = G.snap.tankTracks;
+      view.foot = G.snap.foot;
       view.missileLive = G.snap.missileLive;
       view.missileP = G.snap.missileP;
       view.missileV = G.snap.missileV;
@@ -1605,8 +1795,8 @@ static void runGame() {
         hud.panel.fill.push_back(it.fill);
       }
     }
-    hud.vehicleHud = inMatch;
-    hud.crosshair = inMatch && !mapOpen && !view.missileLive;
+    hud.vehicleHud = inVehicle;
+    hud.crosshair = inMatch && !mapOpen && !view.missileLive && !view.foot.inCar;
     hud.map.open = mapOpen && panelKind == 0;
     hud.map.hasMark = hasMark;
     hud.map.mark = markPoint;
@@ -1622,8 +1812,27 @@ static void runGame() {
       cam.target = view.missileP - back * 30.0;
       cam.up = {0, 0, 1};
     }
+    if (onFoot && !mapOpen) {
+      // Over the shoulder.
+      const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+      const V3 side{std::sin(rig.yaw), -std::cos(rig.yaw), 0};
+      const V3 head = view.foot.p + V3{0, 0, 1.55} + side * 0.45;
+      double reach = 3.2;
+      for (double d = 0.3; d < 3.2; d += 0.2) {
+        Contact con;
+        if (G.world.contact(head + back * d, con)) {
+          reach = std::max(d - 0.25, 0.3);
+          break;
+        }
+      }
+      cam.eye = head + back * reach;
+      cam.target = head - back * 30.0;
+      cam.up = {0, 0, 1};
+      cam.inside = false;
+      cam.fovY = 62.0 * PI / 180.0 + gSet.fov * PI / 180.0;
+    }
     hud.motionBlur = gSet.motionBlur;
-    hud.damageView = gSet.damageView && inMatch;
+    hud.damageView = gSet.damageView && inTank;
     hud.stats = gSet.stats;
     hud.farShadows = gSet.farShadows;
     if (scriptMode == 43) {
@@ -1685,7 +1894,7 @@ static void runGame() {
         char path[512];
         snprintf(path, sizeof path, "%s/shot_%02d.png", shotDir.c_str(), shotCount++);
         renderer.savePng(path, w, h);
-        printf("fps %.0f t=%.1f v=%.0f km/h pos %.0f %.0f %.1f Phase %d Panzer %d Munition %d Zustand %.0f%%\n", hud.fps, tNow, view.speedKmh, view.carCog.x, view.carCog.y, view.carCog.z, phase, myTank, view.tankAmmo, view.tankArmour * 100.0);
+        printf("fps %.0f t=%.1f v=%.0f km/h pos %.0f %.0f %.1f Phase %d Fahrzeug %d Munition %d Leben %.0f\n", hud.fps, tNow, view.speedKmh, view.carCog.x, view.carCog.y, view.carCog.z, phase, myVehicle, view.tankAmmo, view.foot.hp);
         fflush(stdout);
         nextShot += 1.0;
         const int enough = scriptMode == 43 ? 7 : (scriptMode == 44 ? 2 : 60);
