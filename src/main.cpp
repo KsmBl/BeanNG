@@ -731,6 +731,17 @@ struct Game {
     };
     std::deque<Past> past;
     double walkDebt = 0;
+    // How long a question takes to come back: from when an input went out to when the server says it has used it.
+    std::deque<std::pair<u32, double>> sentAt;
+    double rtt = 0.05;
+    // For trying things out on one machine: holds back what arrives, as a slow line would.
+    const double fakeLag = getenv("BEANNG_FAKE_LAG") ? atof(getenv("BEANNG_FAKE_LAG")) / 1000.0 : 0.0;
+    struct Held {
+      double at;
+      std::vector<u8> bytes;
+      net::Addr from;
+    };
+    std::deque<Held> held;
     struct RocketSeen {
       u8 what;
       V3 p, v;
@@ -896,7 +907,19 @@ struct Game {
       u8 buf[net::kMaxPacket];
       net::Addr from;
       int n;
-      while (sock && (n = sock->recv(buf, sizeof buf, from)) >= 0) {
+      if (sock && fakeLag > 0) {
+        while ((n = sock->recv(buf, sizeof buf, from)) >= 0) held.push_back({now + fakeLag, std::vector<u8>(buf, buf + n), from});
+      }
+      for (;;) {
+        if (fakeLag > 0) {
+          if (held.empty() || held.front().at > now || !sock) break;
+          n = int(held.front().bytes.size());
+          memcpy(buf, held.front().bytes.data(), size_t(n));
+          from = held.front().from;
+          held.pop_front();
+        } else if (!sock || (n = sock->recv(buf, sizeof buf, from)) < 0) {
+          break;
+        }
         if (!(from == server)) continue;
         net::Reader r(buf, size_t(n));
         u8 kind = 0;
@@ -1072,6 +1095,8 @@ struct Game {
           clockNow = pc;
           vehicleNow = vehicles[mySlot];
           ackedInput = ack;
+          while (!sentAt.empty() && int32_t(sentAt.front().first - ack) < 0) sentAt.pop_front();
+          if (!sentAt.empty() && sentAt.front().first == ack) rtt += (now - sentAt.front().second - rtt) * 0.1;
           serverP = shownSoldier[mySlot].p;
           freshAnswer = true;
           for (int i = 0; i < 2; i++) {
@@ -1229,6 +1254,39 @@ struct Game {
         Tank& t = duel.tanks[side];
         const u32 first = duel.tankFirst[side];
         const size_t count = fb.offsets.size() / 3;
+        if (side == vehicleNow && q.size() >= 2) {
+          // One's own tank is not shown late but early: where it will be by the time one's latest input has arrived.
+          // That is what makes it answer at once instead of after the ping.
+          const NetFrame& last = q.back();
+          const NetFrame& before = q[q.size() - 2];
+          const double ticks = std::max(1.0, double(last.tick) - double(before.tick));
+          const V3 vel = (last.cog - before.cog) * (net::kSendRate / ticks);
+          const auto heading = [&](const NetFrame& fr) {
+            const auto node = [&](u32 id) {
+              const size_t k = size_t(id - first);
+              return V3{double(fr.offsets[k * 3]), double(fr.offsets[k * 3 + 1]), double(fr.offsets[k * 3 + 2])};
+            };
+            const V3 d = node(t.refFL) + node(t.refFR) - node(t.refRL) - node(t.refRR);
+            return std::atan2(d.y, d.x);
+          };
+          const double h1 = heading(last);
+          const double seen = std::remainder(h1 - heading(before), 2.0 * PI) * (net::kSendRate / ticks);
+          const double absV = len(vel);
+          const double want = double(in.c.steer) * (absV < 5.0 ? 1.1 : clampd(7.5 / absV, 0.32, 1.1));
+          const double lead = clampd(now - timeOffset - double(last.tick) / net::kSendRate + rtt * 0.5, 0.0, 0.35);
+          // What is asked for this moment counts for more the further ahead it looks.
+          const double rate = lerpd(seen, want, clampd(lead * 4.0, 0.0, 0.7));
+          const double turn = rate * lead;
+          const double c = std::cos(turn), sn = std::sin(turn);
+          const V3 cog = last.cog + vel * lead;
+          const size_t n3 = last.offsets.size() / 3;
+          for (size_t k = 0; k < n3; k++) {
+            const V3 o{double(last.offsets[k * 3]) / net::kNodeScale, double(last.offsets[k * 3 + 1]) / net::kNodeScale, double(last.offsets[k * 3 + 2]) / net::kNodeScale};
+            sim.pos[first + k] = cog + V3{o.x * c - o.y * sn, o.x * sn + o.y * c, o.z};
+          }
+          t.applyNetState(sim, last.state, dt);
+          continue;
+        }
         const V3 cog = fa.cog + (fb.cog - fa.cog) * a;
         for (size_t k = 0; k < count; k++) {
           const V3 oa{double(fa.offsets[k * 3]), double(fa.offsets[k * 3 + 1]), double(fa.offsets[k * 3 + 2])};
@@ -1248,13 +1306,33 @@ struct Game {
         const double span = double(fb.tick) - double(fa.tick);
         const double a = span > 0 ? clampd((viewTime - double(fa.tick)) / span, 0, 1) : 1.0;
         viewTick = std::max(viewTick, fa.tick);
-        const V3 cog = fa.cog + (fb.cog - fa.cog) * a;
+        V3 cog = fa.cog + (fb.cog - fa.cog) * a;
         const u32 first = duel.carFirst[k];
         const size_t count = fb.offsets.size() / 3;
-        for (size_t i = 0; i < count; i++) {
-          const V3 oa{double(fa.offsets[i * 3]), double(fa.offsets[i * 3 + 1]), double(fa.offsets[i * 3 + 2])};
-          const V3 ob{double(fb.offsets[i * 3]), double(fb.offsets[i * 3 + 1]), double(fb.offsets[i * 3 + 2])};
-          sim.pos[first + i] = cog + (oa + (ob - oa) * a) * (1.0 / net::kNodeScale);
+        double ownTurn = 0;
+        if (vehicleNow == Duel::kTanks + k && q.size() >= 2) {
+          // One's own car, like one's own tank: shown ahead, not behind.
+          const CarFrame& last = q.back();
+          const CarFrame& before = q[q.size() - 2];
+          const double ticks = std::max(1.0, double(last.tick) - double(before.tick));
+          const V3 vel = (last.cog - before.cog) * (net::kSendRate / ticks);
+          const double seen = std::remainder(std::atan2(last.fwd.y, last.fwd.x) - std::atan2(before.fwd.y, before.fwd.x), 2.0 * PI) * (net::kSendRate / ticks);
+          const double lead = clampd(now - timeOffset - double(last.tick) / net::kSendRate + rtt * 0.5, 0.0, 0.35);
+          const double want = double(in.c.steer) * 0.45 * last.speed / 2.7;  // the bicycle model, with the lock it has
+          const double rate = lerpd(seen, want, clampd(lead * 4.0, 0.0, 0.7));
+          cog = last.cog + vel * lead;
+          ownTurn = rate * lead;
+          const double c2 = std::cos(ownTurn), s2 = std::sin(ownTurn);
+          for (size_t i = 0; i < last.offsets.size() / 3; i++) {
+            const V3 o{double(last.offsets[i * 3]) / net::kNodeScale, double(last.offsets[i * 3 + 1]) / net::kNodeScale, double(last.offsets[i * 3 + 2]) / net::kNodeScale};
+            sim.pos[first + i] = cog + V3{o.x * c2 - o.y * s2, o.x * s2 + o.y * c2, o.z};
+          }
+        } else {
+          for (size_t i = 0; i < count; i++) {
+            const V3 oa{double(fa.offsets[i * 3]), double(fa.offsets[i * 3 + 1]), double(fa.offsets[i * 3 + 2])};
+            const V3 ob{double(fb.offsets[i * 3]), double(fb.offsets[i * 3 + 1]), double(fb.offsets[i * 3 + 2])};
+            sim.pos[first + i] = cog + (oa + (ob - oa) * a) * (1.0 / net::kNodeScale);
+          }
         }
         Vehicle& v = duel.cars[size_t(k)];
         // In the simulation a wheel's rim stays put and only its angle goes round; here the drawn wheel goes round with it.
@@ -1277,6 +1355,11 @@ struct Game {
         v.cog = cog;
         v.fwd = norm(fa.fwd + (fb.fwd - fa.fwd) * a);
         v.left = norm(fa.left + (fb.left - fa.left) * a);
+        if (ownTurn != 0) {
+          const auto turned = [&](V3 d) { return V3{d.x * std::cos(ownTurn) - d.y * std::sin(ownTurn), d.x * std::sin(ownTurn) + d.y * std::cos(ownTurn), d.z}; };
+          v.fwd = turned(q.back().fwd);
+          v.left = turned(q.back().left);
+        }
         v.up = norm(fa.up + (fb.up - fa.up) * a);
         v.speed = lerpd(fa.speed, fb.speed, a);
         v.gear = fb.gear;
@@ -1411,6 +1494,8 @@ struct Game {
       if (state == NET_IN && now >= nextInput) {
         nextInput = now + 1.0 / 60.0;
         out.seq++;
+        sentAt.push_back({out.seq, now});
+        while (sentAt.size() > 240) sentAt.pop_front();
         out.steer = float(in.c.steer);
         out.throttle = float(in.c.throttle);
         out.brake = float(in.c.brake);

@@ -1361,6 +1361,7 @@ void Duel::stepPlayers(const Intent in[2]) {
   for (int i = 0; i < 2; i++) {
     Player& pl = players[i];
     Soldier& s = pl.soldier;
+    pl.lastInput = in[i].seq;
     pl.shotClock = std::max(0.0, pl.shotClock - kDt);
     if (in[i].weapon >= 0 && in[i].weapon < WP_COUNT && pl.hasWeapon[in[i].weapon]) pl.weapon = in[i].weapon;
     // Getting down and up again takes its time, and only the big rifle asks for it.
