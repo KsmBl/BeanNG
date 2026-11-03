@@ -960,11 +960,50 @@ struct Renderer::Impl {
     float a = 0;
   } trail[4];
 
+  std::vector<MarkTrail> groundTrail;
   void addSkidMarks(const Snapshot& s) {
     constexpr double kHalfTread = 0.085;
     constexpr double kMinStep = 0.06, kMaxStep = 4.0;
     LineV q[6];
     glBindBuffer(GL_ARRAY_BUFFER, markVbo);
+    // Tracks and tyres on the map: a line of pressed earth behind everything that has come this way.
+    if (groundTrail.size() != s.groundMarks.size()) groundTrail.assign(s.groundMarks.size(), MarkTrail{});
+    for (size_t i = 0; i < s.groundMarks.size(); i++) {
+      const Snapshot::GroundMark& g = s.groundMarks[i];
+      MarkTrail& t = groundTrail[i];
+      const u8 surf = world->surfaceAt(g.at.x, g.at.y);
+      const bool soft = surf == SURF_GRASS || surf == SURF_GRAVEL;
+      const bool road = surf == SURF_ASPHALT;
+      V3 c = g.at;
+      c.z = world->height(c.x, c.y) + (road ? 0.036 : 0.02);
+      const V3 side = norm(V3{g.across.x, g.across.y, 0}) * double(g.halfWidth);
+      const V3 l = c + side, r = c - side;
+      if (!t.valid) {
+        t = {true, l, r, 0.f};
+        continue;
+      }
+      const double step = len((l + r) * 0.5 - (t.l + t.r) * 0.5);
+      if (step < 0.5) continue;
+      if (step < 6.0) {
+        const float a = soft ? 0.62f : (road ? 0.22f : 0.3f);
+        const float cr = soft ? 0.10f : 0.03f, cg = soft ? 0.075f : 0.03f, cb = soft ? 0.045f : 0.03f;
+        auto v = [&](V3 p) { return LineV{float(p.x), float(p.y), float(p.z), cr, cg, cb, a}; };
+        q[0] = v(t.l);
+        q[1] = v(l);
+        q[2] = v(r);
+        q[3] = v(t.l);
+        q[4] = v(r);
+        q[5] = v(t.r);
+        glBufferSubData(GL_ARRAY_BUFFER, GLintptr(markNext * sizeof(LineV)), sizeof q, q);
+        gMarks.resize(kMarkVerts);
+        std::copy(q, q + 6, gMarks.begin() + std::ptrdiff_t(markNext));
+        markNext = (markNext + 6) % kMarkVerts;
+        markCount = std::min(kMarkVerts, markCount + 6);
+        gMarkNext = markNext;
+        gMarkCount = markCount;
+      }
+      t = {true, l, r, 0.f};
+    }
     for (int i = 0; i < 4; i++) {
       const WheelView& w = s.wheels[i];
       MarkTrail& t = trail[i];

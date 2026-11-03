@@ -46,6 +46,12 @@ struct Snapshot {
     double phase[2] = {}, speed[2] = {};
   };
   std::vector<TankTrack> tankTracks;
+  // What leaves a mark on the ground as it rolls: a point on it, the way across, and how wide.
+  struct GroundMark {
+    V3 at, across;
+    float halfWidth;
+  };
+  std::vector<GroundMark> groundMarks;
   // Which of the parked instances is what the camera follows: it moves with it, the world does not.
   int selfInstance = -1;
   int selfTrack = -1;

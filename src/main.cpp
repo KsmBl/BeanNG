@@ -578,6 +578,22 @@ struct Game {
     // The instruments go with whatever one is in. On foot only the camera's middle goes with one.
     const Tank& tank = duel.tanks[myVehicle >= 0 && myVehicle < Duel::kTanks ? myVehicle : Duel::tankIndex(slot, TK_STANDARD)];
     const VehicleFrame* frame = myVehicle >= 0 ? &duel.frames[myVehicle] : nullptr;
+    // Tracks and tyres, for the marks they leave.
+    s.groundMarks.clear();
+    for (int i = 0; i < Duel::kTanks; i++) {
+      const VehicleFrame& f = duel.frames[i];
+      const Tank& t = duel.tanks[i];
+      if (t.destroyed) continue;
+      for (double side : {1.0, -1.0}) {
+        if (t.trackOff[side > 0 ? 0 : 1]) continue;
+        s.groundMarks.push_back({f.cog + f.left * (side * 1.35), f.left, 0.26f});
+      }
+    }
+    for (int k = 0; k < Duel::kCars; k++) {
+      const Vehicle& car = duel.cars[size_t(k)];
+      if (car.exploded) continue;
+      for (const Wheel& w : car.wheels) s.groundMarks.push_back({(sim.pos[w.axIn] + sim.pos[w.axOut]) * 0.5, sim.pos[w.axOut] - sim.pos[w.axIn], 0.1f});
+    }
     s.foot.onFoot = playing && myVehicle < 0;
     s.selfInstance = myVehicle >= 0 ? myVehicle : (playing ? Duel::kVehicles + slot : -1);
     s.selfTrack = myVehicle >= 0 && myVehicle < Duel::kTanks ? myVehicle : -1;
@@ -2318,6 +2334,11 @@ static void runGame() {
     }
 
     G.askForFrame();
+    // A new match starts on clean ground.
+    if (G.resetVisuals.exchange(false)) {
+      renderer.resetDamage();
+      renderer.clearSkidMarks();
+    }
     {
       std::lock_guard<std::mutex> lock(G.snapMutex);
       view.pos = G.snap.pos;
@@ -2405,6 +2426,7 @@ static void runGame() {
       view.splitGeneration = G.snap.splitGeneration;
       view.carResets = G.snap.carResets;
       view.tankTracks = G.snap.tankTracks;
+      view.groundMarks = G.snap.groundMarks;
       view.selfInstance = G.snap.selfInstance;
       view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
