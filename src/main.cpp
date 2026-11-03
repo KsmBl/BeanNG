@@ -744,7 +744,7 @@ struct Game {
         in = input;
         input.chatOut.clear();
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = false;
       }
       if (!in.chatOut.empty() && state == NET_IN) {
         saying = in.chatOut;
@@ -765,6 +765,8 @@ struct Game {
       if (in.c.repair) out.repairCount++;
       if (in.c.use) out.useCount++;
       if (in.c.setup) out.setupCount++;
+      if (in.c.placeFoot) out.mineFootCount++;
+      if (in.c.placeTank) out.mineTankCount++;
 
       if (state == NET_CONNECTING) {
         if (now - connectStart > 4.0) {
@@ -1498,6 +1500,7 @@ static void runGame() {
       key("Rakete starten, fliegt mit der Maus", "G");
       key("Einsteigen und aussteigen", "E");
       key("Waffe wählen", "1 2 3 4 5");
+      key("Tretmine, Panzermine legen", "M, N");
       key("Scharfschützengewehr aufbauen, Zielfernrohr, Zoom", "X, rechte Maustaste, Mausrad");
       key("Rennen, springen", "Umschalt, Leertaste");
       key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
@@ -1704,6 +1707,8 @@ static void runGame() {
             case SDLK_F: edges.fire = true; break;
             case SDLK_E: edges.use = true; break;
             case SDLK_X: edges.setup = true; break;
+            case SDLK_M: edges.placeFoot = true; break;
+            case SDLK_N: edges.placeTank = true; break;
             case SDLK_F12: wantShot = true; break;
             default: break;
           }
@@ -1871,6 +1876,8 @@ static void runGame() {
       c.repair |= sendC.repair;
       c.use |= sendC.use;
       c.setup |= sendC.setup;
+      c.placeFoot |= sendC.placeFoot;
+      c.placeTank |= sendC.placeTank;
       G.input.yaw = rig.yaw;
       G.input.pitch = rig.pitch;
       G.input.sprint = sprint;

@@ -2344,6 +2344,9 @@ struct Renderer::Impl {
         snprintf(buf, sizeof buf, "%d", s.foot.ammo);
         labelRight(wx + cw - 16 * u, wy + 20 * u, buf, 18 * u, s.foot.ammo == 0 ? red : white);
       }
+      // And what else is carried.
+      snprintf(buf, sizeof buf, "Tretminen %d  ·  Panzerminen %d  ·  Reparatursets %d", s.foot.items[0], s.foot.items[1], s.foot.items[2]);
+      label(wx, wy - 12 * u, buf, 13 * u, dim);
       float kx = wx + 16 * u;
       for (int i = 0; i < 5; i++) {
         snprintf(buf, sizeof buf, "%d", i + 1);

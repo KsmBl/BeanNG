@@ -28,6 +28,7 @@ struct Controls {
   bool repair = false;    // edge-triggered: starts on a repair, from outside the vehicle
   bool use = false;       // edge-triggered: getting in and out
   bool setup = false;     // edge-triggered: lying down behind the big rifle, or getting up
+  bool placeFoot = false, placeTank = false;  // edge-triggered: mines
 };
 
 // What makes one car's powertrain and tyres different from another's. Defaults: the Xantia.

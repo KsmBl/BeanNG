@@ -484,3 +484,19 @@ void populateArena(Sim& sim, const World& w) {
     n++;
   }
 }
+
+u32 addMarker(Sim& sim, V3 half, u8 color) {
+  sim.beginObj(OBJ_PROP, false);
+  u32 n[8];
+  for (int i = 0; i < 8; i++) n[i] = sim.addNode(V3{(i & 1) ? half.x : -half.x, (i & 2) ? half.y : -half.y, kMarkerDepth + ((i & 4) ? half.z : -half.z)}, 1.0, NF_FIXED);
+  boxTris(sim, n, color, TF_VISUAL);
+  sim.endObj();
+  return n[0];
+}
+
+void moveMarker(Sim& sim, u32 first, V3 at) {
+  for (u32 i = 0; i < 8; i++) {
+    const V3 r = sim.rest[first + i];
+    sim.pos[first + i] = at + V3{r.x, r.y, r.z - kMarkerDepth};
+  }
+}

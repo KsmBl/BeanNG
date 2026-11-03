@@ -100,6 +100,7 @@ class Duel {
     bool use = false;  // E: get in, get out
     bool fireFoot = false;  // a press of the trigger
     bool fireHeld = false;
+    bool placeFoot = false, placeTank = false;
     bool setup = false;     // lies down behind the big rifle, or gets up again
     int weapon = WP_PISTOL;
     double lag = 0;         // how far in the past this player sees the others, in seconds
@@ -142,6 +143,16 @@ class Duel {
   u32 randState = 12345;
   // The wind of this match: at ground level, the same everywhere, and it carries what flies far enough.
   V3 wind;
+  // Mines: anyone's foot sets off the small kind, anything with wheels or tracks the big one.
+  static constexpr int kMinesEach = 10;
+  struct Mine {
+    bool live = false;
+    V3 p;
+    int owner = 0;
+    double armed = 0;
+  };
+  Mine mines[2][kMinesEach];  // [0] foot, [1] anti-tank
+  u32 mineFirst[2][kMinesEach] = {};
   bool giveAll = false;  // for trying things out: every weapon from the start
   // What can be handed out by name: from the server's shell, and what loot is made of.
   static constexpr int kGiveKinds = 13;
@@ -185,6 +196,8 @@ class Duel {
   void boardVehicle(int p, int v);
   void fireWeapon(int p, const Intent& in);
   void stepBullets(double dt);
+  void placeMine(int p, int kind);
+  void stepMines(double dt);
   V3 soldierAt(int p, double lag) const;
   void leaveVehicle(int p);
 };

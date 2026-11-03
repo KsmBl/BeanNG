@@ -61,6 +61,8 @@ void Duel::build() {
     sim.endObj();
   }
   sim.firstSceneryNode = u32(sim.pos.size());
+  for (int k = 0; k < 2; k++)
+    for (int i = 0; i < kMinesEach; i++) mineFirst[k][i] = addMarker(sim, k == 0 ? V3{0.13, 0.13, 0.035} : V3{0.24, 0.24, 0.06}, COL_STEEL);
   populateArena(sim, world);
   sim.finalize();
 
@@ -535,6 +537,62 @@ void Duel::stepBullets(double dt) {
   }
 }
 
+void Duel::placeMine(int p, int kind) {
+  Player& pl = players[p];
+  u8& have = pl.items[kind == 0 ? IT_FOOT_MINE : IT_AT_MINE];
+  if (have == 0 || pl.vehicle >= 0) return;
+  for (int i = 0; i < kMinesEach; i++) {
+    Mine& m = mines[kind][i];
+    if (m.live) continue;
+    const double cy = std::cos(pl.soldier.yaw), sy = std::sin(pl.soldier.yaw);
+    // On the ground, a step ahead. A few seconds before it is live, for getting away from it.
+    V3 at = pl.soldier.p + V3{-cy, -sy, 0} * 1.0;
+    at.z = world.height(at.x, at.y) + (kind == 0 ? 0.03 : 0.05);
+    m.live = true;
+    m.p = at;
+    m.owner = p;
+    m.armed = 3.0;
+    moveMarker(sim, mineFirst[kind][i], at);
+    have--;
+    return;
+  }
+}
+
+void Duel::stepMines(double dt) {
+  for (int kind = 0; kind < 2; kind++)
+    for (int i = 0; i < kMinesEach; i++) {
+      Mine& m = mines[kind][i];
+      if (!m.live) continue;
+      if (m.armed > 0) {
+        m.armed -= dt;
+        continue;
+      }
+      bool off = false;
+      if (kind == 0) {
+        for (const Player& pl : players)
+          if (pl.vehicle < 0 && std::hypot(pl.soldier.p.x - m.p.x, pl.soldier.p.y - m.p.y) < 0.8 && std::fabs(pl.soldier.p.z - m.p.z) < 1.0) off = true;
+      }
+      // Anything on wheels or tracks sets off either kind by rolling over it.
+      for (const VehicleFrame& f : frames) {
+        const V3 q = m.p - f.cog;
+        if (std::fabs(q.z) < f.height + 1.0 && std::fabs(dot(q, f.fwd)) < f.halfLength && std::fabs(dot(q, f.left)) < f.halfWidth && std::fabs(f.speed) > 0.3) off = true;
+      }
+      if (!off) continue;
+      m.live = false;
+      moveMarker(sim, mineFirst[kind][i], V3{0, 0, kMarkerDepth});
+      if (kind == 0) sim.explode(m.p + V3{0, 0, 0.2}, 1400.0, 10.0);
+      else {
+        // Right under it, so the track on that side is gone whatever the armour makes of the blast.
+        for (int v = 0; v < kTanks; v++) {
+          const VehicleFrame& f = frames[v];
+          const V3 q = m.p - f.cog;
+          if (std::fabs(dot(q, f.fwd)) < f.halfLength && std::fabs(dot(q, f.left)) < f.halfWidth) tanks[v].mod[dot(q, f.left) > 0 ? TM_TRACK_L : TM_TRACK_R] = 0;
+        }
+        sim.explode(m.p + V3{0, 0, 0.4}, 6000.0, 12.0);
+      }
+    }
+}
+
 void Duel::boardVehicle(int p, int v) {
   players[p].vehicle = v;
   const u16 a = v < kTanks ? tanks[v].hullObj : cars[size_t(v - kTanks)].obj;
@@ -588,6 +646,7 @@ void Duel::stepPlayers(const Intent in[2]) {
   while (bulletDebt >= 0.005) {
     bulletDebt -= 0.005;
     stepBullets(0.005);
+    stepMines(0.005);
   }
   for (int i = 0; i < 2; i++) {
     Player& pl = players[i];
@@ -598,7 +657,11 @@ void Duel::stepPlayers(const Intent in[2]) {
     if (in[i].setup && pl.weapon == WP_SNIPER && pl.vehicle < 0) pl.wantProne = !pl.wantProne;
     if (pl.weapon != WP_SNIPER || pl.vehicle >= 0) pl.wantProne = false;
     s.prone = clampd(s.prone + (pl.wantProne ? 1.0 : -1.5) * kDt / kSetupTime * (pl.wantProne ? 1.0 : 3.0), 0.0, 1.0);
-    if (pl.vehicle < 0 && phase == PLAYING) fireWeapon(i, in[i]);
+    if (pl.vehicle < 0 && phase == PLAYING) {
+      fireWeapon(i, in[i]);
+      if (in[i].placeFoot) placeMine(i, 0);
+      if (in[i].placeTank) placeMine(i, 1);
+    }
     if (in[i].use) {
       if (pl.vehicle >= 0) {
         leaveVehicle(i);
@@ -677,6 +740,8 @@ void Duel::restart() {
   winner = -1;
   phaseClock = 0;
   bullets.clear();
+  for (auto& row : mines)
+    for (Mine& m : row) m.live = false;
   {
     // Up to a stiff breeze, from anywhere.
     randState = randState * 1664525u + 1013904223u + matchId;
