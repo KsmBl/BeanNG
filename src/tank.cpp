@@ -21,10 +21,11 @@ constexpr double kPivotYawRate = 1.1;
 constexpr double kRatios[5] = {8.2, 3.6 * 4.2 / 1.0, 2.2 * 4.2, 1.45 * 4.2, 4.2};  // reverse, 1st..4th, to the sprocket
 
 double engineTorque(double rpm) {
-  // MTU MB 838 multi-fuel V10: 610 kW at 2200 rpm, about 2700 N m around 1500.
+  // MTU MB 838 multi-fuel V10: 610 kW and about 2700 N m in reality. Raised by a quarter, so that it feels as
+  // quick as a tank this size should when you are the one driving it.
   const double r = clampd(rpm, 300, 2500);
   const double shape = r < 1500 ? lerpd(0.62, 1.0, (r - 600) / 900.0) : lerpd(1.0, 0.98, (r - 1500) / 700.0);
-  return 2700.0 * clampd(shape, 0.4, 1.0) * 1.0;
+  return 3400.0 * clampd(shape, 0.4, 1.0) * 1.0;
 }
 
 V3 toWorld(V3 spawn, double x, double y, double z) { return spawn + V3{kNoseX - x, y, z}; }
