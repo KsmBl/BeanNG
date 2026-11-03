@@ -1944,6 +1944,35 @@ struct Renderer::Impl {
           }
           break;
         }
+        case EV_BLOOD: {
+          // A spray from where it went in, more for a heavier hit, and it falls.
+          const int count = 14 + int(60.f * e.strength);
+          for (int i = 0; i < count; i++) {
+            Particle q;
+            const V3 d = e.v + V3{rnd(-1.6f, 1.6f), rnd(-1.6f, 1.6f), rnd(-0.4f, 2.2f)} * (0.8 + e.strength);
+            q.p = e.p;
+            q.v = d;
+            q.maxLife = q.life = rnd(.35f, 1.1f);
+            q.size = rnd(.03f, .11f) * (0.7f + e.strength);
+            q.r = rnd(.32f, .52f); q.g = .015f; q.b = .02f; q.a = 1.f;
+            q.gravity = 9.f;
+            q.drag = .5f;
+            particles.push_back(q);
+          }
+          for (int i = 0; i < 12; i++) {
+            // And a mist that hangs a moment.
+            Particle q;
+            q.p = e.p + V3{rnd(-.12f, .12f), rnd(-.12f, .12f), rnd(-.12f, .12f)};
+            q.v = e.v * .25 + V3{rnd(-.4f, .4f), rnd(-.4f, .4f), rnd(-.1f, .5f)};
+            q.maxLife = q.life = rnd(.3f, .8f);
+            q.size = rnd(.15f, .4f) * (0.6f + e.strength);
+            q.r = .36f; q.g = .02f; q.b = .03f; q.a = .35f;
+            q.gravity = .6f;
+            q.drag = 2.5f;
+            particles.push_back(q);
+          }
+          break;
+        }
         case EV_IMPACT: {
           // Where the big rifle's bullet went: a pillar of dust that goes up high and stays a moment, seen far off.
           if (int(e.v.x) == s.foot.slot) {
@@ -2647,6 +2676,7 @@ struct Renderer::Impl {
       label(mx0 + 14 * u, my0 + ms - 18 * u, "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  B: Bombencode  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }
 
+    if (o.hurt > 0) rrect(0, 0, W, H, 0, {.55f, .02f, .02f, .4f * o.hurt});
     // ---- A driver without periscopes sees through what is left of them.
     if (s.foot.noPeriscope && o.vehicleHud) {
       const Col dark{.02f, .02f, .025f, .94f};

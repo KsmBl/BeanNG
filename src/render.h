@@ -164,6 +164,7 @@ inline void mapLayout(int w, int h, float& x, float& y, float& size) {
 struct HudOptions {
   // Looking through the big rifle's scope, at this magnification; 0 when not.
   double scope = 0;
+  float hurt = 0;  // being hit: how red the picture goes
   UiPanel panel;
   UiMap map;
   bool vehicleHud = true;

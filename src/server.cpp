@@ -420,6 +420,7 @@ int main(int argc, char** argv) {
       w.put(float(pl.soldier.stride));
       w.put(float(pl.soldier.prone));
       w.put(u8(pl.weapon));
+      w.putV3(pl.lastBlow);
     }
     w.put(duel->players[slot].lastInput);
     // What this player carries, as it stands now.
@@ -535,8 +536,8 @@ int main(int argc, char** argv) {
   shell.complete = [&](const std::vector<std::string>& words) {
     std::vector<std::string> out;
     if (words.size() == 1) {
-      for (const char* c : {"/give", "/kick", "/players", "/restart", "/wind", "/help", "/quit"}) out.push_back(c);
-    } else if (words[0] == "/give" || words[0] == "/kick") {
+      for (const char* c : {"/give", "/kill", "/kick", "/players", "/restart", "/wind", "/help", "/quit"}) out.push_back(c);
+    } else if (words[0] == "/give" || words[0] == "/kick" || words[0] == "/kill") {
       if (words.size() == 2) {
         out.push_back("player1");
         out.push_back("player2");
@@ -569,7 +570,7 @@ int main(int argc, char** argv) {
     }
     const std::string& cmd = words[0];
     if (cmd == "/help") {
-      shell.print("Text ohne / geht in den Chat. /give <spieler> <sache> [anzahl]  /kick <spieler>  /players  /restart  /wind <m/s>  /quit");
+      shell.print("Text ohne / geht in den Chat. /give <spieler> <sache> [anzahl]  /kill <spieler>  /kick <spieler>  /players  /restart  /wind <m/s>  /quit");
       std::string all = "Sachen:";
       for (const char* n : Duel::kGiveNames) all += std::string(" ") + n;
       shell.print(all);
@@ -591,6 +592,17 @@ int main(int argc, char** argv) {
         // The client notices by itself when nothing comes any more.
         clients[who].used = false;
         say("Spieler %d entfernt", who + 1);
+      }
+    } else if (cmd == "/kill") {
+      const int who = words.size() > 1 ? playerByName(words[1]) : -1;
+      if (who < 0 || !clients[who].used) {
+        shell.print("Den Spieler gibt es nicht");
+      } else {
+        Duel::Player& pl = duel->players[who];
+        pl.lastBlow = V3{-std::cos(pl.soldier.yaw), -std::sin(pl.soldier.yaw), 0.3} * -7.0;
+        pl.soldier.hp = 0;
+        duel->sim.event(EV_BLOOD, pl.soldier.p + V3{0, 0, 1.2}, pl.lastBlow * 0.5, 1.f);
+        say("Spieler %d stirbt", who + 1);
       }
     } else if (cmd == "/players") {
       for (int i = 0; i < 2; i++) {

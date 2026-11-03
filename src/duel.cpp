@@ -68,6 +68,14 @@ void Duel::build() {
     for (int k = 0; k < kMissileNodes; k++) sim.rest[missileFirst[i] + u32(k)] = sim.pos[missileFirst[i] + u32(k)];
     sim.endObj();
   }
+  for (int i = 0; i < 2; i++)
+    for (int d = 0; d < kBloodDiscs; d++) {
+      sim.beginObj(OBJ_PROP, false);
+      bloodFirst[i][d] = u32(sim.pos.size());
+      sim.addNode(V3{0, 0, -390.0}, 1.0, NF_FIXED);
+      sim.addNode(V3{0, 0, -389.99}, 1.0, NF_FIXED);
+      sim.endObj();
+    }
   for (int i = 0; i < kRpgRockets + kStrikeRockets; i++) {
     sim.beginObj(OBJ_PROP, false);
     rocketFirst[i] = u32(sim.pos.size());
@@ -220,8 +228,19 @@ const char* Duel::soldierPartName(int part) {
   return names[part];
 }
 
-void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int weapon, bool sightsOnly) {
-  const bool hidden = hiddenIn || sightsOnly;
+namespace {
+// Where every part of the body is, in its own frame: from the feet, forward along x, left along y.
+struct BodyLimbs {
+  Limb pelvis, torso, head, thighL, thighR, shinL, shinR, upperL, upperR, foreL, foreR, gun;
+  double drop = 0, look = 0;
+  V3 at, ahead, left;
+  V3 world(V3 q) const {
+    q.z -= drop;
+    return at + ahead * q.x + left * q.y + V3{0, 0, q.z};
+  }
+};
+BodyLimbs bodyPose(const Soldier& s, int weapon) {
+  BodyLimbs out;
   const double moving = std::min(std::hypot(s.v.x, s.v.y) / 2.0, 1.0);
   const double run = std::min(std::hypot(s.v.x, s.v.y) / 8.5, 1.0);
   const double phase = s.stride * 2.1;
@@ -229,7 +248,7 @@ void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int
   const double aL = std::sin(phase) * swingAmp, aR = -std::sin(phase) * swingAmp;
   // The knee bends as the leg comes through, more at a run.
   const double kneeL = std::max(0.0, -std::cos(phase)) * (0.7 + 0.5 * run) * moving + 0.05, kneeR = std::max(0.0, std::cos(phase)) * (0.7 + 0.5 * run) * moving + 0.05;
-  const double dropByStride = 0.02 * moving * std::fabs(std::sin(phase));
+  out.drop = 0.02 * moving * std::fabs(std::sin(phase));
   // Where it looks: positive upward. The body follows a little, the head and the weapon all the way.
   const double look = clampd(-s.pitch, -0.9, 0.9);
   const bool longGun = weapon >= 2;
@@ -266,57 +285,211 @@ void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int
   const double aUpperL = POSE(upperL, stand.upperL) + lookFlat, aForeL = POSE(foreL, stand.foreL) + lookFlat;
 #undef POSE
   const V3 pelvisJoint{0, 0, kHip};
-  const Limb pelvis{pelvisJoint, hipAt, torsoAngle * 0.8};
-  const Limb torso{pelvisJoint, hipAt, torsoAngle};
-  const Limb head{V3{0, 0, 1.5}, torso.at(V3{0, 0, 1.5}), look};
+  out.pelvis = Limb{pelvisJoint, hipAt, torsoAngle * 0.8};
+  out.torso = Limb{pelvisJoint, hipAt, torsoAngle};
+  out.head = Limb{V3{0, 0, 1.5}, out.torso.at(V3{0, 0, 1.5}), look};
   const V3 hipL{0, kHipY, kHip}, hipR{0, -kHipY, kHip}, kneeJL{0, kHipY, kKnee}, kneeJR{0, -kHipY, kKnee};
-  const Limb thighL{hipL, pelvis.at(hipL), aThighL}, thighR{hipR, pelvis.at(hipR), aThighR};
-  const Limb shinL{kneeJL, thighL.at(kneeJL), aShinL}, shinR{kneeJR, thighR.at(kneeJR), aShinR};
+  out.thighL = Limb{hipL, out.pelvis.at(hipL), aThighL};
+  out.thighR = Limb{hipR, out.pelvis.at(hipR), aThighR};
+  out.shinL = Limb{kneeJL, out.thighL.at(kneeJL), aShinL};
+  out.shinR = Limb{kneeJR, out.thighR.at(kneeJR), aShinR};
   const V3 shoulderL{0, kShoulderY, kShoulder}, shoulderR{0, -kShoulderY, kShoulder};
   const double acrossL = weapon == 0 ? 0.0 : (longGun ? 0.9 : 0.75), acrossR = weapon == 0 ? 0.0 : 0.35;
-  const Limb upperL{shoulderL, torso.at(shoulderL), aUpperL, acrossL}, upperR{shoulderR, torso.at(shoulderR), aUpperR, acrossR};
+  out.upperL = Limb{shoulderL, out.torso.at(shoulderL), aUpperL, acrossL};
+  out.upperR = Limb{shoulderR, out.torso.at(shoulderR), aUpperR, acrossR};
   const V3 elbowL{0, kShoulderY, kElbow}, elbowR{0, -kShoulderY, kElbow};
-  const Limb foreL{elbowL, upperL.at(elbowL), aForeL, acrossL}, foreR{elbowR, upperR.at(elbowR), aForeR, acrossR};
+  out.foreL = Limb{elbowL, out.upperL.at(elbowL), aForeL, acrossL};
+  out.foreR = Limb{elbowR, out.upperR.at(elbowR), aForeR, acrossR};
   const V3 grip{0, -kShoulderY, kWrist - 0.04};
-  const Limb gun{grip, foreR.at(grip), weapon == 0 ? foreR.angle - 1.2 : look};
+  out.gun = Limb{grip, out.foreR.at(grip), weapon == 0 ? out.foreR.angle - 1.2 : look};
+  out.look = look;
 
-  // Then the whole figure, turned to where it faces.
   const double cy = std::cos(s.yaw), sy = std::sin(s.yaw);
-  const V3 ahead{-cy, -sy, 0};
-  const V3 left = V3{-ahead.y, ahead.x, 0};
-  const auto world = [&](V3 q) {
-    q.z -= dropByStride;
-    return s.p + ahead * q.x + left * q.y + V3{0, 0, q.z};
-  };
-  const auto corner = [](int part, int k) {
-    return kPartMid[part] + V3{(k & 1) ? 0.06 : -0.06, (k & 2) ? 0.06 : -0.06, (k & 4) ? 0.06 : -0.06};
-  };
+  out.at = s.p;
+  out.ahead = V3{-cy, -sy, 0};
+  out.left = V3{-out.ahead.y, out.ahead.x, 0};
+  return out;
+}
+V3 partCorner(int part, int k) {
+  return kPartMid[part] + V3{(k & 1) ? 0.06 : -0.06, (k & 2) ? 0.06 : -0.06, (k & 4) ? 0.06 : -0.06};
+}
+}  // namespace
+
+void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int weapon, bool sightsOnly) {
+  const bool hidden = hiddenIn || sightsOnly;
+  const BodyLimbs L = bodyPose(s, weapon);
   const auto place = [&](int part, const Limb* limb) {
     for (int k = 0; k < kPartNodes; k++) {
       const u32 n = first + u32(part * kPartNodes + k);
-      sim.pos[n] = hidden || !limb ? kSoldierRest + corner(part, k) : world(limb->at(corner(part, k)));
+      sim.pos[n] = hidden || !limb ? kSoldierRest + partCorner(part, k) : L.world(limb->at(partCorner(part, k)));
     }
   };
-  place(SP_PELVIS, &pelvis);
-  place(SP_TORSO, &torso);
-  place(SP_HEAD, &head);
-  place(SP_THIGH_L, &thighL);
-  place(SP_THIGH_R, &thighR);
-  place(SP_SHIN_L, &shinL);
-  place(SP_SHIN_R, &shinR);
-  place(SP_UPPER_L, &upperL);
-  place(SP_UPPER_R, &upperR);
-  place(SP_FORE_L, &foreL);
-  place(SP_FORE_R, &foreR);
+  place(SP_PELVIS, &L.pelvis);
+  place(SP_TORSO, &L.torso);
+  place(SP_HEAD, &L.head);
+  place(SP_THIGH_L, &L.thighL);
+  place(SP_THIGH_R, &L.thighR);
+  place(SP_SHIN_L, &L.shinL);
+  place(SP_SHIN_R, &L.shinR);
+  place(SP_UPPER_L, &L.upperL);
+  place(SP_UPPER_R, &L.upperR);
+  place(SP_FORE_L, &L.foreL);
+  place(SP_FORE_R, &L.foreR);
   for (int g = 0; g < kSoldierParts - SP_GUN0; g++) {
     const int part = SP_GUN0 + g;
     if (sightsOnly && g == weapon && !hiddenIn) {
       // Held out under the eye, a little to the right, pointing where it looks.
-      const Limb held{grip, V3{0.62, -0.17, 1.45 - 0.2}, look};
-      for (int k = 0; k < kPartNodes; k++) sim.pos[first + u32(part * kPartNodes + k)] = world(held.at(corner(part, k)));
+      const V3 grip{0, -kShoulderY, kWrist - 0.04};
+      const Limb held{grip, V3{0.62, -0.17, 1.45 - 0.2}, L.look};
+      for (int k = 0; k < kPartNodes; k++) sim.pos[first + u32(part * kPartNodes + k)] = L.world(held.at(partCorner(part, k)));
       continue;
     }
-    place(part, g == weapon ? &gun : nullptr);
+    place(part, g == weapon ? &L.gun : nullptr);
+  }
+}
+
+// ---- A dead body: points joined by sticks, dropped from the pose it was in and pushed by whatever killed it.
+namespace {
+enum Joint { J_PELVIS, J_NECK, J_HEAD, J_HIP_L, J_HIP_R, J_KNEE_L, J_KNEE_R, J_FOOT_L, J_FOOT_R, J_SHOULDER_L, J_SHOULDER_R, J_ELBOW_L, J_ELBOW_R, J_HAND_L, J_HAND_R };
+// The same joints standing, arms down, as the mesh was modelled.
+const V3 kJointRest[Ragdoll::kJoints] = {
+    {0, 0, kHip}, {0, 0, 1.5}, {0, 0, 1.72}, {0, kHipY, kHip}, {0, -kHipY, kHip}, {0, kHipY, kKnee}, {0, -kHipY, kKnee}, {0, kHipY, 0.06}, {0, -kHipY, 0.06},
+    {0, kShoulderY, kShoulder}, {0, -kShoulderY, kShoulder}, {0, kShoulderY, kElbow}, {0, -kShoulderY, kElbow}, {0, kShoulderY, kWrist - 0.06}, {0, -kShoulderY, kWrist - 0.06},
+};
+struct Stick {
+  int a, b;
+};
+const Stick kSticks[] = {
+    // The trunk holds its shape, with the head on it.
+    {J_PELVIS, J_NECK}, {J_HIP_L, J_HIP_R}, {J_HIP_L, J_NECK}, {J_HIP_R, J_NECK}, {J_PELVIS, J_HIP_L}, {J_PELVIS, J_HIP_R}, {J_SHOULDER_L, J_SHOULDER_R},
+    {J_SHOULDER_L, J_NECK}, {J_SHOULDER_R, J_NECK}, {J_SHOULDER_L, J_PELVIS}, {J_SHOULDER_R, J_PELVIS}, {J_SHOULDER_L, J_HIP_L}, {J_SHOULDER_R, J_HIP_R}, {J_SHOULDER_L, J_HIP_R}, {J_SHOULDER_R, J_HIP_L},
+    {J_HEAD, J_NECK}, {J_HEAD, J_SHOULDER_L}, {J_HEAD, J_SHOULDER_R},
+    // Arms and legs swing as they like.
+    {J_HIP_L, J_KNEE_L}, {J_KNEE_L, J_FOOT_L}, {J_HIP_R, J_KNEE_R}, {J_KNEE_R, J_FOOT_R},
+    {J_SHOULDER_L, J_ELBOW_L}, {J_ELBOW_L, J_HAND_L}, {J_SHOULDER_R, J_ELBOW_R}, {J_ELBOW_R, J_HAND_R},
+};
+// How a part follows two joints and a sideways line: where it was in the bind pose, in the frame they make now.
+struct Bone {
+  V3 restA, x0, y0, z0, a, x1, y1, z1;
+  V3 at(V3 q) const {
+    const V3 d = q - restA;
+    return a + x1 * dot(d, x0) + y1 * dot(d, y0) + z1 * dot(d, z0);
+  }
+};
+Bone makeBone(V3 restA, V3 restB, V3 restSide, V3 a, V3 b, V3 side) {
+  const auto frame = [](V3 along, V3 sideways, V3& x, V3& y, V3& z) {
+    z = norm(along);
+    y = sideways - z * dot(sideways, z);
+    y = len2(y) > 1e-8 ? norm(y) : norm(cross(z, std::fabs(z.z) < 0.9 ? V3{0, 0, 1} : V3{1, 0, 0}));
+    x = cross(y, z);
+  };
+  Bone out;
+  out.restA = restA;
+  out.a = a;
+  frame(restB - restA, restSide, out.x0, out.y0, out.z0);
+  frame(b - a, side, out.x1, out.y1, out.z1);
+  return out;
+}
+}  // namespace
+
+void Duel::ragdollStart(Ragdoll& r, const Soldier& s, int weapon, V3 push) {
+  const BodyLimbs L = bodyPose(s, weapon);
+  const auto w = [&](const Limb& limb, int j) { return L.world(limb.at(kJointRest[j])); };
+  r.p[J_PELVIS] = L.world(L.pelvis.at(kJointRest[J_PELVIS]));
+  r.p[J_NECK] = w(L.torso, J_NECK);
+  r.p[J_HEAD] = w(L.head, J_HEAD);
+  r.p[J_HIP_L] = w(L.pelvis, J_HIP_L);
+  r.p[J_HIP_R] = w(L.pelvis, J_HIP_R);
+  r.p[J_KNEE_L] = w(L.thighL, J_KNEE_L);
+  r.p[J_KNEE_R] = w(L.thighR, J_KNEE_R);
+  r.p[J_FOOT_L] = w(L.shinL, J_FOOT_L);
+  r.p[J_FOOT_R] = w(L.shinR, J_FOOT_R);
+  r.p[J_SHOULDER_L] = w(L.torso, J_SHOULDER_L);
+  r.p[J_SHOULDER_R] = w(L.torso, J_SHOULDER_R);
+  r.p[J_ELBOW_L] = w(L.upperL, J_ELBOW_L);
+  r.p[J_ELBOW_R] = w(L.upperR, J_ELBOW_R);
+  r.p[J_HAND_L] = w(L.foreL, J_HAND_L);
+  r.p[J_HAND_R] = w(L.foreR, J_HAND_R);
+  // The blow lands high up, and the feet stay behind: that is what throws someone over.
+  constexpr double kStep = 1.0 / 120.0;
+  for (int j = 0; j < Ragdoll::kJoints; j++) {
+    const double height = clampd((r.p[j].z - s.p.z) / 1.6, 0.0, 1.0);
+    const V3 v = s.v + push * (0.45 + 0.75 * height);
+    r.prev[j] = r.p[j] - v * kStep;
+  }
+  r.on = true;
+  r.clock = 0;
+  r.debt = 0;
+  r.weapon = weapon;
+  r.bloodAt = (r.p[J_PELVIS]);
+}
+
+void Duel::ragdollStep(Ragdoll& r, double dt) const {
+  constexpr double kStep = 1.0 / 120.0;
+  r.clock += dt;
+  r.debt = std::min(r.debt + dt, 0.1);
+  while (r.debt >= kStep) {
+    r.debt -= kStep;
+    for (int j = 0; j < Ragdoll::kJoints; j++) {
+      const V3 v = (r.p[j] - r.prev[j]) * 0.997;
+      r.prev[j] = r.p[j];
+      r.p[j] += v + V3{0, 0, -9.81 * kStep * kStep};
+    }
+    for (int it = 0; it < 8; it++) {
+      for (const Stick& st : kSticks) {
+        const double want = len(kJointRest[st.a] - kJointRest[st.b]);
+        V3 d = r.p[st.b] - r.p[st.a];
+        const double l = std::max(len(d), 1e-6);
+        const V3 fix = d * (0.5 * (l - want) / l);
+        r.p[st.a] += fix;
+        r.p[st.b] -= fix;
+      }
+      // Knees and elbows only go so far: a foot does not come back up through the hip.
+      const auto keepApart = [&](int a, int b, double most) {
+        V3 d = r.p[b] - r.p[a];
+        const double l = std::max(len(d), 1e-6);
+        if (l >= most) return;
+        const V3 fix = d * (0.5 * (l - most) / l);
+        r.p[a] += fix;
+        r.p[b] -= fix;
+      };
+      keepApart(J_HIP_L, J_FOOT_L, 0.55);
+      keepApart(J_HIP_R, J_FOOT_R, 0.55);
+      keepApart(J_SHOULDER_L, J_HAND_L, 0.32);
+      keepApart(J_SHOULDER_R, J_HAND_R, 0.32);
+      for (int j = 0; j < Ragdoll::kJoints; j++) {
+        // The ground, and whatever stands on it.
+        const double rad = j == J_HEAD || j == J_PELVIS ? 0.12 : 0.07;
+        Contact c;
+        const V3 under = r.p[j] - V3{0, 0, rad};
+        if (world.contact(under, c)) {
+          r.p[j] += c.n * c.depth;
+          // It drags, and does not slide on.
+          const V3 moved = r.p[j] - r.prev[j];
+          const V3 along = moved - c.n * dot(moved, c.n);
+          r.prev[j] += along * 0.35;
+        }
+      }
+    }
+  }
+}
+
+void Duel::poseRagdoll(Sim& sim, u32 first, const Ragdoll& r) {
+  const V3 shoulders = r.p[J_SHOULDER_L] - r.p[J_SHOULDER_R], hips = r.p[J_HIP_L] - r.p[J_HIP_R];
+  const V3 restSide{0, 1, 0};
+  const auto bone = [&](int a, int b, V3 side) { return makeBone(kJointRest[a], kJointRest[b], restSide, r.p[a], r.p[b], side); };
+  const Bone bones[11] = {
+      bone(J_PELVIS, J_NECK, hips), bone(J_PELVIS, J_NECK, shoulders), bone(J_NECK, J_HEAD, shoulders),
+      bone(J_HIP_L, J_KNEE_L, hips), bone(J_HIP_R, J_KNEE_R, hips), bone(J_KNEE_L, J_FOOT_L, hips), bone(J_KNEE_R, J_FOOT_R, hips),
+      bone(J_SHOULDER_L, J_ELBOW_L, shoulders), bone(J_SHOULDER_R, J_ELBOW_R, shoulders), bone(J_ELBOW_L, J_HAND_L, shoulders), bone(J_ELBOW_R, J_HAND_R, shoulders),
+  };
+  for (int part = 0; part < kSoldierParts; part++) {
+    const bool body = part < SP_GUN0;
+    for (int k = 0; k < kPartNodes; k++) {
+      const u32 n = first + u32(part * kPartNodes + k);
+      // Nothing to hold it any more: what was in the hand is put away.
+      sim.pos[n] = body ? bones[part].at(partCorner(part, k)) : kSoldierRest + partCorner(part, k);
+    }
   }
 }
 
@@ -589,7 +762,11 @@ void Duel::fireWeapon(int p, const Intent& in) {
     pl.shotClock = kWeapons[w].interval;
     const V3 target = soldierAt(1 - p, in.lag);
     Soldier& other = players[1 - p].soldier;
-    if (players[1 - p].vehicle < 0 && len(V3{target.x - s.p.x, target.y - s.p.y, target.z - s.p.z}) < 2.2) other.hp -= kWeapons[w].damage;
+    if (players[1 - p].vehicle < 0 && len(V3{target.x - s.p.x, target.y - s.p.y, target.z - s.p.z}) < 2.2) {
+      other.hp -= kWeapons[w].damage;
+      players[1 - p].lastBlow = norm(target - s.p + V3{0, 0, 0.3}) * 2.0;
+      sim.event(EV_BLOOD, target + V3{0, 0, 1.1}, norm(target - s.p) * 2.0, 0.7f);
+    }
     return;
   }
   int& ammo = w == WP_SNIPER ? pl.sniperAmmo : (w == WP_RPG ? pl.rpgAmmo : pl.smallAmmo);
@@ -673,6 +850,8 @@ void Duel::stepBullets(double dt) {
             // In the head it counts for more than in the boots.
             const double z = near.z - foot.z;
             players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
+            players[q].lastBlow = norm(b.v) * (b.kind == WP_SNIPER ? 11.0 : 2.5);
+            sim.event(EV_BLOOD, near, b.v * 0.02, b.kind == WP_SNIPER ? 1.f : 0.45f);
           }
         }
       }
@@ -862,7 +1041,13 @@ void Duel::stepPlayers(const Intent in[2]) {
       if (pl.vehicle >= 0) continue;
       const double d = len(pl.soldier.p + V3{0, 0, 0.9} - b.c);
       const double kill = b.radius * 0.55;
-      if (d < kill) pl.soldier.hp -= 140.0 * (1.0 - d / kill) * std::min(b.impulse / 1000.0, 1.0);
+      if (d < kill) {
+        const double share = (1.0 - d / kill) * std::min(b.impulse / 1000.0, 1.0);
+        pl.soldier.hp -= 140.0 * share;
+        // Thrown away from it, and up.
+        pl.lastBlow = norm(pl.soldier.p + V3{0, 0, 0.9} - b.c + V3{0, 0, 0.7}) * clampd(5.0 + 14.0 * share, 0.0, 18.0);
+        sim.event(EV_BLOOD, pl.soldier.p + V3{0, 0, 1.0}, pl.lastBlow * 0.3, float(clampd(share, 0.2, 1.0)));
+      }
     }
   }
   pastAt = (pastAt + (int(sim.stepCount % 20) == 0 ? 1 : 0)) % kPastSteps;
@@ -1011,7 +1196,10 @@ void Duel::stepPlayers(const Intent in[2]) {
       if (std::fabs(f.speed) < 3.0) continue;
       const V3 q = s.p - f.cog;
       if (std::fabs(q.z) > f.height + 1.0) continue;
-      if (std::fabs(dot(q, f.fwd)) < f.halfLength + 0.5 && std::fabs(dot(q, f.left)) < f.halfWidth + 0.5) s.hp -= std::fabs(f.speed) * 40.0 * kDt * 20.0;
+      if (std::fabs(dot(q, f.fwd)) < f.halfLength + 0.5 && std::fabs(dot(q, f.left)) < f.halfWidth + 0.5) {
+        s.hp -= std::fabs(f.speed) * 40.0 * kDt * 20.0;
+        pl.lastBlow = f.fwd * (f.speed * 0.9) + V3{0, 0, 2.0};
+      }
     }
   }
 }
@@ -1051,6 +1239,7 @@ void Duel::placePlayers() {
     p.ready = false;
     p.repairClock = 0;
     p.repairing = -1;
+    p.lastBlow = V3{};
     p.tapped = false;
     p.tapClock = p.fixWait = p.fixAge = 0;
     p.hasFix = false;

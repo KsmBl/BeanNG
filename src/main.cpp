@@ -718,6 +718,8 @@ struct Game {
     u32 chatLogFirst = 0;
     u8 carrying[IT_COUNT] = {};
     int weaponShown[2] = {WP_PISTOL, WP_PISTOL};
+    V3 blowShown[2];
+    Ragdoll bodies[2];
     double repairNow = 0;
     // A part just lost is said out loud for a few seconds.
     double lastMod[TM_COUNT];
@@ -745,6 +747,7 @@ struct Game {
         frames[i].clear();
       }
       duel.cars = duel.carsStart;
+      for (Ragdoll& body : bodies) body = Ragdoll{};
       for (int i = 0; i < Duel::kWrecks; i++) duel.wrecks[i] = duel.wrecksStart[i];
       duel.placePlayers();
       duel.updateFrames();
@@ -949,6 +952,7 @@ struct Game {
             r.get(weapon);
             sd.prone = prone;
             weaponShown[i] = std::min<int>(weapon, WP_COUNT - 1);
+            blowShown[i] = r.getV3();
             sd.yaw = yaw;
             sd.pitch = pitch;
             sd.hp = hp;
@@ -1048,7 +1052,7 @@ struct Game {
             u8 evKind = 0;
             r.get(strength);
             r.get(evKind);
-            if (!r.ok() || evKind > EV_IMPACT) break;
+            if (!r.ok() || evKind > EV_BLOOD) break;
             sim.event(EventKind(evKind), p, v, strength);
           }
         } else if (kind == net::P_CHATLOG) {
@@ -1292,6 +1296,28 @@ struct Game {
       // Both soldiers drawn: oneself where one thinks one is, the other as the server last said.
       for (int i = 0; i < 2; i++) {
         // Through the scope one's own head would be in the way.
+        // Someone who has died on foot falls as a body from then on.
+        const bool deadOnFoot = state == NET_IN && duel.players[i].soldier.hp <= 0 && duel.players[i].vehicle < 0;
+        if (deadOnFoot && !bodies[i].on) {
+          Soldier last = i == mySlot ? me : shownSoldier[i];
+          Duel::ragdollStart(bodies[i], last, i == mySlot ? in.weapon : weaponShown[i], blowShown[i]);
+        }
+        if (bodies[i].on) {
+          duel.ragdollStep(bodies[i], dt);
+          Duel::poseRagdoll(sim, duel.soldierFirst[i], bodies[i]);
+          // Blood spreads out from under it once it lies, on what is beneath the middle of it.
+          const V3 mid = bodies[i].p[0];
+          for (int d = 0; d < Duel::kBloodDiscs; d++) {
+            const bool show = bodies[i].clock > 0.7 + d * 1.1;
+            const V3 off{d == 1 ? 0.18 : (d == 2 ? -0.14 : 0.0), d == 2 ? 0.16 : (d == 1 ? -0.1 : 0.0), 0};
+            const V3 at = mid + off;
+            const double ground = world.height(at.x, at.y) + 0.018 + d * 0.002;
+            const u32 n = duel.bloodFirst[i][d];
+            sim.pos[n] = show ? V3{at.x, at.y, ground} : V3{0, 0, -390.0};
+            sim.pos[n + 1] = sim.pos[n] + V3{0, 0, 0.01};
+          }
+          continue;
+        }
         const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0 || (i == mySlot && in.scoped);
         Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot ? in.weapon : weaponShown[i], i == mySlot && in.aiming && !in.scoped);
       }
@@ -1505,6 +1531,9 @@ static void runGame() {
     G.rig.parkedNodes.push_back({G.duel.wreckFirst[i], G.duel.tankNodes});
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
+  // Blood on the ground: flat discs, each a little wider than the last.
+  for (int i = 0; i < 2; i++)
+    for (int d = 0; d < Duel::kBloodDiscs; d++) G.rig.links.push_back({G.duel.bloodFirst[i][d], G.duel.bloodFirst[i][d] + 1, 0.24f + 0.14f * float(d), MM_PAINT, 0});
   // Rockets of every kind: body, nose and fins.
   const auto rocketRods = [&](u32 f, float body, u8 bodyMat, u8 noseMat) {
     G.rig.links.push_back({f, f + 1, body, bodyMat, 2});
@@ -1578,6 +1607,7 @@ static void runGame() {
   std::string chatText;
   int weaponPick = WP_PISTOL;
   bool scriptAim = false;
+  double hurtFlash = 0;
   // What a heavy shot does to whoever fires it, as far as the eye can tell.
   double gunKick = 0;
   int kickAmmo = -1, kickWeapon = -1;
@@ -2107,6 +2137,10 @@ static void runGame() {
       else rig.pitch = 0.02;
       scriptAim = !view.missileLive && std::fmod(tNow, 4.0) > 2.0;
     }
+    if (scriptMode == 51 && netState == Game::NET_IN) {
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+    }
     if (scriptMode == 50 && inMatch) {
       // Each way of aiming in turn: on foot with the pistol, then the rifle.
       panelKind = PANEL_NONE;
@@ -2348,6 +2382,14 @@ static void runGame() {
     }
     view.chatOpen = chatting;
     view.chatInput = chatText;
+    // Being hit shows: the picture goes red for a moment.
+    {
+      static double lastHp = 100;
+      if (view.foot.hp < lastHp - 0.5) hurtFlash = std::min(1.0, hurtFlash + (lastHp - view.foot.hp) / 40.0 + 0.3);
+      lastHp = view.foot.hp;
+      hurtFlash = std::max(0.0, hurtFlash - dt * 1.4);
+      hud.hurt = float(hurtFlash);
+    }
     hud.vehicleHud = inVehicle;
     hud.crosshair = inMatch && !mapOpen && !view.missileLive && !view.foot.inCar;
     // Without its optics the gunner's sight shows nothing any closer.
@@ -2469,6 +2511,14 @@ static void runGame() {
         cam.fovY = 45.0 * PI / 180.0;
       }
     }
+    if (scriptMode == 51) {
+      // Close by, to see someone fall.
+      const double a = 0.9 + tNow * 0.15;
+      cam.target = view.foot.p + V3{0, 0, 0.5};
+      cam.eye = cam.target + V3{std::cos(a) * 4.5, std::sin(a) * 4.5, 1.8};
+      cam.up = {0, 0, 1};
+      cam.fovY = 55.0 * PI / 180.0;
+    }
     if (scriptMode == 48 && inVehicle) {
       // Beside a car on the move, to see its wheels go round.
       cam.target = view.carCog;
@@ -2571,7 +2621,7 @@ static void runGame() {
         printf("fps %.0f t=%.1f v=%.0f km/h pos %.0f %.0f %.1f Phase %d Fahrzeug %d Munition %d Leben %.0f Gas %.2f Bremse %.2f Ruck %.1f mm\n", hud.fps, tNow, view.speedKmh, view.carCog.x, view.carCog.y, view.carCog.z, phase, myVehicle, view.tankAmmo, view.foot.hp, view.throttle, view.brake, jerkFrames > 0 ? jerkSum / jerkFrames * 1000.0 : 0.0);
         jerkSum = jerkFrames = 0;
         fflush(stdout);
-        nextShot += scriptMode == 47 ? 0.3 : (scriptMode == 45 ? 0.6 : 1.0);
+        nextShot += scriptMode == 47 ? 0.3 : (scriptMode == 45 || scriptMode == 51 ? 0.6 : 1.0);
         const int enough = scriptMode == 43 ? 7 : (scriptMode == 44 ? 2 : (scriptMode == 47 ? 6 : 60));
         if (shotCount >= enough) quit = true;
       }

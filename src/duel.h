@@ -34,6 +34,15 @@ struct Soldier {
   bool grounded = true;
   static constexpr double kRadius = 0.32, kHeight = 1.8;
 };
+// What is left when someone dies on foot. Worked out on each player's machine: it only has to look right.
+struct Ragdoll {
+  static constexpr int kJoints = 15;
+  V3 p[kJoints], prev[kJoints];
+  bool on = false;
+  double clock = 0, debt = 0;
+  int weapon = 0;
+  V3 bloodAt;
+};
 struct WalkInput {
   double forward = 0, strafe = 0;  // -1..1; strafe positive to the left
   double yaw = 0;
@@ -80,6 +89,7 @@ class Duel {
     Soldier soldier;
     int vehicle = -1;  // what they sit in, -1 on foot
     double walkDebt = 0;
+    V3 lastBlow;  // the last thing to hit them, for how they fall
     // The enemy's main computer: a few seconds at it, and from then on it says roughly where they are.
     bool tapped = false;
     double tapClock = 0;
@@ -213,6 +223,12 @@ class Duel {
   // sightsOnly: looking along one's own weapon. No body in the way, just the gun held up under the eye.
   static void poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon, bool sightsOnly = false);
   V3 vehicleExit(int v) const;
+  static void ragdollStart(Ragdoll& r, const Soldier& s, int weapon, V3 push);
+  void ragdollStep(Ragdoll& r, double dt) const;
+  static void poseRagdoll(Sim& sim, u32 first, const Ragdoll& r);
+  // Pools of blood under a body: three flat discs, one after the other as it spreads.
+  static constexpr int kBloodDiscs = 3;
+  u32 bloodFirst[2][kBloodDiscs] = {};
   int nearestVehicle(V3 p, double reach) const;
   bool occupied(int v) const { return players[0].vehicle == v || players[1].vehicle == v; }
   bool vehicleDead(int v) const { return v < kTanks ? tanks[v].destroyed : cars[size_t(v - kTanks)].exploded; }
