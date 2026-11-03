@@ -5,7 +5,7 @@
 
 namespace {
 // Design x runs rearwards from the nose; the world car at yaw 0 faces +X.
-inline V3 designToWorld(double x, double y, double z, V3 spawn) { return spawn + V3{2.26 - x, y, z}; }
+inline V3 designToWorld(double x, double y, double z, V3 spawn, double nose) { return spawn + V3{nose - x, y, z}; }
 
 // Solves the symmetric 4x4 system A s = e0 by Gaussian elimination with partial pivoting.
 bool solve4(double A[4][4], double s[4]) {
@@ -108,10 +108,10 @@ void CarMesh::bind(const std::vector<V3>& rest, const std::vector<NodeGroup>& gr
       if (part.group.rfind("wheel", 0) != 0) fprintf(stderr, "mesh part %s: no node group '%s'\n", part.name.c_str(), part.group.c_str());
       continue;
     }
-    double partH = g->nodes.size() <= kK ? 50.0 : (part.group == "frame" ? 0.9 : 0.45);
+    double partH = g->nodes.size() <= kK ? 50.0 : (part.group == "frame" ? 0.9 : (part.group == "hull" ? 3.0 : 0.45));
     for (int pass = 0; pass < 2; pass++)
     for (u32 v = part.firstVert; v < part.firstVert + part.vertCount; v++) {
-      const V3 p = designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn);
+      const V3 p = designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn, noseX);
       cand.clear();
       for (u32 n : g->nodes) cand.push_back({len2(rest[n] - p), n});
       std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
@@ -233,7 +233,7 @@ size_t CarMesh::rebindAfterTear(const std::vector<V3>& rest, const std::vector<N
       }
       if (best < 0) continue;
 
-      const V3 p = designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn);
+      const V3 p = designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn, noseX);
       cand.clear();
       for (u32 n : g->nodes)
         if (nodeObj[n] == owner) cand.push_back({len2(rest[n] - p), n});
@@ -279,7 +279,7 @@ double CarMesh::restError(const std::vector<V3>& rest, V3 spawn, std::string* wo
     for (u32 v = part.firstVert; v < part.firstVert + part.vertCount; v++) {
       V3 q{};
       for (int i = 0; i < kK; i++) q += rest[bindNode[size_t(v) * kK + i]] * double(bindWeight[size_t(v) * kK + i]);
-      const double e = len(q - designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn));
+      const double e = len(q - designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn, noseX));
       if (e > maxErr) {
         maxErr = e;
         if (worst) *worst = part.name;

@@ -25,7 +25,14 @@ struct Controls {
   V3 aimPoint;           // where the turret should point, world space
 };
 
+// Everything the driver can set in the overlay.
+struct Tuning {
+  bool abs = true, esp = true, tcs = true;
+  double brake = 1, power = 1, grip = 1, damper = 1, bar = 1, steer = 1;
+};
+
 struct Wheel {
+  double espTorque = 0;  // brake torque from the stability control [N m]
   u32 axIn = 0, axOut = 0, ring[6] = {};  // hub nodes; the ring does not spin physically
   bool left = true, front = true, driven = false;
   double R = 0.312;      // unloaded rolling radius
@@ -87,6 +94,7 @@ struct DamageState {
   bool seized = false;
   bool gearbox = false, bellHousing = false, tank = false, oilLeak = false;
   double coolantTemp = 90;
+  double oilTemp = 95;
   double coolant = 1.0;
 };
 
@@ -157,6 +165,8 @@ class Vehicle {
   double throttleAct = 0;
   double brakeAct = 0;
 
+  Tuning tune;
+  bool absActive = false, espActive = false, tcsActive = false;
   void update(Sim& sim, const Controls& in, double dt);
   // The bomb under the back seat.
   void detonate(Sim& sim);
@@ -180,6 +190,8 @@ class Vehicle {
   double stuckTime_ = 0;
   int bodyTick_ = 0;
   Controls edge_;
+  double espThrottle_ = 1, tcsThrottle_ = 1, sumpContact_ = 0, absHold_ = 0, espHold_ = 0, tcsHold_ = 0;
+  void updateStability(const Controls& in, double dt);
   void updateBodyFrame(Sim& sim, double dt);
   void updateHydraulics(Sim& sim, double dt);
   void updateDrivetrain(Sim& sim, const Controls& in, double dt);
@@ -199,13 +211,17 @@ struct VisLink {
   u32 a, b;
   float radius;
   u8 mat;        // MeshMat
-  u8 kind;       // 0 solid rod, 1 strut (thin rod near a, thick cylinder near b)
+  u8 kind;       // 0 solid rod, 1 strut (thin rod near a, thick cylinder near b), 2 proud of its ends
 };
 
 struct CarRig {
+  double noseX = 2.26;     // design frame origin ahead of the spawn point
+  bool carWheels = true;   // draw road wheels from the mesh's wheel parts
+  bool scratches = true;
   std::vector<NodeGroup> groups;
   std::vector<VisLink> links;
 };
+
 
 // Spawns a Citroen Xantia Activa into the sim at the given position and yaw.
 Vehicle buildXantia(Sim& sim, V3 pos, double yaw, CarRig* rig);

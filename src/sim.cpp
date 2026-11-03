@@ -186,10 +186,12 @@ void Sim::forces(double dt) {
       // Loose objects lose energy to internal friction, and so come to rest instead of humming on
       // their springs for ever, which is what lets them go back to sleep. It acts on slow motion
       // only: anything really flying or falling must not be held back.
+      const double vSlow = o.scrap ? 7.0 : 1.5;
+      const double drag = o.scrap ? 20.0 : 4.0;
       for (u32 i : o.nodes) {
         force[i] = gv * mass[i];
         const double v2 = len2(vel[i]);
-        if (v2 < 1.5 * 1.5) force[i] -= vel[i] * (mass[i] * 4.0 * (1.0 - v2 / (1.5 * 1.5)));
+        if (v2 < vSlow * vSlow) force[i] -= vel[i] * (mass[i] * drag * (1.0 - v2 / (vSlow * vSlow)));
       }
     } else {
       for (u32 i : o.nodes) force[i] = gv * mass[i];
@@ -347,7 +349,7 @@ void Sim::breakBeam(Beam& b, bool notify, double f) {
       if (o.tag != kTagWood || (o.flags & BF_BROKEN)) continue;
       // Only across the trunk at this height, not along the grain.
       if (std::fabs(rest[o.a].z + rest[o.b].z - rest[b.a].z - rest[b.b].z) > 0.5) continue;
-      o.fBreak *= 0.7;
+      o.fBreak *= 0.5;
     }
     event(EV_WOOD, pos[b.a], vel[b.a], float(f));
   }

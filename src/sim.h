@@ -83,6 +83,7 @@ struct Obj {
   ObjKind kind = OBJ_PROP;
   bool awake = false;
   bool alwaysAwake = false;
+  bool scrap = false;     // a burnt-out wreck: whatever still jiggles in it is quickly damped away
   bool armoured = false;  // a blast pushes it, but does not simply tear it apart
   float sleepTimer = 0;
   V3 bbMin, bbMax;

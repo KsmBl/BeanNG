@@ -493,6 +493,9 @@ const MatDef kMats[MM_COUNT] = {
     {0.72f, 0.72f, 0.70f, 0.85f},    // reversing light
     {0.80f, 0.80f, 0.78f, 1.0f},     // lamp reflector
     {0.20f, 0.13f, 0.09f, 0.1f},     // exhaust steel
+    {0.135f, 0.17f, 0.075f, 0.12f},  // NATO olive
+    {0.105f, 0.135f, 0.06f, 0.08f},  // darker fittings, weathered
+    {0.055f, 0.052f, 0.048f, 0.25f}, // track steel and rubber
 };
 
 void propColor(u8 c, float& r, float& g, float& b, float& gloss) {
@@ -563,6 +566,7 @@ struct Renderer::Impl {
 
   // Scene targets: the frame is rendered with MSAA and a motion vector per pixel, then blurred.
   GLuint progPost = 0;
+  Mat4 camVP;
   GLuint detailTex = 0;
   void buildDetailTexture() {
     // Two tiling layers of soft noise: R is grit with dark flecks, G is broad patches.
@@ -869,13 +873,14 @@ struct Renderer::Impl {
     }
   }
   void applyScrapes(const Snapshot& s, double dt) {
+    if (!rig->scratches) return;
     const CarMesh& M = *mesh;
     scrapeTotal += s.scrapes.size();
     for (const Scrape& sc : s.scrapes) {
       // A contact reports hundreds of times a second: thin that out to the scratches it really leaves.
       if ((scratchRng() & 1023) > 40 + 110 * sc.strength) continue;
       // To the design frame the mesh was modelled in.
-      const double px = 2.26 - (sc.restPoint.x - spawn.x), py = sc.restPoint.y - spawn.y, pz = sc.restPoint.z - spawn.z;
+      const double px = rig->noseX - (sc.restPoint.x - spawn.x), py = sc.restPoint.y - spawn.y, pz = sc.restPoint.z - spawn.z;
       const V3 d = norm(V3{-dot(sc.dir, s.carFwd), dot(sc.dir, s.carLeft), dot(sc.dir, s.carUp)});
       // The node is only where the structure touches. Which faces of the skin are around it?
       int count[kScrLayers] = {};
@@ -1203,6 +1208,57 @@ struct Renderer::Impl {
   }
 
   // Deform the flexbody from the node snapshot.
+  // Track links: boxes spaced along the track's line, moving with the track.
+  GLuint trackVao = 0, trackVbo = 0;
+  std::vector<Vtx> trackVerts;
+  void updateTrack(const Snapshot& s) {
+    trackVerts.clear();
+    if (!s.tank) return;
+    if (!trackVao) {
+      glGenVertexArrays(1, &trackVao);
+      glGenBuffers(1, &trackVbo);
+      glBindVertexArray(trackVao);
+      glBindBuffer(GL_ARRAY_BUFFER, trackVbo);
+      setupVtxAttribs();
+    }
+    const MatDef& md = kMats[MM_TRACK];
+    constexpr double kPitch = 0.19, kThick = 0.05, kLen = 0.165, kHalfW = 0.275;
+    for (int side = 0; side < 2; side++) {
+      const std::vector<V3>& path = s.trackPath[side];
+      const size_t n = path.size();
+      if (n < 3) continue;
+      double total = 0;
+      for (size_t i = 0; i < n; i++) total += len(path[(i + 1) % n] - path[i]);
+      const int links = int(total / kPitch);
+      const double step = total / links;
+      double along = std::fmod(s.trackPhase[side], step);
+      if (along < 0) along += step;
+      size_t seg = 0;
+      double segStart = 0;
+      for (int k = 0; k < links; k++) {
+        const double d = along + k * step;
+        while (seg < n) {
+          const double L = len(path[(seg + 1) % n] - path[seg]);
+          if (d <= segStart + L || seg + 1 == n) break;
+          segStart += L;
+          seg++;
+        }
+        const V3 a = path[seg], b = path[(seg + 1) % n];
+        const double L = std::max(len(b - a), 1e-6);
+        const V3 t = (b - a) / L;
+        const V3 c = a + t * (d - segStart);
+        const V3 w = s.carLeft;
+        const V3 o = norm(cross(t, w));  // out of the track's plane
+        const V3 lf = t * (kLen * 0.5), wd = w * kHalfW, up = o * (kThick * 0.5);
+        const V3 corner[8] = {c - lf - wd - up, c + lf - wd - up, c + lf + wd - up, c - lf + wd - up, c - lf - wd + up, c + lf - wd + up, c + lf + wd + up, c - lf + wd + up};
+        static const int faces[5][4] = {{0, 1, 2, 3}, {4, 5, 6, 7}, {0, 1, 5, 4}, {2, 3, 7, 6}, {1, 2, 6, 5}};
+        for (const auto& f : faces) addQuad(trackVerts, corner[f[0]], corner[f[1]], corner[f[2]], corner[f[3]], md.r, md.g, md.b, md.gloss);
+      }
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, trackVbo);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(trackVerts.size() * sizeof(Vtx)), trackVerts.data(), GL_STREAM_DRAW);
+  }
+
   std::vector<size_t> steerParts;
   int steerRim = -1;
   void updateCar(const Snapshot& s) {
@@ -1404,7 +1460,7 @@ struct Renderer::Impl {
     // Unit cylinder along +z, radius 1, length 1, with end caps. Colour comes from a uniform-free
     // trick: one copy per material, stored consecutively.
     std::vector<Vtx> v;
-    constexpr int kSeg = 12;
+    constexpr int kSeg = 28;
     for (int m = 0; m < MM_COUNT; m++) {
       const MatDef& md = kMats[m];
       for (int i = 0; i < kSeg; i++) {
@@ -1596,7 +1652,7 @@ struct Renderer::Impl {
             q.maxLife = q.life = rnd(2.f, 6.f);
             q.size = rnd(.5f, 1.3f) * (.4f + R * .05f);
             const float g = rnd(.04f, .13f);
-            q.r = g; q.g = g; q.b = g; q.a = rnd(.5f, .8f);
+            q.r = g * 1.6f; q.g = g * 1.6f; q.b = g * 1.6f; q.a = rnd(.16f, .34f);
             q.gravity = -.8f;
             q.drag = 1.6f;
             particles.push_back(q);
@@ -1757,15 +1813,38 @@ struct Renderer::Impl {
     if (s.gear > 0) snprintf(buf, sizeof buf, "%d", s.gear);
     text(bx + 220 * scale, by, buf, 7 * scale, s.autoBox ? .6f : 1.f, 1.f, s.autoBox ? 1.f : .4f);
     text(bx + 222 * scale, by + 58 * scale, s.autoBox ? "AUTO" : "MAN", px1 * 2, .7f, .7f, .7f);
-    const float rpmN = float(s.rpm / 7000.0);
-    bar(bx, by + 76 * scale, 270 * scale, 14 * scale, rpmN, s.rpm > 6100 ? 1.f : .35f, s.rpm > 6100 ? .15f : .8f, .25f);
+    const float rpmN = float(s.rpm / s.rpmMax);
+    bar(bx, by + 76 * scale, 270 * scale, 14 * scale, rpmN, s.rpm > s.rpmRed ? 1.f : .35f, s.rpm > s.rpmRed ? .15f : .8f, .25f);
     snprintf(buf, sizeof buf, "%4.0f U/MIN %2.0FL %s", s.rpm, s.fuel, s.running ? "" : "MOTOR AUS");
     text(bx, by + 94 * scale, buf, px1 * 2, .85f, .85f, .85f);
 
-    // Lower left: Hydractive/Activa state.
+    // Lower left: the vehicle's systems.
     const float lx = 14 * scale;
-    float ly = H - 190 * scale;
-    rect(lx - 6 * scale, ly - 8 * scale, 290 * scale, 186 * scale, 0, 0, 0, .35f);
+    if (s.tank) {
+      float ly = H - 148 * scale;
+      rect(lx - 6 * scale, ly - 8 * scale, 290 * scale, 144 * scale, 0, 0, 0, .35f);
+      text(lx, ly, "LEOPARD 1", px2, .75f, .95f, .55f);
+      ly += 22 * scale;
+      snprintf(buf, sizeof buf, "TURM %+4.0F ROHR %+3.0F", s.turretYaw * 57.3, s.gunPitch * 57.3);
+      text(lx, ly, buf, px2, .85f, .85f, .85f);
+      ly += 22 * scale;
+      if (s.reload > 0) {
+        text(lx, ly, "LADEN", px2, 1, .7f, .3f);
+        bar(lx + 70 * scale, ly, 200 * scale, 14 * scale, float(1.0 - s.reload / std::max(s.reloadTime, 0.1)), 1.f, .7f, .25f);
+      } else {
+        text(lx, ly, "FEUERBEREIT", px2, .5f, 1.f, .5f);
+      }
+      ly += 22 * scale;
+      snprintf(buf, sizeof buf, "QUER %+4.2FG KRAFTSTOFF %4.0FL", s.latG, s.fuel);
+      text(lx, ly, buf, px2 * 0.85f, .85f, .85f, .85f);
+      ly += 22 * scale;
+      text(lx, ly, "GAS", px1 * 2, .8f, .8f, .8f);
+      bar(lx + 40 * scale, ly, 90 * scale, 12 * scale, float(s.throttle), .3f, .9f, .3f);
+      text(lx + 140 * scale, ly, "BR", px1 * 2, .8f, .8f, .8f);
+      bar(lx + 170 * scale, ly, 100 * scale, 12 * scale, float(s.brake), .95f, .25f, .2f);
+    } else {
+    float ly = H - 234 * scale;
+    rect(lx - 6 * scale, ly - 8 * scale, 290 * scale, 230 * scale, 0, 0, 0, .35f);
     text(lx, ly, "HYDRACTIVE", px2, .75f, .85f, 1);
     text(lx + 130 * scale, ly, s.soft ? "SOFT" : "FIRM", px2, s.soft ? .5f : 1.f, 1.f, s.soft ? .7f : .3f);
     if (s.sport) text(lx + 200 * scale, ly, "SPORT", px2, 1, .6f, .2f);
@@ -1783,13 +1862,23 @@ struct Renderer::Impl {
     snprintf(buf, sizeof buf, "LHM %3.0F BAR %.1FL", s.accum / 1e5, s.lhm * 1000.0);
     text(lx, ly, buf, px2, s.accum > 90e5 ? .55f : 1.f, s.accum > 90e5 ? .95f : .3f, .55f);
     ly += 22 * scale;
-    text(lx, ly, "WASSER", px2, .85f, .85f, .85f);
-    bar(lx + 70 * scale, ly, 200 * scale, 14 * scale, float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? 1.f : .4f, s.coolant > 112 ? .2f : .7f, .3f);
+    snprintf(buf, sizeof buf, "WASSER %3.0F C", s.coolant);
+    text(lx, ly, buf, px2, s.coolant > 112 ? 1.f : .85f, s.coolant > 112 ? .3f : .85f, s.coolant > 112 ? .25f : .85f);
+    bar(lx + 150 * scale, ly, 120 * scale, 14 * scale, float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? 1.f : .4f, s.coolant > 112 ? .2f : .7f, .3f);
+    ly += 22 * scale;
+    snprintf(buf, sizeof buf, "OEL    %3.0F C", s.oilTemp);
+    text(lx, ly, buf, px2, s.oilTemp > 135 ? 1.f : .85f, s.oilTemp > 135 ? .3f : .85f, s.oilTemp > 135 ? .25f : .85f);
+    bar(lx + 150 * scale, ly, 120 * scale, 14 * scale, float((s.oilTemp - 40.0) / 150.0), s.oilTemp > 135 ? 1.f : .9f, s.oilTemp > 135 ? .2f : .65f, .2f);
+    ly += 22 * scale;
+    snprintf(buf, sizeof buf, "OELSTAND %3.0F%%", s.oilLevel * 100.0);
+    text(lx, ly, buf, px2, s.oilLevel < .35 ? 1.f : .85f, s.oilLevel < .35 ? .3f : .85f, s.oilLevel < .35 ? .25f : .85f);
     ly += 22 * scale;
     text(lx, ly, "GAS", px1 * 2, .8f, .8f, .8f);
     bar(lx + 40 * scale, ly, 90 * scale, 12 * scale, float(s.throttle), .3f, .9f, .3f);
     text(lx + 140 * scale, ly, "BR", px1 * 2, .8f, .8f, .8f);
     bar(lx + 170 * scale, ly, 100 * scale, 12 * scale, float(s.brake), .95f, .25f, .2f);
+
+    }
 
     // Upper left: crash telemetry and warnings.
     float ty = 10 * scale;
@@ -1826,6 +1915,15 @@ struct Renderer::Impl {
     snprintf(buf, sizeof buf, "KAMERA %s", o.cameraName.c_str());
     rtext(buf, .75f, .75f, .75f);
     if (o.mouseSteer) rtext("MAUSLENKUNG AN", 1, .85f, .35f);
+    if (!s.tank) {
+      // Driver aid lamps: amber while working, dark when off.
+      if (s.absActive) rtext("ABS", 1, .75f, .2f);
+      if (s.espActive) rtext("ESP", 1, .75f, .2f);
+      if (s.tcsActive) rtext("ASR", 1, .75f, .2f);
+      if (!s.absOn) rtext("ABS AUS", .75f, .4f, .3f);
+      if (!s.espOn) rtext("ESP AUS", .75f, .4f, .3f);
+      if (!s.tcsOn) rtext("ASR AUS", .75f, .4f, .3f);
+    }
     if (s.timeScale < 0.99) {
       snprintf(buf, sizeof buf, "ZEITLUPE %.2fX", s.timeScale);
       rtext(buf, 1, .85f, .35f);
@@ -1840,6 +1938,62 @@ struct Renderer::Impl {
       text((W - tw) * 0.5f, 60 * scale, s.damageMsg.c_str(), px3, 1, .55f, .25f, a);
     }
 
+    if (o.damageView && !s.parts.empty()) {
+      // The vehicle from above, every part coloured by its state, with the inside parts drawn over.
+      const float dw = 92 * scale, dh = 220 * scale;
+      const float dx = W - dw - 14 * scale, dy = H - 130 * scale - dh - 26 * scale;
+      rect(dx - 6 * scale, dy - 6 * scale, dw + 12 * scale, dh + 12 * scale, 0, 0, 0, .42f);
+      const float ux = dw / 100.f, uy = dh / 240.f;
+      for (const PartState& p : s.parts) {
+        const float d = std::clamp(p.damage, 0.f, 1.f);
+        // Green through amber to red, and dark when it is gone.
+        float cr = d < .5f ? .2f + d * 1.6f : 1.f, cg = d < .5f ? .8f : .8f - (d - .5f) * 1.4f, cb = .22f;
+        if (d >= .98f) { cr = .35f; cg = .05f; cb = .05f; }
+        rect(dx + p.x * ux, dy + p.y * uy, p.w * ux - 1, p.h * uy - 1, cr, cg, cb, .9f);
+        if (p.label) text(dx + p.x * ux + 2, dy + p.y * uy + 2, p.label, scale * 1.2f, 0, 0, 0, .9f);
+      }
+    }
+    if (o.crosshair) {
+      // The crosshair is where the gunner looks. The ring shows where the gun really points just now.
+      const float cx = W * .5f, cy = H * .5f, a = 2 * scale, l = 11 * scale;
+      rect(cx - l - 6 * scale, cy - a * .5f, l, a, 1, 1, 1, .8f);
+      rect(cx + 6 * scale, cy - a * .5f, l, a, 1, 1, 1, .8f);
+      rect(cx - a * .5f, cy + 6 * scale, a, l, 1, 1, 1, .8f);
+      const V3 p = s.muzzle + s.gunDir * 400.0;
+      const Mat4& m = camVP;
+      const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
+      const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
+      const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
+      if (qw > 0.1) {
+        const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H), k = 9 * scale;
+        const float col = s.reload > 0 ? .55f : 1.f;
+        rect(sx - k, sy - k, 2 * k, a, 1, col, col * .3f, .9f);
+        rect(sx - k, sy + k, 2 * k, a, 1, col, col * .3f, .9f);
+        rect(sx - k, sy - k, a, 2 * k, 1, col, col * .3f, .9f);
+        rect(sx + k, sy - k, a, 2 * k, 1, col, col * .3f, .9f);
+      }
+    }
+    if (o.panel.open) {
+      // A list with a header: vehicle menu or settings overlay.
+      const UiPanel& P = o.panel;
+      float x, y, pw, rowH;
+      panelLayout(w, h, P.rows.size(), x, y, pw, rowH);
+      rect(x, y - 2.0f * rowH, pw, (float(P.rows.size()) + 3.6f) * rowH, 0, 0, 0, .8f);
+      text(x + 16 * scale, y - 1.5f * rowH, P.title.c_str(), px3, 1, .9f, .55f);
+      for (size_t i = 0; i < P.rows.size(); i++) {
+        const float ry2 = y + float(i) * rowH;
+        const bool sel = int(i) == P.sel;
+        if (sel) rect(x + 6 * scale, ry2 - 2 * scale, pw - 12 * scale, rowH - 2 * scale, .85f, .55f, .15f, .35f);
+        const float c = P.rows[i].empty() ? .5f : (sel ? 1.f : .85f);
+        text(x + 18 * scale, ry2 + 2 * scale, P.rows[i].c_str(), px2, c, c, c);
+        if (i < P.fill.size() && P.fill[i] >= 0) bar(x + pw * .52f, ry2 + 3 * scale, pw * .26f, 12 * scale, P.fill[i], .85f, .65f, .2f);
+        if (i < P.values.size() && !P.values[i].empty()) {
+          const char* val = P.values[i].c_str();
+          text(x + pw - float(strlen(val)) * 12 * scale - 18 * scale, ry2 + 2 * scale, val, px2, sel ? 1.f : .8f, sel ? .85f : .8f, sel ? .4f : .8f);
+        }
+      }
+      text(x + 16 * scale, y + (float(P.rows.size()) + .35f) * rowH, P.foot.c_str(), px1 * 2, .65f, .65f, .65f);
+    }
     if (o.help) {
       static const char* lines[] = {
           "BEANNG - CITROEN XANTIA ACTIVA",
@@ -1850,7 +2004,7 @@ struct Renderer::Impl {
           "G HYDRACTIVE SPORT   H NIVEAU   V ACTIVA AN/AUS",
           "I ZUENDUNG   R ZURUECK ZUM START   F5 REPARIEREN   F BOMBE/FEUER",
           "C KAMERA   M MAUSLENKUNG   P PAUSE   [ ] ZEITLUPE",
-          "B BEWEGUNGSUNSCHAERFE   J KAMERA-WACKELN   N TON   + - LAUTSTAERKE",
+          "O EINSTELLUNGEN   TAB FAHRZEUG WAEHLEN   B BLUR   J WACKELN   N TON   + -",
           "F2 BEAM-ANSICHT   F3 ROENTGEN   F12 SCREENSHOT   ESC BEENDEN",
           "MAUS: RECHTS ZIEHEN KAMERA, RAD ZOOM, LINKS ZIEHEN PACKT DAS AUTO",
           "",
@@ -1892,6 +2046,7 @@ struct Renderer::Impl {
     return m;
   }
   void drawWheels(const Snapshot& s, GLuint prog, const Mat4& vp, const Mat4& shadowVP) {
+    if (!rig->carWheels) return;
     glUseProgram(prog);
     setMat(prog, "uVP", vp);
     setMat(prog, "uShadowVP", shadowVP);
@@ -1936,6 +2091,8 @@ struct Renderer::Impl {
     return m;
   }
 };
+
+Renderer::~Renderer() { delete d; }
 
 bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMesh& mesh, V3 spawn) {
   d = new Impl();
@@ -2093,6 +2250,8 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   D.updateCar(s);
   auto tp2 = std::chrono::steady_clock::now();
   D.updateProps(s, cam.eye);
+  D.updateTrack(s);
+  D.camVP = mul(perspective(cam.fovY, double(w) / double(h), 0.12, 2500.0), lookAt(cam.eye, cam.target, cam.up));
   auto tp3 = std::chrono::steady_clock::now();
   D.stepParticles(dt);
   D.addSkidMarks(s);
@@ -2157,12 +2316,19 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
         D.setMat(prog, "uModel", D.rodMatrix(a, mid, l.radius * 0.45f));
         glDrawArrays(GL_TRIANGLES, MM_CHROME * D.rodCount, D.rodCount);
         D.setMat(prog, "uModel", D.rodMatrix(mid, b, l.radius));
+      } else if (l.kind == 2) {
+        const V3 ax = norm(b - a) * 0.02;
+        D.setMat(prog, "uModel", D.rodMatrix(a - ax, b + ax, l.radius));
       } else {
         D.setMat(prog, "uModel", D.rodMatrix(a, b, l.radius));
       }
       glDrawArrays(GL_TRIANGLES, l.mat * D.rodCount, D.rodCount);
     }
     D.setMat(prog, "uModel", I);
+    if (s.tank && !D.trackVerts.empty()) {
+      glBindVertexArray(D.trackVao);
+      glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.trackVerts.size()));
+    }
   };
 
   glEnable(GL_DEPTH_TEST);

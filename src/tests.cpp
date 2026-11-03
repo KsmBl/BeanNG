@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include "props.h"
+#include "tank.h"
 #include "vehicle.h"
 
 namespace {
@@ -1413,6 +1414,170 @@ int main(int argc, char** argv) {
     testJitter("standstill", 0);
     testJitter("60 km/h", 60);
     testJitter("120 km/h", 120);
+  }
+  if (argc > 1 && !strcmp(argv[1], "tank")) {
+    printf("== Leopard 1 ==\n");
+    auto make = [](World& w, Sim& s, CarRig& r, V3 at) {
+      w.build();
+      w.clearBoxes();
+      w.flatten();
+      s.world = &w;
+      Tank t = buildLeopard(s, at, &r);
+      s.finalize();
+      t.settle(s, 4.0);
+      return t;
+    };
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    Tank t = make(*w, *s, r, V3{-120, 0, 0});
+    printf("  rest: hull bottom z %.3f, wheel Fn %.1f kN, guard %llu, largest eigen ratio %.2f\n", s->pos[t.refBottom].z, t.wheels[3].Fn / 1e3, (unsigned long long)s->clampedSteps, s->maxEigenvalue(0) * 0.25 * kDt * kDt);
+    auto run = [&](double sec, std::function<void(double, Controls&)> fn) {
+      Controls c;
+      for (int i = 0, n = int(sec / kDt); i < n; i++) {
+        c.fire = false;
+        c.requestGear = 99;
+        c.shiftUp = c.shiftDown = false;
+        fn(i * kDt, c);
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+      }
+      s->events.clear();
+    };
+    double t0to30 = -1, t0to50 = -1;
+    double tNow = 0;
+    run(30.0, [&](double, Controls& c) {
+      c.throttle = 1;
+      tNow += kDt;
+      if (t0to30 < 0 && t.speed * 3.6 > 30) t0to30 = tNow;
+      if (t0to50 < 0 && t.speed * 3.6 > 50) t0to50 = tNow;
+    });
+    printf("  0-30 km/h %.1f s, 0-50 km/h %.1f s, after 30 s %.1f km/h gear %d rpm %.0f (real: 0-60 about 20 s, top 65 km/h), y drift %.2f m\n", t0to30, t0to50, t.speed * 3.6, t.gear, t.rpm(), t.cog.y);
+    run(6.0, [&](double, Controls& c) { c.brake = 1; });
+    printf("  stopped from there: %.1f km/h\n", t.speed * 3.6);
+    const double h0 = std::atan2(t.fwd.y, t.fwd.x);
+    run(4.0, [&](double, Controls& c) { c.steer = 1; });
+    printf("  pivot turn: %.0f deg in 4 s, moved %.1f km/h\n", (std::atan2(t.fwd.y, t.fwd.x) - h0) * 57.3, t.speed * 3.6);
+    double pitchMax = 0;
+    const V3 aim = t.cog + V3{500, 0, 3};
+    run(3.0, [&](double, Controls& c) { c.steer = 0; c.aimPoint = aim; });
+    const double p0 = std::asin(t.fwd.z);
+    bool shot = true;
+    run(1.5, [&](double, Controls& c) { c.aimPoint = aim; c.fire = shot; shot = false; pitchMax = std::max(pitchMax, std::fabs(std::asin(t.fwd.z) - p0)); });
+    printf("  gun fired: turret yaw %.0f deg, hull rocks %.2f deg, shells in flight %zu, guard %llu, plastic %.1f kJ\n", t.turretYaw * 57.3, pitchMax * 57.3, t.shells.size(), (unsigned long long)s->clampedSteps, s->plasticEnergy / 1e3);
+    run(5.0, [&](double, Controls& c) { c.aimPoint = aim; });
+    printf("  hull after 5 s: bottom z %.3f, turret off target %.3f m, nodes sane %d\n", s->pos[t.refBottom].z, len(s->pos[t.turretNodes[0]] - s->pos[t.refFL]), std::isfinite(s->pos[t.turretNodes[0]].x));
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "esp")) {
+    printf("== Stability control: open-loop swerve, same input with and without ==\n");
+    for (double kmh : {80.0, 100.0, 120.0, 140.0}) {
+      for (int on = 1; on >= 0; on--) {
+        Bench b({-150, 0, 0}, 0);
+        b.world.clearBoxes();
+        b.world.flatten();
+        b.car.tune.esp = on;
+        const double vT = kmh / 3.6;
+        b.launchAt(vT, 3);
+        b.run(0.8, [&](double, Controls& c) { c.throttle = clampd(vT - b.car.speed, 0, 1); });
+        double slipMax = 0, yawOut = 0;
+        const double h0 = std::atan2(b.car.fwd.y, b.car.fwd.x);
+        b.run(6.0, [&](double t, Controls& c) {
+          const double T = 2.4;
+          c.throttle = 0;
+          c.steer = t < T ? 0.26 * std::sin(2.0 * PI * t / T) : 0.0;
+          const V3 v = b.car.vCog;
+          if (len(v) > 3.0) slipMax = std::max(slipMax, std::fabs(std::asin(clampd(dot(norm(v), b.car.left), -1, 1))));
+        });
+        yawOut = (std::atan2(b.car.fwd.y, b.car.fwd.x) - h0) * 57.3;
+        printf("  %3.0f km/h ESP %-3s: peak body slip %5.1f deg, final heading %+6.1f deg, end speed %5.1f km/h, y %+.1f m, guard %llu\n", kmh, on ? "AN" : "AUS", slipMax * 57.3, yawOut, b.car.speed * 3.6, b.car.cog.y, (unsigned long long)b.sim.clampedSteps);
+      }
+    }
+    printf("== Traction on low grip, full throttle ==\n");
+    for (int on = 1; on >= 0; on--) {
+      Bench b({-115, -95, 0}, 0);
+      b.car.tune.tcs = on;
+      double mxSpin = 0;
+      b.run(3.0, [&](double, Controls& c) { c.throttle = 1; for (const Wheel& w : b.car.wheels) if (w.driven) mxSpin = std::max(mxSpin, w.omega * w.R - b.car.speed); });
+      printf("  ASR %-3s: speed after 3 s %.1f km/h, worst wheel overspeed %.1f m/s\n", on ? "AN" : "AUS", b.car.speed * 3.6, mxSpin);
+    }
+    printf("== Braking 100-0 with and without ABS ==\n");
+    for (int on = 1; on >= 0; on--) {
+      Bench b;
+      b.world.clearBoxes();
+      b.world.flatten();
+      b.car.tune.abs = on;
+      b.launchAt(100 / 3.6, 3);
+      const V3 p0 = b.car.cog;
+      int locked = 0;
+      b.run(9.0, [&](double, Controls& c) { c.brake = 1; for (const Wheel& w : b.car.wheels) if (b.car.speed > 3 && std::fabs(w.omega) < 1) locked++; });
+      printf("  ABS %-3s: distance %.1f m, wheel-steps locked %d\n", on ? "AN" : "AUS", len(b.car.cog - p0), locked);
+    }
+    printf("== Banked bends: tightest stretch of the road, flat and banked ==\n");
+    for (double scale : {0.0, 1.0}) {
+      gBankScale = scale;
+      World probe;
+      probe.build();
+      const auto& pts = probe.roads()[0].pts;
+      double mx = 0;
+      size_t at = 0;
+      for (size_t i = 0; i < pts.size(); i++)
+        if (std::fabs(pts[i].bank) > mx) {
+          mx = std::fabs(pts[i].bank);
+          at = i;
+        }
+      if (scale == 0) continue;
+      printf("  largest bank %.1f deg at point %zu\n", std::atan(mx) * 57.3, at);
+      for (double sc : {0.0, 1.0}) {
+        for (double kmh : {100.0, 120.0, 140.0, 160.0}) {
+          gBankScale = sc;
+          const size_t start = (at + pts.size() - 60) % pts.size();
+          World w2;
+          w2.build();
+          const auto& road = w2.roads()[0].pts;
+          V3 sp{road[start].x, road[start].y, road[start].z};
+          auto* B = new Bench(sp, 0);
+          const auto& rd = B->world.roads()[0].pts;
+          // Aim the car along the road, then hold the speed through the bend with a pursuit driver.
+          const double yawRoad = std::atan2(rd[(start + 2) % rd.size()].y - rd[start].y, rd[(start + 2) % rd.size()].x - rd[start].x);
+          const Obj& o = B->sim.objs[0];
+          const V3 c0 = sp;
+          for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) {
+            const V3 r = B->sim.pos[i] - c0;
+            B->sim.pos[i] = c0 + V3{std::cos(yawRoad) * r.x - std::sin(yawRoad) * r.y, std::sin(yawRoad) * r.x + std::cos(yawRoad) * r.y, r.z};
+            B->sim.vel[i] = V3{std::cos(yawRoad), std::sin(yawRoad), 0} * (kmh / 3.6);
+          }
+          B->car.presetRolling(kmh / 3.6, 3);
+          double off = 0, latMax = 0;
+          const double vT = kmh / 3.6;
+          B->run(7.0, [&](double, Controls& c) {
+            size_t best = 0;
+            double bd = 1e18;
+            for (size_t i = 0; i < rd.size(); i += 2) {
+              const double dd = std::hypot(rd[i].x - B->car.cog.x, rd[i].y - B->car.cog.y);
+              if (dd < bd) {
+                bd = dd;
+                best = i;
+              }
+            }
+            off = std::max(off, bd);
+            latMax = std::max(latMax, std::fabs(B->car.latAcc));
+            const RoadPoint& t = rd[(best + size_t((12.0 + B->car.speed * 0.3) / 1.4)) % rd.size()];
+            double err = std::atan2(t.y - B->car.cog.y, t.x - B->car.cog.x) - std::atan2(B->car.fwd.y, B->car.fwd.x);
+            while (err > PI) err -= 2 * PI;
+            while (err < -PI) err += 2 * PI;
+            c.steer = clampd(err * 1.8, -0.5, 0.5);
+            c.throttle = clampd((vT - B->car.speed) * 0.5, 0, 1);
+            c.brake = clampd((B->car.speed - vT) * 0.15, 0, 0.3);
+          });
+          printf("  bank %s %3.0f km/h: furthest off the centre line %.1f m (road edge 4 m), peak lat %.2f g, end speed %.0f km/h\n", sc > 0 ? "AN " : "AUS", kmh, off, latMax / 9.81, B->car.speed * 3.6);
+          delete B;
+        }
+      }
+    }
+    gBankScale = 1.0;
+    return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "tree")) {
     // A car into a tree at various speeds. Does the trunk stop it, or does it snap? How does it land?

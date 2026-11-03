@@ -122,6 +122,63 @@ void Vehicle::detonate(Sim& sim) {
   note("AUTOBOMBE GEZUENDET");
 }
 
+// Electronic stability control and traction control, working the same brakes as the driver.
+void Vehicle::updateStability(const Controls& in, double dt) {
+  for (Wheel& w : wheels) w.espTorque = 0;
+  absHold_ -= dt;
+  espHold_ -= dt;
+  tcsHold_ -= dt;
+  absActive = absHold_ > 0;
+  espActive = espHold_ > 0;
+  tcsActive = tcsHold_ > 0;
+  double wantEsp = 1.0, wantTcs = 1.0;
+  const double v = std::max(dot(vCog, fwd), 0.0);
+  if (tune.esp && v > 5.0 && !dmg.hydraulics) {
+    // What the driver asks for: a yaw rate from steering and speed, as far as the tyres can deliver.
+    constexpr double kLockAngle = 0.60, kWheelbase = 2.74, kUndersteer = 0.0022;
+    const double delta = steerAct * tune.steer * kLockAngle;
+    const double limit = 0.9 * 9.81 * tune.grip / v;
+    const double wanted = clampd(v * delta / (kWheelbase * (1.0 + kUndersteer * v * v)), -limit, limit);
+    const double err = yawRate_ - wanted;
+    const double slip = std::asin(clampd(dot(norm(vCog), left), -1, 1));
+    // The tail is coming round when the car turns further than asked, or slides well past the line.
+    const bool oversteer = std::fabs(yawRate_) > std::fabs(wanted) || std::fabs(slip) > 0.10;
+    // Body slip counts too: it is the one thing a yaw rate alone does not show in a slow spin.
+    const double slipErr = std::fabs(slip) > 0.06 ? (slip - std::copysign(0.06, slip)) * -2.5 : 0.0;
+    const double e = err + slipErr;
+    constexpr double kDead = 0.06;
+    if (std::fabs(e) > kDead) {
+      const double torque = clampd((std::fabs(e) - kDead) * 3200.0, 0.0, 2100.0);
+      // Too much yaw to the left wants a moment to the right: brake a wheel on the right.
+      const bool brakeLeft = e < 0;
+      for (Wheel& w : wheels)
+        if (w.left == brakeLeft && w.front == oversteer) w.espTorque = oversteer ? torque : torque * 0.55;
+      wantEsp = clampd(1.0 - (std::fabs(e) - kDead) * 1.6, 0.25, 1.0);
+      if (torque > 150.0) espHold_ = 0.3;
+    }
+  }
+  if (tune.tcs) {
+    // Traction control: a driven wheel running away is braked, and the engine is pulled back.
+    double spin = 0;
+    for (Wheel& w : wheels) {
+      if (!w.driven) continue;
+      const double overrun = w.omega * w.R - v;
+      const double allowed = std::max(1.0, 0.14 * v);
+      if (overrun > allowed) {
+        spin = std::max(spin, overrun - allowed);
+        w.espTorque += clampd((overrun - allowed) * 260.0, 0.0, 1100.0);
+      }
+    }
+    if (spin > 0) {
+      wantTcs = clampd(1.0 - spin * 0.22, 0.15, 1.0);
+      tcsHold_ = 0.3;
+    }
+  }
+  espThrottle_ += (wantEsp - espThrottle_) * clampd(dt * (wantEsp < espThrottle_ ? 30.0 : 4.0), 0, 1);
+  tcsThrottle_ += (wantTcs - tcsThrottle_) * clampd(dt * (wantTcs < tcsThrottle_ ? 40.0 : 3.0), 0, 1);
+  (void)in;
+}
+
 void Vehicle::note(const char* msg) {
   lastDamage = msg;
   lastDamageAge = 0;
@@ -264,7 +321,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
       const double s = std::sqrt(sx * sx + sy * sy);
 
       const double loadSens = 1.0 - 0.08 * (Fz / kFz0 - 1.0);
-      double muS = 1.02 * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf);
+      double muS = 1.02 * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf) * tune.grip;
       if (w.deflate > 0.5) muS *= 0.45;
       const double Ftot = muS * Fz * magic(s);
       double Fx = 0, Fy = 0;
@@ -338,7 +395,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
 
   double Tb = 0;
   {
-    double pedal = brakeAct * w.brakeMax;
+    double pedal = brakeAct * w.brakeMax * tune.brake + w.espTorque;
     if (!w.front) {
       // Citroen brake bias: rear pressure follows rear suspension pressure, i.e. rear load.
       const double loadRatio = clampd(axle[1].s[w.left ? 0 : 1].pGas / 100e5, 0.3, 1.3);
@@ -350,12 +407,13 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
 
     // ABS, active above walking pace.
     const double Vwheel = std::fabs(speed);
-    if (Vwheel > 2.0 && brakeAct > 0.02) {
+    if (tune.abs && Vwheel > 2.0 && (brakeAct > 0.02 || w.espTorque > 0)) {
       // Slip controller around the tyre's peak (about -0.11). Proportional in both directions, so
       // it hovers near maximum grip rather than cycling deep into and out of lock-up.
       const double kap = w.contact ? (omega * Rnow - speed) / std::max(Vwheel, 1.0) : 0.0;
       const double rate = clampd((kap + 0.10) * 45.0, -16.0, 5.0);
       w.absFrac = clampd(w.absFrac + rate * dt, 0.02, 1.0);
+      if (w.absFrac < 0.75 && brakeAct > 0.02) absHold_ = 0.25;
     } else {
       w.absFrac = 1.0;
     }
@@ -505,7 +563,7 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
 
       // Damper valve, degressive above the knee velocity.
       const int mode = hydractiveSoft ? 1 : 0;
-      const double c = s.vel > 0 ? s.reb[mode] : s.bump[mode];
+      const double c = (s.vel > 0 ? s.reb[mode] : s.bump[mode]) * tune.damper;
       constexpr double kKnee = 0.30;
       const double av = std::fabs(s.vel);
       const double fd = av < kKnee ? c * av : c * (kKnee + 0.45 * (av - kKnee));
@@ -517,7 +575,7 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
 
       // Anti-roll bar + ram, acting at the wheel stations.
       const double delta = (side == 0 ? 1.0 : -1.0) * (A.s[0].L - A.s[1].L - A.ram);
-      F -= A.kBar * delta;
+      F -= A.kBar * tune.bar * delta;
 
       s.F = F;
       sim.force[s.low] += n * F;
@@ -713,7 +771,7 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   // is what shakes the block on its mounts at idle.
   crankAngle = std::fmod(crankAngle + engineOmega * dt, 2.0 * PI);
   const double fric = frictionTorque(rpmNow) * (oilLevel < 0.2 ? 2.5 : 1.0);
-  double comb = ignition ? load * (fullLoadTorque(rpmNow) + fric) : 0.0;
+  double comb = ignition ? load * (fullLoadTorque(rpmNow) * tune.power + fric) : 0.0;
   comb *= 1.0 + 0.25 * std::cos(3.0 * crankAngle);
   combustionTorque = comb;
   double Te = comb - fric - 2.0 - pumpTorque;
@@ -916,16 +974,30 @@ void Vehicle::updateDamage(Sim& sim, double dt) {
     note("TANK LECK");
   }
   if (dmg.tank) fuelLitres = std::max(0.0, fuelLitres - dt * 0.4);
+  // Oil temperature: it carries the bearings' heat away. As the level drops the same heat goes into
+  // less and less oil, and at the end nothing lubricates the bearings. That, not the coolant, seizes it.
+  {
+    const double work = 95.0 + 25.0 * clampd(rpm() / 6000.0, 0, 1) * clampd(throttleAct + 0.3, 0, 1);
+    const double starved = oilLevel < 0.35 ? (0.35 - oilLevel) / 0.35 : 0.0;
+    const double target = (engineRunning ? work : 40.0) + 170.0 * starved;
+    dmg.oilTemp += (target - dmg.oilTemp) * clampd(dt / 18.0, 0, 1);
+  }
   // The sump is the lowest part of the engine: dragging it over the road holes it.
   if (!dmg.oilLeak && !engineNodes.empty()) {
     const V3& sumpN = sim.pos[engineNodes[0]];
-    if (sumpN.z - sim.world->height(sumpN.x, sumpN.y) < 0.015 && len2(vCog) > 9.0) {
+    // Its steel skid plate takes a knock: a touchdown leaves a dent, only grinding along holes it.
+    const double clearance = sumpN.z - sim.world->height(sumpN.x, sumpN.y);
+    const double closing = -dot(sim.vel[engineNodes[0]], V3{0, 0, 1});
+    if (clearance < 0.01) sumpContact_ += std::sqrt(std::max(len2(vCog), 0.0)) * dt;
+    else sumpContact_ = std::max(0.0, sumpContact_ - dt * 0.4);
+    if (sumpContact_ > 2.5 || (clearance < 0.005 && closing > 7.0)) {
       dmg.oilLeak = true;
       note("OELWANNE AUFGERISSEN");
     }
   }
   if (dmg.oilLeak) {
-    oilLevel = std::max(0.0, oilLevel - dt * 0.05);
+    // A holed sump empties in about a minute.
+    oilLevel = std::max(0.0, oilLevel - dt * 0.017);
     if (oilLevel <= 0 && engineRunning && !dmg.seized) {
       dmg.seized = true;
       note("MOTOR OHNE OEL FESTGEGANGEN");
@@ -1048,6 +1120,9 @@ void Vehicle::update(Sim& sim, const Controls& in, double dt) {
   if (exploded) {
     // The wreck burns for a good while, fiercely at first.
     burnTime += dt;
+    if (burnTime > 4.0 && burnTime - dt <= 4.0)
+      for (Obj& o : sim.objs)
+        if (o.root == obj) o.scrap = true;
     if ((sim.stepCount & 31) == 0 && burnTime < 90.0) {
       const double fierce = clampd(1.0 - burnTime / 70.0, 0.15, 1.0);
       sim.event(EV_FIRE, cog + fwd * ((sim.stepCount % 7) * 0.25 - 0.75) + up * 0.25, V3{}, float(fierce));
@@ -1070,14 +1145,15 @@ void Vehicle::update(Sim& sim, const Controls& in, double dt) {
   rackRate_ = (steerAct - steerBefore) / dt * steerTravel;
   if (!dmg.steering) {
     // Incremental, so that a tie rod bent in a crash stays bent and the car pulls to one side.
-    const double delta = steerAct * steerTravel;
+    const double delta = steerAct * steerTravel * tune.steer;
     Beam& tl = sim.beams[tieBeam[0]];
     Beam& tr = sim.beams[tieBeam[1]];
     if (!(tl.flags & BF_BROKEN)) tl.L0 -= delta - rackPrev_;
     if (!(tr.flags & BF_BROKEN)) tr.L0 += delta - rackPrev_;
     rackPrev_ = delta;
   }
-  throttleAct += clampd(in.throttle - throttleAct, -14.0 * dt, 14.0 * dt);
+  updateStability(in, dt);
+  throttleAct += clampd(in.throttle * espThrottle_ * tcsThrottle_ - throttleAct, -14.0 * dt, 14.0 * dt);
   // The Citroen brake is powered and has almost no pedal travel: it bites at once.
   brakeAct += clampd(in.brake - brakeAct, -14.0 * dt, 20.0 * dt);
   hbAct_ = in.handbrake;

@@ -14,7 +14,7 @@ class Sim;
 enum MeshMat : u8 {
   MM_PAINT, MM_GLASS, MM_BLACK, MM_LINER, MM_CHROME, MM_LENS, MM_TAIL, MM_AMBER, MM_RUBBER, MM_ALLOY,
   MM_FABRIC, MM_CARPET, MM_PLATE, MM_METAL, MM_ALU, MM_LHM, MM_DARK, MM_DISC, MM_WHITE, MM_REFLECTOR,
-  MM_RUST, MM_COUNT
+  MM_RUST, MM_OLIVE, MM_OLIVE2, MM_TRACK, MM_COUNT
 };
 
 struct NodeGroup {
@@ -31,6 +31,7 @@ struct MeshPart {
 };
 
 struct CarMesh {
+  double noseX = 2.26;  // where the design frame's origin lies ahead of the spawn point
   static constexpr int kK = 24;
   std::vector<MeshPart> parts;
   std::vector<float> restPos;     // xyz per vertex, design coordinates

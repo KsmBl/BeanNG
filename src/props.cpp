@@ -137,8 +137,8 @@ void addTree(Sim& sim, const World& w, const V3& foot, u32 seed) {
 
   // The crown is what bends: springy branches that give way plastically and snap, and needles on them.
   // Nothing in it collides with the car as a surface, only the branch tips do, which weigh little.
-  const Mat branch{2.6e4, 26, 300, 520, 1400, 0.4, 0};
-  const Mat brace{0.9e4, 12, 120, 200, 500, 0.5, 0};
+  const Mat branch{2.0e4, 30, 210, 380, 500, 0.45, 0};
+  const Mat brace{0.6e4, 12, 85, 150, 150, 0.45, 0};
   const u8 needle = u8(COL_NEEDLES + (seed >> 20) % 3);
   auto nearestLevel = [&](double z) {
     int best = 1;

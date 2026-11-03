@@ -15,4 +15,8 @@ if [[ ! -f assets/xantia.mesh || tools/gen_xantia.py -nt assets/xantia.mesh ]]; 
   python3 tools/gen_xantia.py assets/xantia.mesh
 fi
 
+if [[ ! -f assets/leopard.mesh || tools/gen_leopard.py -nt assets/leopard.mesh ]]; then
+  python3 tools/gen_leopard.py assets/leopard.mesh
+fi
+
 exec ./build/beanng "$@"

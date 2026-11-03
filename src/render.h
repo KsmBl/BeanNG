@@ -20,6 +20,13 @@ struct WheelView {
   float runoutX = 0, runoutZ = 0;
 };
 
+// One piece of the damage diagram: where it is in a plan view of the vehicle, and how it is doing.
+struct PartState {
+  const char* label;  // nullptr for none
+  float x, y, w, h;   // in a box of 100 x 240 units, front at the top
+  float damage;       // 0 as new .. 1 destroyed
+};
+
 // Copied out of the physics thread once per rendered frame.
 struct Snapshot {
   std::vector<V3> pos;
@@ -45,6 +52,15 @@ struct Snapshot {
   double timeScale = 1;
   double realtime = 1;   // simulated seconds per real second
   bool paused = false;
+  std::vector<PartState> parts;
+  double oilTemp = 95, oilLevel = 1;
+  bool tank = false;
+  std::vector<V3> trackPath[2];
+  double trackPhase[2] = {};
+  double rpmMax = 7000, rpmRed = 6100;
+  double turretYaw = 0, gunPitch = 0, reload = 0, reloadTime = 4;
+  V3 muzzle, gunDir{1, 0, 0}, sight;
+  bool absOn = true, espOn = true, tcsOn = true, absActive = false, espActive = false, tcsActive = false;
   double scorch = 0;  // the car has burnt out, 0..1
   // For the sound.
   double engineLoad = 0, inputRpm = 0, clutchSlip = 0;
@@ -59,7 +75,29 @@ struct Camera {
   bool inside = false;  // looking out through the glass from inside the car
 };
 
+// A list on screen: the vehicle menu and the settings overlay.
+struct UiPanel {
+  bool open = false;
+  std::string title, foot;
+  std::vector<std::string> rows;
+  std::vector<std::string> values;
+  std::vector<float> fill;   // bar behind the value, 0..1, or negative for none
+  int sel = 0;
+};
+// Where a panel sits, shared by drawing it and clicking on it.
+inline void panelLayout(int w, int h, size_t rows, float& x, float& y, float& pw, float& rowH) {
+  const float H = float(h), W = float(w);
+  const float scale = H / 720.f < 1.f ? 1.f : float(int(H / 720.f + 0.5f));
+  pw = 620 * scale;
+  rowH = 27 * scale;
+  x = (W - pw) * 0.5f;
+  y = (H - (float(rows) + 3.6f) * rowH) * 0.5f + 2.0f * rowH;
+}
+
 struct HudOptions {
+  UiPanel panel;
+  bool crosshair = false;
+  bool damageView = true;
   bool help = false, xray = false, debugBeams = false, mouseSteer = false, gamepad = false;
   bool motionBlur = true;
   std::string gamepadName, cameraName, gpuName;
@@ -68,6 +106,7 @@ struct HudOptions {
 
 class Renderer {
  public:
+  ~Renderer();
   bool init(const World& world, const Sim& sim, const CarRig& rig, CarMesh& mesh, V3 spawn);
   void resetDamage();
   void clearSkidMarks();
