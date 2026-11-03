@@ -9,7 +9,7 @@
 namespace net {
 
 constexpr double kSendRate = 30.0;
-constexpr int kMaxEventsPerPacket = 24;
+constexpr int kMaxEventsPerPacket = 18;
 constexpr int kMaxBlastsPerPacket = 12;
 constexpr int kMaxSceneryPerPacket = 70;
 constexpr double kNodeScale = 256.0;  // a tank's nodes go as offsets of 4 mm steps from its middle, 128 m either way

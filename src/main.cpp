@@ -541,7 +541,7 @@ struct Game {
   double replayLeft = 0;
   int netState = NET_OFF;
   std::string netError;
-  std::string names[2];
+  std::string names[Duel::kMaxPlayers];
   int phase = Duel::WAITING;
   double phaseClock = 0;
   int slot = 0;
@@ -550,13 +550,23 @@ struct Game {
   Soldier me;            // on foot: where this machine thinks it is, ahead of what the server has answered
 
   // Where the other player's vehicle is, if they sit in one. Read by the window's thread, roughly, for the ears.
-  bool enemyVehicleFrame(int me, V3& at, double& speed) {
+  bool enemyVehicleFrame(int me, V3 s_ear, V3& at, double& speed) {
     std::lock_guard<std::mutex> lock(snapMutex);
-    const int v = duel.players[1 - me].vehicle;
-    if (v < 0) return false;
-    at = duel.frames[v].cog;
-    speed = std::fabs(duel.frames[v].speed);
-    return true;
+    // The nearest of them that is moving.
+    bool any = false;
+    double bestD = 1e30;
+    for (int e = 0; e < Duel::kMaxPlayers; e++) {
+      const int v = duel.players[e].vehicle;
+      if (v < 0 || !duel.players[e].present || Duel::teamOf(e) == Duel::teamOf(me) || std::fabs(duel.frames[v].speed) < 1.5) continue;
+      const double d = len2(duel.frames[v].cog - s_ear);
+      if (d < bestD) {
+        bestD = d;
+        at = duel.frames[v].cog;
+        speed = std::fabs(duel.frames[v].speed);
+        any = true;
+      }
+    }
+    return any;
   }
 
   void fillSnapshot(const char* message) {
@@ -575,7 +585,7 @@ struct Game {
         tt.phase[k] = t.trackPhase[k];
         tt.speed[k] = t.trackOmega[k] * Tank::kSprocketR;
       }
-      s.parkedScorch[i < Duel::kTanks ? i : i - Duel::kTanks + Duel::kVehicles + 2] = t.destroyed ? float(clampd(t.burnTime / 3.0, 0.15, 1.0)) : float(t.damage * 0.3);
+      s.parkedScorch[i < Duel::kTanks ? i : i - Duel::kTanks + Duel::kVehicles + Duel::kMaxPlayers] = t.destroyed ? float(clampd(t.burnTime / 3.0, 0.15, 1.0)) : float(t.damage * 0.3);
     }
     s.events.insert(s.events.end(), sim.events.begin(), sim.events.end());
     if (s.events.size() > 2000) s.events.clear();
@@ -729,7 +739,7 @@ struct Game {
       std::deque<CarFrame> frames;
     } shown[Duel::kCars];
     // Walking answers at once, and is checked against the server's answer afterwards.
-    Soldier shownSoldier[2];
+    Soldier shownSoldier[Duel::kMaxPlayers];
     struct Past {
       u32 seq;
       V3 p;
@@ -771,15 +781,16 @@ struct Game {
     std::vector<std::pair<int, std::string>> chatLog;
     u32 chatLogFirst = 0;
     u8 carrying[IT_COUNT] = {};
-    int weaponShown[2] = {WP_PISTOL, WP_PISTOL};
-    V3 blowShown[2];
-    bool ghillieShown[2] = {};
+    int weaponShown[Duel::kMaxPlayers] = {};
+    V3 blowShown[Duel::kMaxPlayers];
+    bool ghillieShown[Duel::kMaxPlayers] = {};
     struct DroneSeen {
       bool live = false;
       V3 p, v, shown;
       double battery = 0, heardAt = 0;
-    } droneShown[2];
-    Ragdoll bodies[2];
+    } droneShown[Duel::kMaxPlayers];
+    Ragdoll bodies[Duel::kMaxPlayers];
+    int seatNow = 0, wantedNow = 2, hereNow = 0;
     double repairNow = 0;
     // A part just lost is said out loud for a few seconds.
     double lastMod[TM_COUNT];
@@ -865,7 +876,7 @@ struct Game {
       if (replaying) {
         // Time in the replay goes at the speed asked for, and whichever player is being watched is "me" for all of it.
         replayNow += dt * double(replaySpeed.load()) / 100.0;
-        mySlot = replayWatch.load() & 1;
+        mySlot = replayWatch.load() % Duel::kMaxPlayers;
         if (replayAt >= lastTape.size()) {
           state = NET_OFF;
           match = 0;
@@ -996,7 +1007,7 @@ struct Game {
           r.get(t);
           r.get(nodes);
           r.get(beams);
-          if (!r.ok() || protocol != net::kProtocol || s > 1 || state != NET_CONNECTING) continue;
+          if (!r.ok() || protocol != net::kProtocol || s >= Duel::kMaxPlayers || state != NET_CONNECTING) continue;
           if (nodes != sim.pos.size() || beams != sim.beams.size()) {
             disconnect("Die Spielversion passt nicht zum Server");
             break;
@@ -1065,9 +1076,18 @@ struct Game {
           r.get(wins[1]);
           r.get(pc);
           r.get(mask);
-          i8 vehicles[2] = {};
-          for (int i = 0; i < 2; i++) {
+          i8 vehicles[Duel::kMaxPlayers];
+          u8 seats[Duel::kMaxPlayers] = {};
+          u8 readyMask = 0, wantedMask = 0;
+          r.get(readyMask);
+          r.get(wantedMask);
+          wantedNow = wantedMask;
+          for (int i = 0; i < Duel::kMaxPlayers; i++) {
+            vehicles[i] = -1;
+            duel.players[i].present = mask & (1 << i);
+            if (!(mask & (1 << i))) continue;
             r.get(vehicles[i]);
+            r.get(seats[i]);
             Soldier& sd = shownSoldier[i];
             sd.p = r.getV3();
             sd.v = r.getV3();
@@ -1161,14 +1181,18 @@ struct Game {
           winner = win;
           clockNow = pc;
           vehicleNow = vehicles[mySlot];
+          seatNow = seats[mySlot];
+          hereNow = 0;
+          for (int i = 0; i < Duel::kMaxPlayers; i++) hereNow += (mask >> i) & 1;
           ackedInput = ack;
           while (!sentAt.empty() && int32_t(sentAt.front().first - ack) < 0) sentAt.pop_front();
           if (!sentAt.empty() && sentAt.front().first == ack) rtt += (now - sentAt.front().second - rtt) * 0.1;
           serverP = shownSoldier[mySlot].p;
           freshAnswer = true;
-          for (int i = 0; i < 2; i++) {
+          for (int i = 0; i < Duel::kMaxPlayers; i++) {
             duel.players[i].vehicle = vehicles[i];
-            duel.players[i].ready = mask & (4 << i);
+            duel.players[i].seat = seats[i];
+            duel.players[i].ready = readyMask & (1 << i);
             duel.players[i].soldier.hp = shownSoldier[i].hp;
           }
           for (u32 i = first; i < first + count; i++) {
@@ -1225,7 +1249,7 @@ struct Game {
               r.get(ch);
               text += ch;
             }
-            if (!r.ok() || who > 2) break;
+            if (!r.ok() || who > Duel::kMaxPlayers) break;
             const u32 have = chatLogFirst + u32(chatLog.size());
             if (chatLog.empty()) chatLogFirst = from;
             if (i == chatLogFirst + u32(chatLog.size()) || (have <= i && chatLog.empty())) chatLog.push_back({who, text});
@@ -1239,10 +1263,10 @@ struct Game {
           std::lock_guard<std::mutex> lock(snapMutex);
           snap.chat.clear();
           const size_t show = std::min<size_t>(chatLog.size(), 8);
-          for (size_t i = chatLog.size() - show; i < chatLog.size(); i++) snap.chat.push_back((chatLog[i].first == 2 ? std::string("Server") : names[chatLog[i].first]) + ": " + chatLog[i].second);
+          for (size_t i = chatLog.size() - show; i < chatLog.size(); i++) snap.chat.push_back((chatLog[i].first == Duel::kMaxPlayers ? std::string("Server") : names[chatLog[i].first]) + ": " + chatLog[i].second);
         } else if (kind == net::P_NAMES) {
           std::lock_guard<std::mutex> lock(snapMutex);
-          for (int i = 0; i < 2; i++) {
+          for (int i = 0; i < Duel::kMaxPlayers; i++) {
             char name[net::kNameBytes];
             for (char& ch : name) r.get(ch);
             name[net::kNameBytes - 1] = 0;
@@ -1321,7 +1345,7 @@ struct Game {
         Tank& t = duel.tanks[side];
         const u32 first = duel.tankFirst[side];
         const size_t count = fb.offsets.size() / 3;
-        if (side == vehicleNow && q.size() >= 2 && !replaying) {
+        if (side == vehicleNow && seatNow == 0 && q.size() >= 2 && !replaying) {
           // One's own tank is not shown late but early: where it will be by the time one's latest input has arrived.
           // That is what makes it answer at once instead of after the ping.
           const NetFrame& last = q.back();
@@ -1489,7 +1513,7 @@ struct Game {
       }
       for (int t = 0; t < Duel::kTanks; t++) Duel::poseNet(sim, duel.netFirst[t], duel.tanks[t], duel.tanks[t].netOn);
       // Drones, a little smoothed: thirty positions a second would show.
-      for (int i = 0; i < 2; i++) {
+      for (int i = 0; i < Duel::kMaxPlayers; i++) {
         DroneSeen& ds = droneShown[i];
         if (ds.live) {
           const V3 target = ds.p + ds.v * std::clamp(now - ds.heardAt, 0.0, 0.1);
@@ -1525,10 +1549,14 @@ struct Game {
         for (int k = 0; k < 2; k++)
           for (int i = used[k]; i < limit[k]; i++) Duel::poseMissile(sim, duel.rocketFirst[base[k] + i], false, V3{}, V3{1, 0, 0}, scale[k]);
       }
-      // Both soldiers drawn: oneself where one thinks one is, the other as the server last said.
-      for (int i = 0; i < 2; i++) {
+      // The soldiers drawn: oneself where one thinks one is, the others as the server last said.
+      for (int i = 0; i < Duel::kMaxPlayers; i++) {
         // Through the scope one's own head would be in the way.
         // Someone who has died on foot falls as a body from then on.
+        if (!duel.players[i].present) {
+          Duel::poseSoldier(sim, duel.soldierFirst[i], shownSoldier[i], true, 0);
+          continue;
+        }
         const bool deadOnFoot = (state == NET_IN || replaying) && duel.players[i].soldier.hp <= 0 && duel.players[i].vehicle < 0;
         if (deadOnFoot && !bodies[i].on) {
           Soldier last = i == mySlot ? me : shownSoldier[i];
@@ -1633,17 +1661,25 @@ struct Game {
         snprintf(msg, sizeof msg, "%s", alert.c_str());
       } else if (state == NET_IN) {
         const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
-        if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf den zweiten Spieler");
+        if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf Spieler  ·  %d von %d da", hereNow, wantedNow);
         else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
         else if (phaseNow == Duel::FINISHED) {
           std::lock_guard<std::mutex> lock(snapMutex);
-          snprintf(msg, sizeof msg, "%s  ·  %s %u : %u %s", winner < 0 ? "Unentschieden" : (winner == mySlot ? "Sieg!" : "Niederlage"), names[mySlot].c_str(), wins[mySlot], wins[1 - mySlot], names[1 - mySlot].c_str());
+          if (wantedNow > 2) {
+            static const char* kTeam[2] = {"Team West", "Team Ost"};
+            const int myTeam = Duel::teamOf(mySlot);
+            snprintf(msg, sizeof msg, "%s  ·  %s %u : %u %s", winner < 0 ? "Unentschieden" : (winner == myTeam ? "Sieg!" : "Niederlage"), kTeam[myTeam], wins[myTeam], wins[1 - myTeam], kTeam[1 - myTeam]);
+          } else {
+            const int me = mySlot;
+            const int other = 1 - me;
+            snprintf(msg, sizeof msg, "%s  ·  %s %u : %u %s", winner < 0 ? "Unentschieden" : (winner == me ? "Sieg!" : "Niederlage"), names[me].c_str(), wins[me], wins[other], names[other].c_str());
+          };
         }
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
         else if (droneShown[mySlot].live) snprintf(msg, sizeof msg, "Drohne  ·  Akku %.0f s  ·  Feuer markiert den Gegner  ·  U holt sie zurück", droneShown[mySlot].battery);
         else if (mine && mine->netClock > 0) snprintf(msg, sizeof msg, "Tarnnetz wird aufgezogen  ·  %.0f s", mine->netClock);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
-        else if (vehicleNow >= 0) snprintf(msg, sizeof msg, "E: aussteigen");
+        else if (vehicleNow >= 0) snprintf(msg, sizeof msg, seatNow == 0 ? "E: aussteigen" : "E: aussteigen  ·  Du bist Richtschütze");
         else if (duel.players[mySlot].tapClock > 0) snprintf(msg, sizeof msg, "Hauptcomputer wird angezapft  ·  %.0f s", duel.players[mySlot].tapClock);
         else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && !duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "E: Hauptcomputer anzapfen");
         else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "Angezapft  ·  J fragt den Standort des Gegners ab, K zeigt ihn");
@@ -1655,7 +1691,7 @@ struct Game {
           char tankName[64] = "";
           if (v >= 0 && v < Duel::kTanks) snprintf(tankName, sizeof tankName, "%s, %s", duel.tanks[v].hullSpec().name, duel.tanks[v].spec().name);
           const char* name = v < 0 ? "" : (v < Duel::kTanks ? tankName : (v - Duel::kTanks) % Duel::kCarKinds == 0 ? "Xantia" : ((v - Duel::kTanks) % Duel::kCarKinds == 1 ? "One:1" : "Hummer"));
-          if (v >= 0) snprintf(msg, sizeof msg, carrying[IT_REPAIR] > 0 ? "E: einsteigen  ·  R: reparieren  ·  %s" : "E: einsteigen  ·  %s", name);
+          if (v >= 0) snprintf(msg, sizeof msg, duel.occupied(v) ? "E: als Richtschütze einsteigen  ·  %s" : (carrying[IT_REPAIR] > 0 ? "E: einsteigen  ·  R: reparieren  ·  %s" : "E: einsteigen  ·  %s"), name);
         }
       }
       memcpy(duel.players[mySlot].items, carrying, IT_COUNT);
@@ -1779,9 +1815,9 @@ static void runGame() {
     G.rig.parkedExtra.push_back(isTank ? CarRig::NodeRange{G.duel.netFirst[k], 8} : CarRig::NodeRange{0, 0});
   }
   // Two soldiers, each part held by its own few nodes.
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < Duel::kMaxPlayers; i++) {
     CarMesh body;
-    const char* file = i == 0 ? "assets/soldier.mesh" : "assets/soldier2.mesh";
+    const char* file = Duel::teamOf(i) == 0 ? "assets/soldier.mesh" : "assets/soldier2.mesh";
     if (!body.load(file)) {
       fprintf(stderr, "%s fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n", file);
       return;
@@ -1801,7 +1837,7 @@ static void runGame() {
   for (int i = 0; i < Duel::kWrecks; i++) {
     CarMesh wreck;
     if (!wreck.load("assets/leopard.mesh")) return;
-    const int k = Duel::kVehicles + 2 + i;
+    const int k = Duel::kVehicles + Duel::kMaxPlayers + i;
     const CarRig& r = G.duel.wreckRigs[i];
     G.mesh.addParked(wreck, k, G.duel.wreckSpawn[i], r.noseX, origin, {});
     for (const NodeGroup& g : r.groups) G.rig.groups.push_back({std::to_string(k) + ":" + g.name, g.nodes});
@@ -1817,13 +1853,13 @@ static void runGame() {
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
   // Blood on the ground: flat discs, each a little wider than the last.
-  for (int i = 0; i < 2; i++)
+  for (int i = 0; i < Duel::kMaxPlayers; i++)
     for (int d = 0; d < Duel::kBloodDiscs; d++) {
       const float seed = std::sin(float(d) * 12.9f + float(i)) * 0.5f + 0.5f;
       G.rig.links.push_back({G.duel.bloodFirst[i][d], G.duel.bloodFirst[i][d] + 1, (d < 3 ? 0.2f : 0.07f) + 0.1f * seed, MM_PAINT, 0});
     }
   // Drones: a little body, and a cross of arms with a rotor at each end.
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < Duel::kMaxPlayers; i++) {
     const u32 f = G.duel.droneFirst[i];
     G.rig.links.push_back({f, f + 1, 0.11f, MM_DARK, 0});
     G.rig.links.push_back({f + 2, f + 3, 0.018f, MM_BLACK, 0});
@@ -1971,7 +2007,7 @@ static void runGame() {
         if (pickItems[IT_AR] > 0) weaponPick = WP_AR;
         else weaponPick = WP_PISTOL;
         // Looking across the yard towards the enemy. The camera's yaw is in the world.
-        rig.yaw = G.world.base(slot).facing + PI;
+        rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
         hasMark = false;
         mapOpen = false;
         rig.pitch = 0.20;
@@ -2282,8 +2318,8 @@ static void runGame() {
                 if (replayFree) {
                   replayFree = false;
                   G.replayWatch = 0;
-                } else if (G.replayWatch.load() == 0) {
-                  G.replayWatch = 1;
+                } else if (G.replayWatch.load() + 1 < G.duel.playersWanted) {
+                  G.replayWatch = G.replayWatch.load() + 1;
                 } else {
                   replayFree = true;
                   freeEye = cam.eye;
@@ -2433,7 +2469,7 @@ static void runGame() {
       if (inMatch) {
         panelKind = PANEL_NONE;
         weaponPick = WP_SNIPER;
-        rig.yaw = G.world.base(slot).facing + PI;
+        rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
         if (!scoped) rig.pitch = 0.03;
         static double since = tNow;
         static bool down = false;
@@ -2488,14 +2524,14 @@ static void runGame() {
       panelKind = PANEL_NONE;
       if (inMatch) {
         weaponPick = WP_RPG;
-        rig.yaw = G.world.base(slot).facing + PI;
+        rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
         rig.pitch = -0.02;
         if (std::fmod(tNow, 2.0) < dt) sendC.fire = true;
         static bool called = false;
         if (!called && view.foot.codes > 0) {
           called = true;
           sendC.strike = true;
-          sendC.strikeAt = G.world.base(slot).centre + V3{std::cos(G.world.base(slot).facing), std::sin(G.world.base(slot).facing), 0} * 70.0;
+          sendC.strikeAt = G.world.base(Duel::teamOf(slot)).centre + V3{std::cos(G.world.base(Duel::teamOf(slot)).facing), std::sin(G.world.base(Duel::teamOf(slot)).facing), 0} * 70.0;
         }
       }
     }
@@ -2506,7 +2542,7 @@ static void runGame() {
       }
       panelKind = PANEL_NONE;
       if (inMatch) {
-        rig.yaw = G.world.base(slot).facing + PI;
+        rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
         rig.pitch = 0.1;
         sprintScript = true;
         if (tNow < 4.5) rig.yaw += 1.0;  // first out past the row of vehicles
@@ -2520,7 +2556,7 @@ static void runGame() {
       panelKind = PANEL_NONE;
       if (netState == Game::NET_IN && inMatch && !left) {
         gas = 1.0;
-        const V3 to = G.world.base(slot).slot(1) - view.foot.p;
+        const V3 to = G.world.base(Duel::teamOf(slot)).slot(1) - view.foot.p;
         if (onFoot) rig.yaw = std::atan2(-to.y, -to.x);
         if (onFoot && len(V3{to.x, to.y, 0}) < 4.5) sendC.use = true;
         static double since = tNow;
@@ -2538,7 +2574,7 @@ static void runGame() {
       if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
       panelKind = PANEL_NONE;
       if (inMatch) {
-        rig.yaw = G.world.base(slot).facing + PI + 0.15;
+        rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI + 0.15;
         rig.pitch = 0.18;
         static double last = -100;
         if (tNow - last > 2.0 && !view.foot.droneLive) {
@@ -2559,7 +2595,7 @@ static void runGame() {
       }
       panelKind = PANEL_NONE;
       if (inMatch) {
-        const V3 to = G.world.base(slot).slot(0) - view.foot.p;
+        const V3 to = G.world.base(Duel::teamOf(slot)).slot(0) - view.foot.p;
         if (onFoot) {
           rig.yaw = std::atan2(-to.y, -to.x);
           gas = 1.0;
@@ -2581,7 +2617,7 @@ static void runGame() {
       }
       panelKind = PANEL_NONE;
       if (inMatch) {
-        rig.yaw = G.world.base(slot).facing + PI;
+        rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
         rig.pitch = 0.1;
         static double last = -100;
         if (tNow - last > 3.0 && view.foot.items[IT_SMOKE] > 0) {
@@ -2599,7 +2635,7 @@ static void runGame() {
       panelKind = PANEL_NONE;
       scriptAim = std::fmod(tNow, 4.0) > 2.0;
       weaponPick = tNow < 8.0 ? WP_PISTOL : WP_AR;
-      rig.yaw = G.world.base(slot).facing + PI + 0.5;
+      rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI + 0.5;
       rig.pitch = 0.05;
     } else if (scriptMode == 50 && phase == Duel::CHOOSING && !pickReady) {
       pickReady = true;
@@ -2617,7 +2653,7 @@ static void runGame() {
         panelKind = PANEL_NONE;
         if (onFoot) {
           // To the tank with the chosen turret, and in.
-          const V3 to = G.world.base(slot).slot(gPickTurret) - view.foot.p;
+          const V3 to = G.world.base(Duel::teamOf(slot)).slot(gPickTurret) - view.foot.p;
           rig.yaw = std::atan2(-to.y, -to.x);
           rig.pitch = 0.2;
           gas = 1.0;
@@ -2902,7 +2938,7 @@ static void runGame() {
       if (inMatch) {
         V3 who;
         double speed = 0;
-        if (G.enemyVehicleFrame(slot, who, speed) && speed > 1.5) {
+        if (G.enemyVehicleFrame(slot, cam.eye, who, speed) && speed > 1.5) {
           const double d = len(who - cam.eye);
           if (d < 420.0) hud.heard.push_back({who, float(std::clamp(1.0 - d / 420.0, 0.2, 1.0)), 0.05f, false});
         }
@@ -3051,7 +3087,7 @@ static void runGame() {
       }
     }
     if (scriptMode == 53) {
-      const V3 mid = G.world.base(slot).centre + V3{std::cos(G.world.base(slot).facing), std::sin(G.world.base(slot).facing), 0} * 70.0;
+      const V3 mid = G.world.base(Duel::teamOf(slot)).centre + V3{std::cos(G.world.base(Duel::teamOf(slot)).facing), std::sin(G.world.base(Duel::teamOf(slot)).facing), 0} * 70.0;
       cam.target = mid + V3{0, 0, 40.0};
       cam.eye = view.foot.p + V3{0, 45.0, 12.0};
       cam.up = {0, 0, 1};

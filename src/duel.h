@@ -79,6 +79,8 @@ class Duel {
   static constexpr int kTanks = 2 * HK_COUNT * TK_COUNT;
   static constexpr int kCarKinds = 3;
   static constexpr int kCars = 2 * kCarKinds;
+  static constexpr int kMaxPlayers = 6;
+  static int teamOf(int player) { return player % 2; }
   static constexpr int kVehicles = kTanks + kCars;
 
   enum Phase : u8 { WAITING, CHOOSING, PLAYING, FINISHED };
@@ -88,6 +90,7 @@ class Duel {
     u8 items[IT_COUNT] = {};
     Soldier soldier;
     int vehicle = -1;  // what they sit in, -1 on foot
+    int seat = 0;      // 0 drives, 1 is the gunner
     double walkDebt = 0;
     // A drone from a crate. While it flies, its owner stands there holding the controls.
     int drones = 0;
@@ -160,7 +163,7 @@ class Duel {
   static constexpr int kPartNodes = 8, kSoldierParts = 21, kSoldierNodes = kSoldierParts * kPartNodes;
   static const char* soldierPartName(int part);
   static const V3 kSoldierRest;  // where the bind pose stands
-  u32 soldierFirst[2] = {};
+  u32 soldierFirst[kMaxPlayers] = {};
   size_t blastsDone = 0;
   // What flies from hand weapons. Hits are judged against where things were when the shooter fired, as they saw it.
   struct Bullet {
@@ -188,7 +191,7 @@ class Duel {
   void startSmoke(V3 at);
   void useSmoke(int p);
   struct Past {
-    V3 soldier[2];
+    V3 soldier[kMaxPlayers];
     V3 tank[kTanks];  // the middle of each: how far it has gone on since the shooter saw it
   };
   static constexpr int kPastSteps = 32;  // every hundredth of a second
@@ -233,14 +236,15 @@ class Duel {
   static constexpr int kGiveKinds = 17;
   static constexpr double kDroneBattery = 50.0, kDroneSpeed = 24.0, kDroneMarkRange = 300.0;
   static constexpr int kDroneNodes = 6;
-  u32 droneFirst[2] = {};
+  u32 droneFirst[kMaxPlayers] = {};
   static void poseDrone(Sim& sim, u32 first, bool live, V3 at, double yaw);
   void stepDrone(int p, const Intent& in, double dt);
   static const char* const kGiveNames[kGiveKinds];
   bool give(int player, const char* name, int count);
   static V3 eyeOf(const Soldier& s);
 
-  Player players[2];
+  Player players[kMaxPlayers];
+  int playersWanted = 2;  // how many it takes for a match, half on each side
   Phase phase = WAITING;
   int winner = -1;  // -1 until decided; a draw stays -1 through FINISHED
   u32 matchId = 1;
@@ -250,7 +254,7 @@ class Duel {
 
   // Tanks first, then cars, then the scenery. Every machine ends up with the same node at the same index.
   void build();
-  void step(const Intent in[2]);
+  void step(const Intent in[kMaxPlayers]);
   void updateFrames();
   // weapon: 0 knife, 1 pistol, 2 assault rifle, 3 big rifle, 4 rocket launcher
   // sightsOnly: looking along one's own weapon. No body in the way, just the gun held up under the eye.
@@ -261,9 +265,22 @@ class Duel {
   static void poseRagdoll(Sim& sim, u32 first, const Ragdoll& r, bool ghillie = false);
   // Pools of blood under a body: three flat discs, one after the other as it spreads.
   static constexpr int kBloodDiscs = 11;
-  u32 bloodFirst[2][kBloodDiscs] = {};
+  u32 bloodFirst[kMaxPlayers][kBloodDiscs] = {};
   int nearestVehicle(V3 p, double reach) const;
-  bool occupied(int v) const { return players[0].vehicle == v || players[1].vehicle == v; }
+  // A tank has room for a driver and a gunner, a car for a driver.
+  int occupants(int v) const {
+    int n = 0;
+    for (const Player& pl : players)
+      if (pl.vehicle == v) n++;
+    return n;
+  }
+  bool occupied(int v) const { return occupants(v) > 0; }
+  bool full(int v) const { return occupants(v) >= (v < kTanks ? 2 : 1); }
+  int seatHolder(int v, int seat) const {
+    for (int i = 0; i < kMaxPlayers; i++)
+      if (players[i].vehicle == v && players[i].seat == seat) return i;
+    return -1;
+  }
   bool vehicleDead(int v) const { return v < kTanks ? tanks[v].destroyed : cars[size_t(v - kTanks)].exploded; }
   // Moves a soldier one time step. Used by the server, and by a player's own machine to answer at once.
   void walk(Soldier& s, const WalkInput& in, double dt) const;
@@ -277,7 +294,7 @@ class Duel {
   static constexpr double kRpgScale = 0.42, kStrikeScale = 1.5;
   u32 rocketFirst[kRpgRockets + kStrikeRockets] = {};
   static constexpr double kTapTime = 5.0, kQueryWait = 30.0, kFixError = 70.0, kComputerReach = 2.6;
-  bool atEnemyComputer(int p, V3 at) const { return len(at + V3{0, 0, 1.0} - world.base(1 - p).computer) < kComputerReach; }
+  bool atEnemyComputer(int p, V3 at) const { return len(at + V3{0, 0, 1.0} - world.base(1 - teamOf(p)).computer) < kComputerReach; }
   static constexpr double kSetupTime = 3.0;  // to get down and have the big rifle on its bipod
   static constexpr double kRepairTime = 6.0;
   int nearestToRepair(V3 p) const;
@@ -289,7 +306,8 @@ class Duel {
 
  private:
   void startMatch();
-  void stepPlayers(const Intent in[2]);
+  void stepPlayers(const Intent in[kMaxPlayers]);
+  int enemyNearest(int p, V3 from) const;
   void boardVehicle(int p, int v);
   void fireWeapon(int p, const Intent& in);
   void stepBullets(double dt);

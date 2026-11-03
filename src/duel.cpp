@@ -52,7 +52,7 @@ void Duel::build() {
   }
   carsEnd = u32(sim.pos.size());
   // The soldiers' nodes stand deep underground whenever nobody is drawn with them.
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < kMaxPlayers; i++) {
     sim.beginObj(OBJ_PROP, false);
     soldierFirst[i] = u32(sim.pos.size());
     for (int k = 0; k < kSoldierNodes; k++) sim.addNode(V3{}, 1.0, NF_FIXED);
@@ -68,7 +68,7 @@ void Duel::build() {
     for (int k = 0; k < kMissileNodes; k++) sim.rest[missileFirst[i] + u32(k)] = sim.pos[missileFirst[i] + u32(k)];
     sim.endObj();
   }
-  for (int i = 0; i < 2; i++)
+  for (int i = 0; i < kMaxPlayers; i++)
     for (int d = 0; d < kBloodDiscs; d++) {
       sim.beginObj(OBJ_PROP, false);
       bloodFirst[i][d] = u32(sim.pos.size());
@@ -76,7 +76,7 @@ void Duel::build() {
       sim.addNode(V3{0, 0, -389.99}, 1.0, NF_FIXED);
       sim.endObj();
     }
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < kMaxPlayers; i++) {
     sim.beginObj(OBJ_PROP, false);
     droneFirst[i] = u32(sim.pos.size());
     for (int k = 0; k < kDroneNodes; k++) sim.addNode(V3{}, 1.0, NF_FIXED);
@@ -573,15 +573,19 @@ void Duel::stepDrone(int p, const Intent& in, double dt) {
   }
   // Firing marks the other player, if the crosshair is near enough to them.
   if (in.fireFoot) {
-    const Player& other = players[1 - p];
-    const V3 where = other.vehicle >= 0 ? frames[other.vehicle].cog : other.soldier.p + V3{0, 0, 1.0};
-    const V3 to = where - pl.droneP;
-    const double d = len(to);
-    if (d < kDroneMarkRange && dot(norm(to), ahead) > 0.97) {
-      pl.fix = where;
-      pl.hasFix = true;
-      pl.fixAge = 0;
-      noteHit(-1, p, where);
+    for (int e = 0; e < kMaxPlayers; e++) {
+      const Player& other = players[e];
+      if (!other.present || teamOf(e) == teamOf(p) || other.soldier.hp <= 0) continue;
+      const V3 where = other.vehicle >= 0 ? frames[other.vehicle].cog : other.soldier.p + V3{0, 0, 1.0};
+      const V3 to = where - pl.droneP;
+      const double d = len(to);
+      if (d < kDroneMarkRange && dot(norm(to), ahead) > 0.97) {
+        pl.fix = where;
+        pl.hasFix = true;
+        pl.fixAge = 0;
+        noteHit(-1, p, where);
+        break;
+      }
     }
   }
 }
@@ -725,7 +729,7 @@ int Duel::nearestVehicle(V3 p, double reach) const {
   int best = -1;
   double bestD = 1e30;
   for (int v = 0; v < kVehicles; v++) {
-    if (vehicleDead(v) || occupied(v)) continue;
+    if (vehicleDead(v) || full(v)) continue;
     const VehicleFrame& f = frames[v];
     const V3 q = p - f.cog;
     // From the edge of the vehicle, not its middle: a tank is a long thing to walk round.
@@ -858,6 +862,20 @@ V3 Duel::soldierAt(int p, double lag) const {
   return past[(pastAt - back + kPastSteps * 2) % kPastSteps].soldier[p];
 }
 
+int Duel::enemyNearest(int p, V3 from) const {
+  int best = -1;
+  double bestD = 1e30;
+  for (int e = 0; e < kMaxPlayers; e++) {
+    if (!players[e].present || teamOf(e) == teamOf(p) || players[e].soldier.hp <= 0) continue;
+    const double d = len2(players[e].soldier.p - from);
+    if (d < bestD) {
+      bestD = d;
+      best = e;
+    }
+  }
+  return best;
+}
+
 void Duel::fireWeapon(int p, const Intent& in) {
   Player& pl = players[p];
   const int w = pl.weapon;
@@ -867,12 +885,13 @@ void Duel::fireWeapon(int p, const Intent& in) {
   const V3 eye = eyeOf(s);
   if (w == WP_KNIFE) {
     pl.shotClock = kWeapons[w].interval;
-    const V3 target = soldierAt(1 - p, in.lag);
-    Soldier& other = players[1 - p].soldier;
-    if (players[1 - p].vehicle < 0 && len(V3{target.x - s.p.x, target.y - s.p.y, target.z - s.p.z}) < 2.2) {
+    const int foe = enemyNearest(p, s.p);
+    const V3 target = foe >= 0 ? soldierAt(foe, in.lag) : s.p + V3{0, 0, 999};
+    if (foe >= 0 && players[foe].vehicle < 0 && len(V3{target.x - s.p.x, target.y - s.p.y, target.z - s.p.z}) < 2.2) {
+      Soldier& other = players[foe].soldier;
       other.hp -= kWeapons[w].damage;
-      players[1 - p].lastBlow = norm(target - s.p + V3{0, 0, 0.3}) * 2.0;
-      noteHit(1 - p, p, s.p);
+      players[foe].lastBlow = norm(target - s.p + V3{0, 0, 0.3}) * 2.0;
+      noteHit(foe, p, s.p);
       sim.event(EV_BLOOD, target + V3{0, 0, 1.1}, norm(target - s.p) * 2.0, 0.7f);
     }
     return;
@@ -1028,8 +1047,9 @@ void Duel::stepBullets(double dt) {
           at = pl.droneP;
         }
     // Those it may hit: the other player, where the shooter saw them.
-    if (!stop) {
-      const int q = 1 - b.owner;
+    for (int q = 0; q < kMaxPlayers && !stop; q++) {
+      // Not oneself, and in the same uniform not either: nobody is out to shoot their own side in the back.
+      if (!players[q].present || teamOf(q) == teamOf(b.owner)) continue;
       if (players[q].vehicle < 0 && b.kind != kKindStrike) {
         const V3 foot = soldierAt(q, b.lag);
         const double t = clampd(dot(V3{foot.x - from.x, foot.y - from.y, 0}, V3{seg.x, seg.y, 0}) / std::max(seg.x * seg.x + seg.y * seg.y, 1e-9), 0, 1);
@@ -1075,7 +1095,7 @@ void Duel::stepBullets(double dt) {
           stop = true;
           at = b.p;
           noteHit(-1, b.owner, from);
-          for (int who = 0; who < 2; who++)
+          for (int who = 0; who < kMaxPlayers; who++)
             if (players[who].vehicle == v) noteHit(who, -1, from);
         }
       }
@@ -1259,6 +1279,7 @@ void Duel::stepMines(double dt) {
 }
 
 void Duel::boardVehicle(int p, int v) {
+  players[p].seat = seatHolder(v, 0) < 0 ? 0 : 1;
   players[p].vehicle = v;
   const u16 a = v < kTanks ? tanks[v].hullObj : cars[size_t(v - kTanks)].obj;
   const u16 b = v < kTanks ? tanks[v].turretObj : a;
@@ -1291,15 +1312,21 @@ void Duel::leaveVehicle(int p) {
   Soldier& s = players[p].soldier;
   s.p = vehicleExit(v);
   s.v = V3{};
+  players[p].vehicle = -1;
+  // The other one can stay; the gunner moves up to drive.
+  if (occupied(v)) {
+    const int left = seatHolder(v, 1);
+    if (left >= 0) players[left].seat = 0;
+    return;
+  }
   const u16 a = v < kTanks ? tanks[v].hullObj : cars[size_t(v - kTanks)].obj;
   const u16 b = v < kTanks ? tanks[v].turretObj : a;
   sim.objs[a].alwaysAwake = false;
   sim.objs[b].alwaysAwake = false;
   if (v >= kTanks) cars[size_t(v - kTanks)].engineRunning = false;
-  players[p].vehicle = -1;
 }
 
-void Duel::stepPlayers(const Intent in[2]) {
+void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
   // Blasts reach those on foot.
   for (; blastsDone < sim.blastLog.size(); blastsDone++) {
     const Sim::BlastRecord& b = sim.blastLog[blastsDone];
@@ -1318,7 +1345,7 @@ void Duel::stepPlayers(const Intent in[2]) {
     }
   }
   pastAt = (pastAt + (int(sim.stepCount % 20) == 0 ? 1 : 0)) % kPastSteps;
-  for (int i = 0; i < 2; i++) past[pastAt].soldier[i] = players[i].soldier.p;
+  for (int i = 0; i < kMaxPlayers; i++) past[pastAt].soldier[i] = players[i].soldier.p;
   for (int i = 0; i < kTanks; i++) past[pastAt].tank[i] = frames[i].cog;
   bulletDebt += kDt;
   while (bulletDebt >= 0.005) {
@@ -1358,8 +1385,9 @@ void Duel::stepPlayers(const Intent in[2]) {
       incoming.pop_back();
     }
   }
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < kMaxPlayers; i++) {
     Player& pl = players[i];
+    if (!pl.present) continue;
     Soldier& s = pl.soldier;
     pl.lastInput = in[i].seq;
     pl.shotClock = std::max(0.0, pl.shotClock - kDt);
@@ -1414,7 +1442,9 @@ void Duel::stepPlayers(const Intent in[2]) {
     // In a tank the question goes by radio, and that needs its aerials.
     const bool radioGone = pl.vehicle >= 0 && pl.vehicle < kTanks && tanks[pl.vehicle].mod[TM_ANTENNA] <= 0;
     if (in[i].query && pl.tapped && pl.fixWait <= 0 && phase == PLAYING && !radioGone) {
-      const Player& other = players[1 - i];
+      // Whichever of them is nearest.
+      const int foe = enemyNearest(i, s.p);
+      const Player& other = players[foe >= 0 ? foe : i];
       const V3 where = other.vehicle >= 0 ? frames[other.vehicle].cog : other.soldier.p;
       randState = randState * 1664525u + 1013904223u;
       const double a = double(randState >> 16) / 65535.0 * 2.0 * PI;
@@ -1527,8 +1557,9 @@ void Duel::restart() {
 }
 
 void Duel::placePlayers() {
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < kMaxPlayers; i++) {
     Player& p = players[i];
+    p.seat = 0;
     p.vehicle = -1;
     p.ready = false;
     p.repairClock = 0;
@@ -1553,16 +1584,17 @@ void Duel::placePlayers() {
       p.rpgAmmo = 6;
     }
     p.walkDebt = 0;
-    const World::Base& base = world.base(i);
+    const World::Base& base = world.base(teamOf(i));
     const double cx = std::cos(base.facing), sx = std::sin(base.facing);
     p.soldier = Soldier{};
-    p.soldier.p = base.centre + V3{cx, sx, 0} * -7.0;
+    // Side by side in front of their command centre.
+    p.soldier.p = base.centre + V3{cx, sx, 0} * -7.0 + V3{-sx, cx, 0} * (double(i / 2) - 1.0) * 3.0;
     p.soldier.yaw = base.facing + PI;
   }
 }
 
 bool Duel::choose(int player, const u8 items[IT_COUNT], bool ready) {
-  if (phase != CHOOSING || player < 0 || player > 1) return false;
+  if (phase != CHOOSING || player < 0 || player >= kMaxPlayers) return false;
   if (slotsUsed(items) > kLoadoutSlots) return false;
   Player& p = players[player];
   for (int i = 0; i < IT_COUNT; i++) p.items[i] = items[i];
@@ -1575,20 +1607,30 @@ void Duel::startMatch() {
   phaseClock = 0;
 }
 
-void Duel::step(const Intent in[2]) {
+void Duel::step(const Intent in[kMaxPlayers]) {
   stepPlayers(in);
   sim.forces(kDt);
   Controls still;
   still.brake = 1;
   for (int i = 0; i < kTanks; i++) {
     Tank& t = tanks[i];
-    const Controls* c = &still;
-    bool owned = false;
-    for (int p = 0; p < 2; p++)
-      if (players[p].vehicle == i) {
-        c = &in[p].c;
-        owned = true;
-      }
+    // The driver has the pedals, the gunner the gun, and whoever is alone in it has both.
+    Controls crew = still;
+    const int driver = seatHolder(i, 0), gunner = seatHolder(i, 1);
+    const int aimer = gunner >= 0 ? gunner : driver;
+    if (driver >= 0) {
+      crew = in[driver].c;
+    } else if (gunner >= 0) {
+      crew.brake = 1.0;
+    }
+    if (aimer >= 0) {
+      crew.aimPoint = in[aimer].c.aimPoint;
+      crew.indirect = in[aimer].c.indirect;
+      crew.fire = in[aimer].c.fire;
+      crew.launch = in[aimer].c.launch;
+    }
+    const Controls* c = &crew;
+    const bool owned = driver >= 0 || gunner >= 0;
     if (owned || sim.objs[t.hullObj].awake || sim.objs[t.turretObj].awake) {
       if (!t.destroyed) {
         sim.wake(t.hullObj);
@@ -1620,8 +1662,13 @@ void Duel::step(const Intent in[2]) {
   // A tank that has just lost armour: whoever sits in it feels it, the one on the other side gets the credit.
   for (int v = 0; v < kTanks; v++) {
     if (tanks[v].damage > tankDamageSeen[v] + 0.005) {
-      for (int who = 0; who < 2; who++)
-        if (players[who].vehicle == v) noteHit(who, 1 - who, sim.lastBlast);
+      if (occupied(v)) {
+        for (int who = 0; who < kMaxPlayers; who++) {
+          if (players[who].vehicle == v) noteHit(who, -1, sim.lastBlast);
+          // Everyone on the other side gets to see it land.
+          else if (players[who].present && teamOf(who) != teamOf(seatHolder(v, 0) >= 0 ? seatHolder(v, 0) : seatHolder(v, 1))) noteHit(-1, who, sim.lastBlast);
+        }
+      }
     }
     tankDamageSeen[v] = tanks[v].damage;
   }
@@ -1634,7 +1681,7 @@ void Duel::step(const Intent in[2]) {
     // What a shell has torn open right beside it no longer works as a vehicle.
     if (blast && !v.exploded && len(v.cog - sim.lastBlast) < sim.lastBlastRadius * 0.30) v.wreck(sim);
     Controls driven = parked;
-    for (int p = 0; p < 2; p++)
+    for (int p = 0; p < kMaxPlayers; p++)
       if (players[p].vehicle == kTanks + int(i)) {
         driven = in[p].c;
       }
@@ -1653,7 +1700,12 @@ void Duel::step(const Intent in[2]) {
   updateFrames();
   phaseClock += kDt;
 
-  const bool both = players[0].present && players[1].present;
+  int here = 0, readyNow = 0;
+  for (const Player& pl : players) {
+    if (pl.present) here++;
+    if (pl.present && pl.ready) readyNow++;
+  }
+  const bool both = here >= playersWanted;
   switch (phase) {
     case WAITING:
       if (both) {
@@ -1665,12 +1717,12 @@ void Duel::step(const Intent in[2]) {
       if (!both) {
         restart();
         phase = WAITING;
-      } else if ((players[0].ready && players[1].ready) || phaseClock > kChooseTime) {
+      } else if (readyNow >= here || phaseClock > kChooseTime) {
         // What they chose survives the reset of everything else.
-        u8 kept[2][IT_COUNT];
-        for (int i = 0; i < 2; i++) memcpy(kept[i], players[i].items, IT_COUNT);
+        u8 kept[kMaxPlayers][IT_COUNT];
+        for (int i = 0; i < kMaxPlayers; i++) memcpy(kept[i], players[i].items, IT_COUNT);
         restart();
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < kMaxPlayers; i++) {
           memcpy(players[i].items, kept[i], IT_COUNT);
           players[i].smallAmmo += 60 * players[i].items[IT_SMALL_AMMO];
           if (players[i].items[IT_AR] > 0) {
@@ -1687,8 +1739,10 @@ void Duel::step(const Intent in[2]) {
         phase = WAITING;
         break;
       }
-      // Whoever dies loses, whatever they were doing at the time.
-      const bool dead[2] = {players[0].soldier.hp <= 0, players[1].soldier.hp <= 0};
+      // A side is finished when nobody of it is left standing.
+      bool dead[2] = {true, true};
+      for (int i = 0; i < kMaxPlayers; i++)
+        if (players[i].present && players[i].soldier.hp > 0) dead[teamOf(i)] = false;
       if (dead[0] || dead[1]) {
         if (dead[0] != dead[1]) {
           winner = dead[0] ? 1 : 0;

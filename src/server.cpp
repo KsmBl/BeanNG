@@ -177,12 +177,14 @@ struct Client {
 int main(int argc, char** argv) {
   int port = kDefaultPort;
   bool giveAll = false;
+  int wanted = 2;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--give-all")) giveAll = true;  // every weapon from the start, for trying things out
+    else if (!strcmp(argv[i], "--players") && i + 1 < argc) wanted = std::clamp(atoi(argv[++i]) / 2 * 2, 2, int(Duel::kMaxPlayers));  // 2, 4 or 6, half to a side
     else port = atoi(argv[i]);
   }
   if (port <= 0 || port > 65535) {
-    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all]\n");
+    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all] [--players 2|4|6]\n");
     return 1;
   }
   std::signal(SIGINT, onSignal);
@@ -191,6 +193,7 @@ int main(int argc, char** argv) {
   auto* duel = new Duel();
   printf("Baue die Welt...\n");
   duel->giveAll = giveAll;
+  duel->playersWanted = wanted;
   duel->build();
   Socket sock;
   if (!sock.open(u16(port))) {
@@ -207,7 +210,7 @@ int main(int argc, char** argv) {
     shell.print(text);
   };
 
-  Client clients[2];
+  Client clients[Duel::kMaxPlayers];
   struct ChatLine {
     int who;
     std::string text;
@@ -237,7 +240,7 @@ int main(int argc, char** argv) {
       u8 kind = 0;
       if (!r.header(kind)) continue;
       int slot = -1;
-      for (int i = 0; i < 2; i++)
+      for (int i = 0; i < Duel::kMaxPlayers; i++)
         if (clients[i].used && clients[i].addr == from) slot = i;
       if (kind == P_HELLO) {
         u16 protocol = 0;
@@ -251,7 +254,7 @@ int main(int argc, char** argv) {
           continue;
         }
         if (slot < 0) {
-          for (int i = 0; i < 2 && slot < 0; i++)
+          for (int i = 0; i < duel->playersWanted && slot < 0; i++)
             if (!clients[i].used) slot = i;
           if (slot < 0) {
             Writer w(P_FULL);
@@ -418,9 +421,22 @@ int main(int argc, char** argv) {
     w.put(duel->wins[0]);
     w.put(duel->wins[1]);
     w.put(float(duel->phaseClock));
-    w.put(u8((clients[0].used ? 1 : 0) | (clients[1].used ? 2 : 0) | (duel->players[0].ready ? 4 : 0) | (duel->players[1].ready ? 8 : 0)));
-    for (const Duel::Player& pl : duel->players) {
+    {
+      u8 here = 0, ready = 0;
+      for (int k = 0; k < Duel::kMaxPlayers; k++) {
+        if (clients[k].used) here |= u8(1 << k);
+        if (duel->players[k].ready) ready |= u8(1 << k);
+      }
+      w.put(here);
+      w.put(ready);
+      w.put(u8(duel->playersWanted));
+    }
+    for (int k = 0; k < Duel::kMaxPlayers; k++) {
+      // Only who is here: with six that is still half a packet.
+      if (!clients[k].used) continue;
+      const Duel::Player& pl = duel->players[k];
       w.put(i8(pl.vehicle));
+      w.put(u8(pl.seat));
       w.putV3(pl.soldier.p);
       w.putV3(pl.soldier.v);
       w.put(float(pl.soldier.yaw));
@@ -547,9 +563,9 @@ int main(int argc, char** argv) {
 
   // ---- The commands of the console.
   const auto playerByName = [&](const std::string& n) {
-    if (n == "player1" || n == "1") return 0;
-    if (n == "player2" || n == "2") return 1;
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < Duel::kMaxPlayers; i++)
+      if (n == "player" + std::to_string(i + 1) || n == std::to_string(i + 1)) return i;
+    for (int i = 0; i < Duel::kMaxPlayers; i++)
       if (clients[i].used && n == clients[i].name) return i;
     return -1;
   };
@@ -559,8 +575,7 @@ int main(int argc, char** argv) {
       for (const char* c : {"/give", "/kill", "/kick", "/players", "/restart", "/wind", "/help", "/quit"}) out.push_back(c);
     } else if (words[0] == "/give" || words[0] == "/kick" || words[0] == "/kill") {
       if (words.size() == 2) {
-        out.push_back("player1");
-        out.push_back("player2");
+        for (int i = 0; i < duel->playersWanted; i++) out.push_back("player" + std::to_string(i + 1));
         for (const Client& c : clients)
           if (c.used) out.push_back(c.name);
       } else if (words[0] == "/give" && words.size() == 3) {
@@ -573,7 +588,7 @@ int main(int argc, char** argv) {
     if (line.empty()) return;
     if (line[0] != '/') {
       // Anything else is said to everybody.
-      chat.push_back({2, line.substr(0, kChatBytes)});
+      chat.push_back({Duel::kMaxPlayers, line.substr(0, kChatBytes)});
       return;
     }
     std::vector<std::string> words;
@@ -625,7 +640,7 @@ int main(int argc, char** argv) {
         say("Spieler %d stirbt", who + 1);
       }
     } else if (cmd == "/players") {
-      for (int i = 0; i < 2; i++) {
+      for (int i = 0; i < duel->playersWanted; i++) {
         if (!clients[i].used) {
           say("player%d: frei", i + 1);
           continue;
@@ -635,7 +650,9 @@ int main(int argc, char** argv) {
       }
     } else if (cmd == "/restart") {
       duel->restart();
-      duel->phase = duel->players[0].present && duel->players[1].present ? Duel::CHOOSING : Duel::WAITING;
+      int here = 0;
+      for (const Client& who : clients) here += who.used ? 1 : 0;
+      duel->phase = here >= duel->playersWanted ? Duel::CHOOSING : Duel::WAITING;
       shell.print("Neues Match");
     } else if (cmd == "/wind") {
       if (words.size() > 1) duel->wind = norm(duel->wind) * atof(words[1].c_str());
@@ -659,7 +676,7 @@ int main(int argc, char** argv) {
       while (shell.poll(line)) command(line);
     }
     const double t = now();
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < Duel::kMaxPlayers; i++) {
       if (clients[i].used && t - clients[i].lastHeard > kTimeout) {
         say("Spieler %d: keine Verbindung mehr", i + 1);
         clients[i].used = false;
@@ -670,8 +687,8 @@ int main(int argc, char** argv) {
     const auto q0 = Clock::now();
     int done = 0;
     while (simTime < t - wall0 && done < 40) {
-      Duel::Intent in[2];
-      for (int i = 0; i < 2; i++) {
+      Duel::Intent in[Duel::kMaxPlayers];
+      for (int i = 0; i < Duel::kMaxPlayers; i++) {
         Client& c = clients[i];
         if (!c.used || !c.haveInput) {
           in[i].c.brake = 1;
@@ -713,7 +730,7 @@ int main(int argc, char** argv) {
         in[i].walk.sprint = c.in.sprint;
         c.fire = c.launch = c.repair = c.use = c.setup = c.mineFoot = c.mineTank = c.strike = c.query = c.smoke = c.net = c.drone = false;
       }
-      for (int i = 0; i < 2; i++) duel->players[i].present = clients[i].used;
+      for (int i = 0; i < Duel::kMaxPlayers; i++) duel->players[i].present = clients[i].used;
       duel->step(in);
       simTime += Duel::kDt;
       done++;
@@ -752,7 +769,7 @@ int main(int argc, char** argv) {
       const size_t nEv = std::min(pending.size(), size_t(kMaxEventsPerPacket));
       events.assign(pending.begin(), pending.begin() + long(nEv));
       pending.erase(pending.begin(), pending.begin() + long(nEv));
-      for (int i = 0; i < 2; i++) {
+      for (int i = 0; i < Duel::kMaxPlayers; i++) {
         Client& c = clients[i];
         if (!c.used) continue;
         sendMeta(c, i);
