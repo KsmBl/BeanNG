@@ -712,6 +712,7 @@ struct Game {
 
   struct NetFrame {
     u32 tick = 0;
+    double arrived = 0;  // on this machine's clock
     V3 cog;
     Tank::NetState state;
     std::vector<i16> offsets;
@@ -734,6 +735,7 @@ struct Game {
     // that there is always a next position to move towards.
     struct CarFrame {
       u32 tick = 0;
+      double arrived = 0;
       V3 cog, fwd, left, up;
       float speed = 0, rpm = 0, throttle = 0, brake = 0, steer = 0, fuel = 0, coolant = 0, lat = 0, lon = 0;
       float theta[4] = {};
@@ -769,6 +771,23 @@ struct Game {
     // How long a question takes to come back: from when an input went out to when the server says it has used it.
     std::deque<std::pair<u32, double>> sentAt;
     double rtt = 0.05;
+    // One's own vehicle, shown ahead of what the server last said. Carrying on as it is going is safe; guessing at what
+    // the steering is about to do is eased in, for a sudden change of the guess would be a sudden jump of the tank.
+    double ownAhead = 0, ownSeen = 0;
+    int ownFor = -1;
+    // Half a round trip, as far as guessing is any use at all.
+    const auto ownLookAhead = [&] { return clampd(rtt * 0.5, 0.0, 0.15); };
+    const auto ownTurnFor = [&](int who, double seen, double want, double age, double dtNow) {
+      if (who != ownFor) {
+        ownFor = who;
+        ownAhead = 0;
+        ownSeen = seen;
+      }
+      ownSeen += (seen - ownSeen) * clampd(dtNow * 12.0, 0.0, 1.0);
+      const double target = lerpd(ownSeen, want, 0.7) * ownLookAhead();
+      ownAhead += clampd(target - ownAhead, -0.7 * dtNow, 0.7 * dtNow);
+      return ownSeen * age + ownAhead;
+    };
     // For trying things out on one machine: holds back what arrives, as a slow line would.
     const double fakeLag = getenv("BEANNG_FAKE_LAG") ? atof(getenv("BEANNG_FAKE_LAG")) / 1000.0 : 0.0;
     struct Held {
@@ -1067,6 +1086,7 @@ struct Game {
           if (!r.ok()) continue;
           auto& q = frames[idx];
           if (!q.empty() && q.back().tick >= tick) continue;
+          f.arrived = now;
           q.push_back(std::move(f));
           while (q.size() > 16) q.pop_front();
           // Where this machine's clock stands against the server's, without the jitter of any one packet.
@@ -1324,7 +1344,10 @@ struct Game {
           if (!r.ok()) continue;
           c.got += count;
           if (c.got >= total) {
-            if (c.frames.empty() || c.frames.back().tick < tick) c.frames.push_back(c.building);
+            if (c.frames.empty() || c.frames.back().tick < tick) {
+              c.building.arrived = now;
+              c.frames.push_back(c.building);
+            }
             while (c.frames.size() > 16) c.frames.pop_front();
             c.got = 0;
           }
@@ -1377,12 +1400,18 @@ struct Game {
           const double seen = std::remainder(h1 - heading(before), 2.0 * PI) * (net::kSendRate / ticks);
           const double absV = len(vel);
           const double want = double(in.c.steer) * (absV < 5.0 ? 1.1 : clampd(7.5 / absV, 0.32, 1.1));
-          const double lead = clampd(now - timeOffset - double(last.tick) / net::kSendRate + rtt * 0.5, 0.0, 0.35);
-          // What is asked for this moment counts for more the further ahead it looks.
-          const double rate = lerpd(seen, want, clampd(lead * 4.0, 0.0, 0.7));
-          const double turn = rate * lead;
+          // Measured on this machine's own clock from when the frame came in, so nothing can pile up over a long game.
+          const double age = clampd(now - last.arrived, 0.0, 0.1);
+          const double turn = ownTurnFor(side, seen, want, age, dt);
           const double c = std::cos(turn), sn = std::sin(turn);
-          const V3 cog = last.cog + vel * lead;
+          const V3 cog = last.cog + vel * (age + ownLookAhead());
+          if (scriptMode == 63) {
+            static double nextSay = 0;
+            if (now > nextSay) {
+              printf("Laufzeit %.0f ms, Rahmenalter %.0f ms, Vorlauf Kurs %.2f Grad\n", rtt * 1000.0, age * 1000.0, ownAhead * 180.0 / PI);
+              nextSay = now + 20.0;
+            }
+          }
           const size_t n3 = last.offsets.size() / 3;
           for (size_t k = 0; k < n3; k++) {
             const V3 o{double(last.offsets[k * 3]) / net::kNodeScale, double(last.offsets[k * 3 + 1]) / net::kNodeScale, double(last.offsets[k * 3 + 2]) / net::kNodeScale};
@@ -1421,11 +1450,10 @@ struct Game {
           const double ticks = std::max(1.0, double(last.tick) - double(before.tick));
           const V3 vel = (last.cog - before.cog) * (net::kSendRate / ticks);
           const double seen = std::remainder(std::atan2(last.fwd.y, last.fwd.x) - std::atan2(before.fwd.y, before.fwd.x), 2.0 * PI) * (net::kSendRate / ticks);
-          const double lead = clampd(now - timeOffset - double(last.tick) / net::kSendRate + rtt * 0.5, 0.0, 0.35);
           const double want = double(in.c.steer) * 0.45 * last.speed / 2.7;  // the bicycle model, with the lock it has
-          const double rate = lerpd(seen, want, clampd(lead * 4.0, 0.0, 0.7));
-          cog = last.cog + vel * lead;
-          ownTurn = rate * lead;
+          const double age = clampd(now - last.arrived, 0.0, 0.1);
+          cog = last.cog + vel * (age + ownLookAhead());
+          ownTurn = ownTurnFor(Duel::kTanks + k, seen, want, age, dt);
           const double c2 = std::cos(ownTurn), s2 = std::sin(ownTurn);
           for (size_t i = 0; i < last.offsets.size() / 3; i++) {
             const V3 o{double(last.offsets[i * 3]) / net::kNodeScale, double(last.offsets[i * 3 + 1]) / net::kNodeScale, double(last.offsets[i * 3 + 2]) / net::kNodeScale};
@@ -3145,7 +3173,7 @@ static void runGame() {
       pickReady = true;
       panelKind = PANEL_NONE;
     }
-    if ((scriptMode == 41 || scriptMode == 48 || scriptMode == 49) && netState == Game::NET_IN) {
+    if ((scriptMode == 41 || scriptMode == 48 || scriptMode == 49 || scriptMode == 63) && netState == Game::NET_IN) {
       if (phase == Duel::CHOOSING && tNow > 1.0 && !pickReady) {
         pickItems[IT_REPAIR] = 1;
         pickItems[IT_AR] = 2;
@@ -3181,6 +3209,23 @@ static void runGame() {
       }
     }
 
+    if (scriptMode == 63 && inTank) {
+      // Steering to and fro, and how far the picture of one's own tank jumps from one frame to the next.
+      static double lastHeading = 0, biggest = 0, nextSay = 0;
+      static bool started = false;
+      gas = 0.7;
+      brake = 0;
+      steer = std::fmod(tNow, 3.0) < 1.5 ? 1.0 : -1.0;
+      const double heading = std::atan2(view.carFwd.y, view.carFwd.x);
+      if (started) biggest = std::max(biggest, std::fabs(std::remainder(heading - lastHeading, 2.0 * PI)));
+      lastHeading = heading;
+      started = true;
+      if (tNow > nextSay) {
+        printf("Kurs: groesster Sprung pro Bild %.2f Grad, %.0f km/h\n", biggest * 180.0 / PI, view.speedKmh);
+        biggest = 0;
+        nextSay = tNow + 2.0;
+      }
+    }
     {
       std::lock_guard<std::mutex> lock(G.inputMutex);
       Controls& c = G.input.c;
