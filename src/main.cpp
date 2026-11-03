@@ -1603,6 +1603,18 @@ static int playSession(int kind, bool openMenu) {
           scriptGas = view.speedKmh < 55.0 ? 0.8 : 0.1;
           scriptSteer = tNow > 3.0 ? 0.5 : 0.0;
           break;
+        case 32:  // the start points, as the menu sets them: foot of the mountain, then the summit
+          rig.mode = CAM_CHASE;
+          if (tNow > 3.0 && startPlace == 0) {
+            startPlace = 1;
+            doReset = true;
+          }
+          if (tNow > 9.0 && startPlace == 1) {
+            startPlace = 2;
+            doReset = true;
+          }
+          scriptGas = tNow > 5.0 && tNow < 9.0 ? 0.6 : 0.0;
+          break;
         case 23:  // switches vehicle in mid-game, as the menu does, and back out
           if (tNow > 4.0) {
             nextVehicle = kind == VK_XANTIA ? VK_LEOPARD : -1;
