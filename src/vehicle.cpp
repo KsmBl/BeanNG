@@ -774,7 +774,8 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
     // The turbos need exhaust flow first: below that it is a 5-litre V8, and then the shove arrives.
     const double wantBoost = load * clampd((rpmNow - 2200.0) / 2000.0, 0.0, 1.0);
     boost += (wantBoost - boost) * clampd(dt / (wantBoost > boost ? 0.45 : 0.12), 0, 1);
-    fullTorque *= 0.42 + 0.58 * boost;
+    // Off boost it is still a 5-litre engine, with about what such an engine makes unaided.
+    fullTorque = lerpd(std::min(fullTorque, 520.0), fullTorque, boost);
   }
   double comb = ignition ? load * (fullTorque + fric) : 0.0;
   comb *= 1.0 + 0.25 * std::cos(3.0 * crankAngle);
@@ -804,10 +805,10 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
     else
       e = throttleAct > 0.03 ? smoothstepd(1000.0, 2100.0, rpmNow) : 0.0;
     // Launch control: the clutch keeps slipping until the turbos have something to work with.
-    // How high it holds follows the throttle: when the traction control cuts back on a slippery road the
-    // clutch must close sooner, or the two would wait for each other and the car would not move at all.
+    // How high it holds follows the driver's foot: pulling away gently must not wait for 4000 rpm that a
+    // part-open throttle never reaches.
     if (spec.turbo && gear == 1 && rIn < 3600.0) {
-      const double gate = lerpd(1500.0, 4300.0, throttleAct * throttleAct);
+      const double gate = lerpd(1500.0, 4300.0, in.throttle * in.throttle);
       e = std::min(e, smoothstepd(gate - 1100.0, gate, rpmNow));
     }
     clutch = e * clutchRamp_;
