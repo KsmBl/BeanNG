@@ -436,8 +436,13 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
     for (int i = 0; i < 4; i++) {
       wing.push_back(foot[i]);
       const int side = i < 2 ? 0 : 1;
-      for (int s : {15, 16, 17})
-        for (int r : {4, 5}) beam(foot[i], u32(body[s][r][side]), mPylon, &veh.wingMountBeams);
+      // Struts that all lie level with the deck hold nothing up. These go well down into the structure too,
+      // so that the feet are braced from below as well as sideways.
+      for (int s : {15, 17}) {
+        beam(foot[i], u32(body[s][5][side]), mPylon, &veh.wingMountBeams);
+        beam(foot[i], u32(body[s][1][side]), mPylon, &veh.wingMountBeams);
+        beam(foot[i], u32(body[s][0][side]), mPylon, &veh.wingMountBeams);
+      }
     }
   }
 
