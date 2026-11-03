@@ -586,6 +586,18 @@ struct Game {
     part("ROHR", 47, 4, 6, 80, tank.mod[TM_GUN]);
     part(nullptr, 4, 34, 12, 170, tank.trackOff[0] ? 0.0 : tank.mod[TM_TRACK_L]);
     part(nullptr, 84, 34, 12, 170, tank.trackOff[1] ? 0.0 : tank.mod[TM_TRACK_R]);
+    part(nullptr, 34, 188, 32, 12, tank.mod[TM_RADIATOR]);
+    part(nullptr, 44, 200, 12, 8, tank.mod[TM_FUEL]);
+    part(nullptr, 36, 96, 10, 10, tank.mod[TM_SIGHT]);
+    part(nullptr, 54, 96, 10, 10, tank.mod[TM_RANGE]);
+    part(nullptr, 25, 56, 12, 8, tank.mod[TM_PERISCOPE]);
+    part(nullptr, 44, 76, 12, 8, tank.mod[TM_ELEVATION]);
+    part(nullptr, 44, 132, 12, 8, tank.mod[TM_ANTENNA]);
+    // What has gone from this tank, for the instruments and the view.
+    s.foot.noSight = myVehicle >= 0 && myVehicle < Duel::kTanks && tank.mod[TM_SIGHT] <= 0;
+    s.foot.noRange = myVehicle >= 0 && myVehicle < Duel::kTanks && tank.mod[TM_RANGE] <= 0;
+    s.foot.noPeriscope = myVehicle >= 0 && myVehicle < Duel::kTanks && tank.mod[TM_PERISCOPE] <= 0;
+    s.foot.noRadio = myVehicle >= 0 && myVehicle < Duel::kTanks && tank.mod[TM_ANTENNA] <= 0;
     for (int i = 0; i < 2; i++) {
       s.trackLeft[i] = tank.trackWidthDir(i);
       s.trackPhase[i] = tank.trackPhase[i];
@@ -670,6 +682,12 @@ struct Game {
     u8 carrying[IT_COUNT] = {};
     int weaponShown[2] = {WP_PISTOL, WP_PISTOL};
     double repairNow = 0;
+    // A part just lost is said out loud for a few seconds.
+    double lastMod[TM_COUNT];
+    for (double& m : lastMod) m = 1;
+    int lastTankWatched = -1;
+    std::string alert;
+    double alertUntil = 0;
     u32 ackedInput = 0;
     V3 serverP;
     bool freshAnswer = false;
@@ -1191,8 +1209,27 @@ struct Game {
         sock->send(w.data(), w.size(), server);
       }
 
+      if (vehicleNow >= 0 && vehicleNow < Duel::kTanks) {
+        static const char* kLost[TM_COUNT] = {"Motor ausgefallen", "Turmdrehkranz zerstört", "Kanone zerstört", nullptr, "Linke Kette abgerissen", "Rechte Kette abgerissen", "Richtoptik zerstört", "Entfernungsmesser zerstört", "Fahrer-Winkelspiegel zerstört", "Kühler durchschossen", "Treibstoffleitung durchschossen", "Höhenrichtanlage zerstört", "Funkantenne zerstört"};
+        const Tank& watched = duel.tanks[vehicleNow];
+        for (int i = 0; i < TM_COUNT; i++) {
+          // Those that bleed slowly say so on the first hit, the others when they are gone.
+          const bool leaking = i == TM_RADIATOR || i == TM_FUEL;
+          const bool lost = leaking ? (watched.mod[i] < 1 && lastMod[i] >= 1) : (watched.mod[i] <= 0 && lastMod[i] > 0);
+          if (lost && lastTankWatched == vehicleNow && kLost[i]) {
+            alert = kLost[i];
+            alertUntil = now + 4.0;
+          }
+          lastMod[i] = watched.mod[i];
+        }
+        lastTankWatched = vehicleNow;
+      } else {
+        lastTankWatched = -1;
+      }
       char msg[128] = "";
-      if (state == NET_IN) {
+      if (state == NET_IN && now < alertUntil) {
+        snprintf(msg, sizeof msg, "%s", alert.c_str());
+      } else if (state == NET_IN) {
         const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
         if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf den zweiten Spieler");
         else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
@@ -2126,6 +2163,8 @@ static void runGame() {
     view.chatInput = chatText;
     hud.vehicleHud = inVehicle;
     hud.crosshair = inMatch && !mapOpen && !view.missileLive && !view.foot.inCar;
+    // Without its optics the gunner's sight shows nothing any closer.
+    if (view.foot.noSight && rig.mode == CAM_HOOD) rig.mode = CAM_CHASE;
     hud.map.open = mapOpen && panelKind == 0;
     hud.map.hasMark = hasMark;
     hud.map.mark = markPoint;
@@ -2134,6 +2173,7 @@ static void runGame() {
     hud.map.fixAge = view.foot.fixAge;
     hud.map.fixWait = view.foot.tapped ? view.foot.fixWait : -1.0;
     hud.map.me = view.carCog;
+    hud.map.noRadio = view.foot.noRadio;
     hud.map.meYaw = std::atan2(view.carFwd.y, view.carFwd.x);
     hud.cameraName = kCamNames[rig.mode];
     feel.update(view, dt);

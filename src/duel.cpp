@@ -599,7 +599,21 @@ void Duel::stepBullets(double dt) {
         }
       }
     }
-    // Vehicles stop it. What a bullet can do to them comes with their weak spots.
+    // A weak spot on the tank it was aimed at, as far as the tank was when the shooter saw it. Armour does nothing for
+    // the small things sticking out of it, and the armour itself does not care.
+    if (!stop && b.kind < WP_RPG) {
+      const double force = b.kind == WP_SNIPER ? 1.0 : (b.kind == WP_AR ? 0.1 : 0.04);
+      const int backSteps = std::clamp(int(b.lag * 100.0), 0, kPastSteps - 1);
+      for (int v = 0; v < kTanks && !stop; v++) {
+        const V3 moved = frames[v].cog - past[(pastAt - backSteps + kPastSteps * 2) % kPastSteps].tank[v];
+        if (len2(b.p - frames[v].cog + moved * -1.0) > 15.0 * 15.0 && len2(from - frames[v].cog) > 15.0 * 15.0) continue;
+        if (tanks[v].bulletHit(sim, from + moved, b.p + moved, force)) {
+          stop = true;
+          at = b.p;
+        }
+      }
+    }
+    // Vehicles stop it.
     if (!stop)
       for (int v = 0; v < kVehicles && !stop; v++) {
         const VehicleFrame& f = frames[v];
@@ -769,6 +783,7 @@ void Duel::stepPlayers(const Intent in[2]) {
   }
   pastAt = (pastAt + (int(sim.stepCount % 20) == 0 ? 1 : 0)) % kPastSteps;
   for (int i = 0; i < 2; i++) past[pastAt].soldier[i] = players[i].soldier.p;
+  for (int i = 0; i < kTanks; i++) past[pastAt].tank[i] = frames[i].cog;
   bulletDebt += kDt;
   while (bulletDebt >= 0.005) {
     bulletDebt -= 0.005;
@@ -838,7 +853,9 @@ void Duel::stepPlayers(const Intent in[2]) {
     }
     pl.fixWait = std::max(0.0, pl.fixWait - kDt);
     pl.fixAge += kDt;
-    if (in[i].query && pl.tapped && pl.fixWait <= 0 && phase == PLAYING) {
+    // In a tank the question goes by radio, and that needs its aerials.
+    const bool radioGone = pl.vehicle >= 0 && pl.vehicle < kTanks && tanks[pl.vehicle].mod[TM_ANTENNA] <= 0;
+    if (in[i].query && pl.tapped && pl.fixWait <= 0 && phase == PLAYING && !radioGone) {
       const Player& other = players[1 - i];
       const V3 where = other.vehicle >= 0 ? frames[other.vehicle].cog : other.soldier.p;
       randState = randState * 1664525u + 1013904223u;

@@ -64,6 +64,7 @@ struct Snapshot {
     int has = 3;
     int shells = 0, missiles = 0, codes = 0;
     bool tapped = false, hasFix = false;
+    bool noSight = false, noRange = false, noPeriscope = false, noRadio = false;
     V3 fix;
     double fixAge = 0, fixWait = 0;
     double prone = 0;
@@ -147,6 +148,7 @@ struct UiMap {
   double meYaw = 0;
   bool hasEnemy = false;
   V3 enemy;
+  bool noRadio = false;
   double fixAge = 0;
   double fixWait = -1;  // until the next question may be asked; negative while the computer has not been tapped
 };

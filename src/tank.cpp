@@ -374,7 +374,8 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
     while (e < -PI) e += 2 * PI;
     // A damaged ring turns slowly, and one that is gone does not turn at all.
     const double kYawRate = sp_.yawRate * PI / 180.0 * (mod[TM_RING] <= 0 ? 0.0 : lerpd(0.4, 1.0, mod[TM_RING]));
-    const double kPitchRate = sp_.pitchRate * PI / 180.0;
+    // The elevation gear shot through: the gun moves slowly, and at the end stays where it is.
+    const double kPitchRate = sp_.pitchRate * PI / 180.0 * (mod[TM_ELEVATION] <= 0 ? 0.0 : lerpd(0.25, 1.0, mod[TM_ELEVATION]));
     turretYaw += clampd(e * 6.0, -kYawRate, kYawRate) * dt;
     if (turretYaw > PI) turretYaw -= 2 * PI;
     if (turretYaw < -PI) turretYaw += 2 * PI;
@@ -424,7 +425,13 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
     shotsFired += 1;
     Shell s;
     s.p = muzzle + gF * 0.2;
-    s.v = gF * sp_.shellSpeed + vCog;
+    // Without its sight the gunner lays it by eye, and it shows.
+    V3 shot = gF;
+    if (mod[TM_SIGHT] <= 0) {
+      const double wobble = double(sim.stepCount % 977) * 0.0127;
+      shot = norm(gF + (eL * std::sin(wobble * 7.0) + up * std::cos(wobble * 11.0)) * 0.012);
+    }
+    s.v = shot * sp_.shellSpeed + vCog;
     shells.push_back(s);
     sim.event(EV_MUZZLE, muzzle, gF, 1.f);
   }
@@ -476,7 +483,10 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   const double speedRatio = engineOmega > 1.0 ? clampd(inputOmega / engineOmega, 0, 1) : 0;
   const double multiply = lerpd(2.2, 1.0, std::min(speedRatio / 0.85, 1.0));
   // What is left of the engine, and a heavy turret takes its share of what it can do.
-  const double power = spec().powerScale * (mod[TM_ENGINE] <= 0 ? 0.0 : lerpd(0.35, 1.0, mod[TM_ENGINE]));
+  // A holed radiator lets it run hot in a minute or so; a cut fuel line empties the tanks in a few.
+  radiatorHeat = std::min(radiatorHeat + (1.0 - mod[TM_RADIATOR]) * dt / 45.0, 1.0);
+  fuel = std::max(0.0, fuel - (1.0 - mod[TM_FUEL]) * 7.0 * dt);
+  const double power = (fuel <= 0 ? 0.0 : 1.0) * clampd(1.0 - radiatorHeat * 0.75, 0.25, 1.0) * spec().powerScale * (mod[TM_ENGINE] <= 0 ? 0.0 : lerpd(0.35, 1.0, mod[TM_ENGINE]));
   const double Te = loadNow * engineTorque(rpmNow) * power - 80.0 - engineOmega * 0.8;
   engineOmega += (Te - Tconv) * dt / 7.0;
   engineOmega = clampd(engineOmega, 0.0, 270.0);
@@ -655,6 +665,56 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   }
 }
 
+bool Tank::bulletHit(Sim& sim, V3 a, V3 b, double force) {
+  if (destroyed) return false;
+  const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
+  const double cy = std::cos(turretYaw), sy = std::sin(turretYaw);
+  const V3 eF = fwd * cy + left * sy, eL = left * cy - fwd * sy;
+  // On the turret, and on the hull. Ahead is towards the nose; the reference point lies about 3 m back from it.
+  const auto onTurret = [&](double f, double l, double z) { return ring_ + eF * f + eL * l + up * z; };
+  const auto onHull = [&](double x, double l, double z) { return O + fwd * (3.0 - x) + left * l + up * z; };
+  struct Spot {
+    int module;
+    V3 at;
+    double radius, toughness;
+  };
+  const Spot spots[] = {
+      {TM_SIGHT, onTurret(0.32, -0.46, 0.92), 0.2, 1.0},       // the gunner's sight head, on the turret roof
+      {TM_RANGE, onTurret(-0.05, 1.44, 0.54), 0.14, 1.0},      // the rangefinder's ends, sticking out of both sides
+      {TM_RANGE, onTurret(-0.05, -1.44, 0.54), 0.14, 1.0},
+      {TM_PERISCOPE, onHull(1.05, 0.48, -0.12), 0.2, 1.0},     // the driver's periscopes on the glacis
+      {TM_RADIATOR, onHull(5.55, 0.62, 0.03), 0.55, 2.0},      // the cooling grilles on the engine deck
+      {TM_RADIATOR, onHull(5.55, -0.62, 0.03), 0.55, 2.0},
+      {TM_FUEL, onHull(6.9, 0.95, -0.3), 0.2, 1.0},            // the fuel line low on the rear plate
+      {TM_FUEL, onHull(6.9, -0.95, -0.3), 0.2, 1.0},
+      {TM_RING, onTurret(1.28, 0, 0.02), 0.22, 2.0},           // the gap under the turret, front, sides and back
+      {TM_RING, onTurret(0, 1.3, 0.02), 0.22, 2.0},
+      {TM_RING, onTurret(0, -1.3, 0.02), 0.22, 2.0},
+      {TM_RING, onTurret(-1.3, 0, 0.02), 0.22, 2.0},
+      {TM_ELEVATION, onTurret(1.05, 0, 0.45), 0.25, 2.0},      // the gear at the root of the barrel
+      {TM_ANTENNA, onTurret(-0.9, 0.25, 1.5), 0.14, 1.0},      // the radio aerials
+      {TM_ANTENNA, onTurret(-0.9, -0.25, 1.5), 0.14, 1.0},
+      {TM_TRACK_L, onHull(1.3, 1.35, -0.75), 0.24, 3.0},       // track pins: it takes a few of them
+      {TM_TRACK_L, onHull(3.5, 1.35, -0.75), 0.24, 3.0},
+      {TM_TRACK_L, onHull(5.6, 1.35, -0.75), 0.24, 3.0},
+      {TM_TRACK_R, onHull(1.3, -1.35, -0.75), 0.24, 3.0},
+      {TM_TRACK_R, onHull(3.5, -1.35, -0.75), 0.24, 3.0},
+      {TM_TRACK_R, onHull(5.6, -1.35, -0.75), 0.24, 3.0},
+  };
+  const V3 d = b - a;
+  const double dl2 = std::max(len2(d), 1e-9);
+  for (const Spot& s : spots) {
+    const double t = clampd(dot(s.at - a, d) / dl2, 0, 1);
+    if (len2(a + d * t - s.at) > s.radius * s.radius) continue;
+    mod[s.module] = std::max(0.0, mod[s.module] - force / s.toughness);
+    sim.event(EV_SPARK, s.at, up, 0.5f);
+    if (mod[TM_TRACK_L] <= 0) throwTrack(sim, 0);
+    if (mod[TM_TRACK_R] <= 0) throwTrack(sim, 1);
+    return true;
+  }
+  return false;
+}
+
 void Tank::makeWreck(Sim& sim) {
   destroyed = true;
   burnTime = 1000.0;  // long burnt out
@@ -678,6 +738,7 @@ void Tank::makeWreck(Sim& sim) {
 
 void Tank::repair(Sim& sim) {
   for (double& m : mod) m = std::max(m, 0.6);
+  radiatorHeat = 0;
   trackOff[0] = trackOff[1] = false;
   damage = std::max(0.0, damage - 0.15);
   sim.event(EV_SPARK, cog + up * 1.5, up, 0.5f);

@@ -24,7 +24,9 @@ struct TurretSpec {
 };
 const TurretSpec& turretSpec(TurretKind k);
 
-enum TankModule { TM_ENGINE, TM_RING, TM_GUN, TM_AMMO, TM_TRACK_L, TM_TRACK_R, TM_COUNT };
+// The first six suffer from blasts. The rest, and the track pins and turret ring too, are the small places a
+// heavy bullet can reach: weak spots at logical places, each taking something particular from the tank.
+enum TankModule { TM_ENGINE, TM_RING, TM_GUN, TM_AMMO, TM_TRACK_L, TM_TRACK_R, TM_SIGHT, TM_RANGE, TM_PERISCOPE, TM_RADIATOR, TM_FUEL, TM_ELEVATION, TM_ANTENNA, TM_COUNT };
 
 class Tank {
  public:
@@ -85,7 +87,10 @@ class Tank {
   bool destroyed = false;
   double burnTime = 0;
   bool trackOff[2] = {false, false};
-  double mod[TM_COUNT] = {1, 1, 1, 1, 1, 1};  // what is left of each part; at nothing it no longer works
+  double mod[TM_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};  // what is left of each part; at nothing it no longer works
+  double radiatorHeat = 0;  // grows with a holed radiator, and takes the engine's power with it
+  // A bullet on its way from a to b: what it hits among the weak spots, with this much force (1 is the big rifle).
+  bool bulletHit(Sim& sim, V3 a, V3 b, double force);
 
   // A guided missile is flown by hand towards aimPoint, one at a time. Firing again sets it off early.
   int missiles = 0;
@@ -109,7 +114,7 @@ class Tank {
     float engineOmega = 0, throttle = 0, brake = 0, steer = 0, speed = 0, latAcc = 0, lonAcc = 0, fuel = 0, load = 0;
     int gear = 1, ammo = -1;
     bool destroyed = false, trackOff[2] = {};
-    float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1};
+    float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
     int missiles = 0;
     bool missileLive = false;
     V3 missileP, missileV;

@@ -2504,12 +2504,13 @@ struct Renderer::Impl {
         rrect(cx + (sgn < 0 ? -22 * u : 8 * u), cy - .75f * u, 14 * u, 1.5f * u, 0, line);
         if (sgn > 0) rrect(cx - .75f * u, cy + 8 * u, 1.5f * u, 14 * u, 0, line);
       }
+      // The ring needs the rangefinder to know where the gun's line ends.
       const V3 p = s.muzzle + s.gunDir * 400.0;
       const Mat4& m = camVP;
       const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
       const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
       const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
-      if (qw > 0.1) {
+      if (qw > 0.1 && !s.foot.noRange) {
         const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H);
         const bool ready = s.reload <= 0;
         const float fr = ready ? 1.f : float(1.0 - s.reload / std::max(s.reloadTime, 0.1));
@@ -2580,6 +2581,9 @@ struct Renderer::Impl {
         snprintf(buf, sizeof buf, "vor %.0f s", o.map.fixAge);
         labelMid(sx, sy - radius - 8 * u, buf, 13 * u, {1, 1, 1, .95f});
       }
+      if (o.map.noRadio) {
+        label(mx0 + 14 * u, my0 + 44 * u, "Funkantenne zerstört: keine Abfrage möglich", 15 * u, red);
+      }
       if (o.map.fixWait >= 0) {
         if (o.map.fixWait > 0) snprintf(buf, sizeof buf, "Nächste Abfrage in %.0f s", o.map.fixWait);
         else snprintf(buf, sizeof buf, "J: Standort des Gegners abfragen");
@@ -2599,6 +2603,13 @@ struct Renderer::Impl {
         rrect(sx + float(std::cos(o.map.meYaw)) * 9 * u - 2 * u, sy - float(std::sin(o.map.meYaw)) * 9 * u - 2 * u, 4 * u, 4 * u, 2 * u, {.35f, .85f, .95f, 1});
       }
       label(mx0 + 14 * u, my0 + ms - 18 * u, "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  B: Bombencode  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
+    }
+
+    // ---- A driver without periscopes sees through what is left of them.
+    if (s.foot.noPeriscope && o.vehicleHud) {
+      const Col dark{.02f, .02f, .025f, .94f};
+      rrect(0, 0, W, H * .30f, 0, dark);
+      rrect(0, H * .62f, W, H * .38f, 0, dark);
     }
 
     // ---- The chat, above the instruments.

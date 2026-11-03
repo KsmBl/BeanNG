@@ -153,6 +153,7 @@ class Duel {
   static constexpr int kStrikeRockets = 4, kKindStrike = WP_COUNT;
   struct Past {
     V3 soldier[2];
+    V3 tank[kTanks];  // the middle of each: how far it has gone on since the shooter saw it
   };
   static constexpr int kPastSteps = 32;  // every hundredth of a second
   Past past[kPastSteps];
