@@ -96,6 +96,7 @@ class Tank {
   V3 trackWidthDir(int side) const { return trackOff[side] ? thrownLeft_[side] : left; }
 
   void update(Sim& sim, const Controls& in, double dt);
+  void makeWreck(Sim& sim);  // what has been lying there since some earlier battle
   void repair(Sim& sim);  // what a kit can do: everything working again, though not as new
   void tickFire(Sim& sim, double dt);  // goes on burning while the wreck itself sleeps
   void shiftIndices(long nodes, long beams, long objects);

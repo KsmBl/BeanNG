@@ -2347,6 +2347,8 @@ struct Renderer::Impl {
       // And what else is carried.
       snprintf(buf, sizeof buf, "Tretminen %d  ·  Panzerminen %d  ·  Reparatursets %d", s.foot.items[0], s.foot.items[1], s.foot.items[2]);
       label(wx, wy - 12 * u, buf, 13 * u, dim);
+      snprintf(buf, sizeof buf, "Granaten %d  ·  Lenkraketen %d  ·  Bombencodes %d", s.foot.shells, s.foot.missiles, s.foot.codes);
+      label(wx, wy - 30 * u, buf, 13 * u, dim);
       float kx = wx + 16 * u;
       for (int i = 0; i < 5; i++) {
         snprintf(buf, sizeof buf, "%d", i + 1);
@@ -2944,7 +2946,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
       size_t first = 0;
       for (size_t k = 0; k < D.parkedLists.size(); k++) {
         const size_t count = D.parkedLists[k][0].size();
-        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 16 ? s.parkedScorch[k] : 0.f);
+        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 32 ? s.parkedScorch[k] : 0.f);
         if (count) glDrawElements(GL_TRIANGLES, GLsizei(count), GL_UNSIGNED_INT, (void*)(first * sizeof(u32)));
         first += count;
       }

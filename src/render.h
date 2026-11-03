@@ -47,7 +47,7 @@ struct Snapshot {
   };
   std::vector<TankTrack> tankTracks;
   V3 trackLeft[2];
-  float parkedScorch[16] = {};
+  float parkedScorch[32] = {};
   std::vector<std::string> chat;  // the last lines, oldest first
   std::string chatInput;
   bool chatOpen = false;
@@ -59,6 +59,7 @@ struct Snapshot {
     int weapon = 1;
     int ammo = 0;  // for what is in the hand, -1 if it needs none
     int has = 3;
+    int shells = 0, missiles = 0, codes = 0;
     double prone = 0;
     V3 wind;
     V3 p;

@@ -143,6 +143,23 @@ class Duel {
   u32 randState = 12345;
   // The wind of this match: at ground level, the same everywhere, and it carries what flies far enough.
   V3 wind;
+  // Old wrecks lying about the map, in the same mesh as the rest, and crates in houses and beside them.
+  static constexpr int kWrecks = 7;
+  Tank wrecks[kWrecks], wrecksStart[kWrecks];
+  u32 wreckFirst[kWrecks] = {};
+  V3 wreckSpawn[kWrecks];
+  CarRig wreckRigs[kWrecks];
+  struct Crate {
+    V3 p;
+    u32 marker = 0;
+    int what = 0, count = 1;
+    bool wreckSite = false;
+  };
+  std::vector<Crate> crates;
+  void rollLoot();  // what is in them this match: every machine works it out the same from the match's number
+  static const char* crateLabel(const Crate& c, char* buf, size_t n);
+  bool crateGone(const Crate& c) const { return sim.pos[c.marker].z < -100.0; }
+  int nearCrate(V3 p) const;
   // Mines: anyone's foot sets off the small kind, anything with wheels or tracks the big one.
   static constexpr int kMinesEach = 10;
   struct Mine {

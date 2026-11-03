@@ -532,9 +532,10 @@ struct Game {
     Snapshot& s = snap;
     s.pos = sim.pos;
     s.tank = true;
-    s.tankTracks.resize(Duel::kTanks);
-    for (int i = 0; i < Duel::kTanks; i++) {
-      const Tank& t = duel.tanks[i];
+    // The soldiers come between the vehicles and the wrecks in the mesh, and have no tracks.
+    s.tankTracks.resize(Duel::kTanks + Duel::kWrecks);
+    for (int i = 0; i < Duel::kTanks + Duel::kWrecks; i++) {
+      const Tank& t = i < Duel::kTanks ? duel.tanks[i] : duel.wrecks[i - Duel::kTanks];
       Snapshot::TankTrack& tt = s.tankTracks[size_t(i)];
       for (int k = 0; k < 2; k++) {
         t.trackPath(sim, k, tt.path[k]);
@@ -542,7 +543,7 @@ struct Game {
         tt.phase[k] = t.trackPhase[k];
         tt.speed[k] = t.trackOmega[k] * Tank::kSprocketR;
       }
-      s.parkedScorch[i] = t.destroyed ? float(clampd(t.burnTime / 3.0, 0.15, 1.0)) : float(t.damage * 0.3);
+      s.parkedScorch[i < Duel::kTanks ? i : i - Duel::kTanks + Duel::kVehicles + 2] = t.destroyed ? float(clampd(t.burnTime / 3.0, 0.15, 1.0)) : float(t.damage * 0.3);
     }
     s.events.insert(s.events.end(), sim.events.begin(), sim.events.end());
     if (s.events.size() > 2000) s.events.clear();
@@ -685,6 +686,7 @@ struct Game {
         frames[i].clear();
       }
       duel.cars = duel.carsStart;
+      for (int i = 0; i < Duel::kWrecks; i++) duel.wrecks[i] = duel.wrecksStart[i];
       duel.placePlayers();
       duel.updateFrames();
       for (CarShown& c : shown) c = CarShown{};
@@ -828,6 +830,9 @@ struct Game {
         if (id > match) {
           resetWorld();
           match = id;
+          // Everyone's dice are the same.
+          duel.matchId = id;
+          duel.rollLoot();
         }
         lastHeard = now;
         if (kind == net::P_TANK) {
@@ -906,6 +911,13 @@ struct Game {
             duel.players[mySlot].rpgAmmo = rpg;
             for (int k = 0; k < WP_COUNT; k++) duel.players[mySlot].hasWeapon[k] = has & (1 << k);
             duel.wind = r.getV3();
+            i16 shells = 0, missiles = 0, codes = 0;
+            r.get(shells);
+            r.get(missiles);
+            r.get(codes);
+            duel.players[mySlot].tankShells = shells;
+            duel.players[mySlot].tankMissiles = missiles;
+            duel.players[mySlot].strikeCodes = codes;
           }
           u32 first = 0;
           u8 count = 0;
@@ -1165,7 +1177,10 @@ struct Game {
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
         else if (vehicleNow >= 0) snprintf(msg, sizeof msg, "E: aussteigen");
-        else if (phaseNow == Duel::PLAYING) {
+        else if (phaseNow == Duel::PLAYING && duel.nearCrate(me.p + V3{0, 0, 0.3}) >= 0) {
+          char what[64];
+          snprintf(msg, sizeof msg, "E: nehmen  ·  %s", Duel::crateLabel(duel.crates[size_t(duel.nearCrate(me.p + V3{0, 0, 0.3}))], what, sizeof what));
+        } else if (phaseNow == Duel::PLAYING) {
           const int v = duel.nearestVehicle(me.p, 2.5);
           const char* name = v < 0 ? "" : (v < Duel::kTanks ? duel.tanks[v].spec().name : (v - Duel::kTanks) % Duel::kCarKinds == 0 ? "Xantia" : ((v - Duel::kTanks) % Duel::kCarKinds == 1 ? "One:1" : "Hummer"));
           if (v >= 0) snprintf(msg, sizeof msg, carrying[IT_REPAIR] > 0 ? "E: einsteigen  ·  R: reparieren  ·  %s" : "E: einsteigen  ·  %s", name);
@@ -1179,6 +1194,9 @@ struct Game {
         snap.foot.wind = duel.wind;
         const Duel::Player& who = duel.players[mySlot];
         snap.foot.ammo = in.weapon == WP_KNIFE ? -1 : (in.weapon == WP_SNIPER ? who.sniperAmmo : (in.weapon == WP_RPG ? who.rpgAmmo : who.smallAmmo));
+        snap.foot.shells = who.tankShells;
+        snap.foot.missiles = who.tankMissiles;
+        snap.foot.codes = who.strikeCodes;
         snap.foot.has = 0;
         for (int k = 0; k < WP_COUNT; k++) snap.foot.has |= who.hasWeapon[k] ? 1 << k : 0;
         netState = state;
@@ -1278,6 +1296,17 @@ static void runGame() {
       G.rig.groups.push_back({std::to_string(k) + ":" + Duel::soldierPartName(part), nodes});
     }
     G.rig.parkedNodes.push_back({first, u32(Duel::kSoldierNodes)});
+  }
+  // And the old wrecks, after them.
+  for (int i = 0; i < Duel::kWrecks; i++) {
+    CarMesh wreck;
+    if (!wreck.load("assets/leopard.mesh")) return;
+    const int k = Duel::kVehicles + 2 + i;
+    const CarRig& r = G.duel.wreckRigs[i];
+    G.mesh.addParked(wreck, k, G.duel.wreckSpawn[i], r.noseX, origin, {});
+    for (const NodeGroup& g : r.groups) G.rig.groups.push_back({std::to_string(k) + ":" + g.name, g.nodes});
+    G.rig.links.insert(G.rig.links.end(), r.links.begin(), r.links.end());
+    G.rig.parkedNodes.push_back({G.duel.wreckFirst[i], G.duel.tankNodes});
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());

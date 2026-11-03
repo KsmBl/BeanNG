@@ -63,6 +63,36 @@ void Duel::build() {
   sim.firstSceneryNode = u32(sim.pos.size());
   for (int k = 0; k < 2; k++)
     for (int i = 0; i < kMinesEach; i++) mineFirst[k][i] = addMarker(sim, k == 0 ? V3{0.13, 0.13, 0.035} : V3{0.24, 0.24, 0.06}, COL_STEEL);
+  {
+    // The wrecks stand in the scenery's range: they never move by themselves, so the same few messages keep them right.
+    double yaw0 = 0.7;
+    for (int i = 0; i < kWrecks; i++) {
+      const V3 site = world.wreckSites()[size_t(i)];
+      wreckSpawn[i] = site;
+      wrecks[i] = buildLeopard(sim, site, &wreckRigs[i], TK_STANDARD);
+      wreckFirst[i] = sim.objs[wrecks[i].hullObj].nodeStart;
+      turnNodes(sim, wreckFirst[i], u32(sim.pos.size()), site, yaw0);
+      yaw0 += 1.9;
+    }
+  }
+  // Crates: a couple in every house, one beside each wreck.
+  const auto addCrate = [&](V3 at, bool wreck) {
+    Crate c;
+    c.p = at;
+    c.wreckSite = wreck;
+    c.marker = addMarker(sim, V3{0.32, 0.22, 0.2}, COL_WOOD);
+    crates.push_back(c);
+  };
+  for (const World::House& h : world.houses()) {
+    const double floor = world.height(World::houseInside(h, 4.5, 3.75, 0).x, World::houseInside(h, 4.5, 3.75, 0).y);
+    addCrate(World::houseInside(h, 1.2, 6.0, floor + 0.21), false);
+    addCrate(World::houseInside(h, 7.8, 1.0, floor + 0.21), false);
+  }
+  for (int i = 0; i < kWrecks; i++) {
+    V3 at = wreckSpawn[i] + V3{4.5, 3.0, 0};
+    at.z = world.height(at.x, at.y) + 0.21;
+    addCrate(at, true);
+  }
   populateArena(sim, world);
   sim.finalize();
 
@@ -84,6 +114,10 @@ void Duel::build() {
     }
   };
   for (Tank& t : tanks) alone({u32(t.hullObj), u32(t.turretObj)}, [&] { t.settle(sim, 2.0); });
+  for (Tank& t : wrecks) {
+    alone({u32(t.hullObj), u32(t.turretObj)}, [&] { t.settle(sim, 2.0); });
+    t.makeWreck(sim);
+  }
   for (Vehicle& v : cars) {
     v.engineRunning = false;
     alone({u32(v.obj)}, [&] { settleVehicle(sim, v, 2.5); });
@@ -98,7 +132,10 @@ void Duel::build() {
   sim.craterWorld = &world;
   sim.logBlasts = true;
   for (int i = 0; i < kTanks; i++) tanksStart[i] = tanks[i];
+  for (int i = 0; i < kWrecks; i++) wrecksStart[i] = wrecks[i];
   carsStart = cars;
+  for (const Crate& c : crates) moveMarker(sim, c.marker, c.p);
+  rollLoot();
   updateFrames();
   updateFrames();
   placePlayers();
@@ -382,6 +419,63 @@ int Duel::nearestToRepair(V3 p) const {
     }
   }
   return best;
+}
+
+void Duel::rollLoot() {
+  struct Roll {
+    const char* name;
+    int weight, count;
+  };
+  // Mostly ammunition, and now and then something that changes the match.
+  static const Roll kTable[] = {
+      {"kleinmunition", 26, 60}, {"granaten", 13, 4}, {"lenkraketen", 7, 2}, {"raketen", 8, 2}, {"raketenwerfer", 7, 1},
+      {"scharfschuetzengewehr", 6, 1}, {"scharfschuetzenmunition", 8, 5}, {"reparaturset", 8, 1}, {"tretmine", 6, 2},
+      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"leben", 6, 50},
+  };
+  int total = 0;
+  for (const Roll& r : kTable) total += r.weight;
+  u32 seed = matchId * 2654435761u + 977u;
+  for (Crate& c : crates) {
+    seed = seed * 1664525u + 1013904223u;
+    if (c.wreckSite) {
+      // What an old tank still has in it: its own kind of ammunition.
+      const bool missile = (seed >> 16) % 4 == 0;
+      for (int k = 0; k < kGiveKinds; k++)
+        if (!strcmp(kGiveNames[k], missile ? "lenkraketen" : "granaten")) c.what = k;
+      c.count = missile ? 2 : 5;
+      continue;
+    }
+    int pick = int((seed >> 16) % u32(total));
+    for (const Roll& r : kTable) {
+      if (pick < r.weight) {
+        for (int k = 0; k < kGiveKinds; k++)
+          if (!strcmp(kGiveNames[k], r.name)) c.what = k;
+        c.count = r.count;
+        break;
+      }
+      pick -= r.weight;
+    }
+  }
+}
+
+int Duel::nearCrate(V3 p) const {
+  int best = -1;
+  double bestD = 2.2 * 2.2;
+  for (size_t i = 0; i < crates.size(); i++) {
+    if (crateGone(crates[i])) continue;
+    const double d = len2(crates[i].p - p);
+    if (d < bestD) {
+      bestD = d;
+      best = int(i);
+    }
+  }
+  return best;
+}
+
+const char* Duel::crateLabel(const Crate& c, char* buf, size_t n) {
+  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Verbandskasten"};
+  snprintf(buf, n, c.count > 1 ? "%s  x%d" : "%s", kLabels[c.what], c.count);
+  return buf;
 }
 
 const char* const Duel::kGiveNames[kGiveKinds] = {
@@ -674,8 +768,15 @@ void Duel::stepPlayers(const Intent in[2]) {
       if (pl.vehicle >= 0) {
         leaveVehicle(i);
       } else if (phase == PLAYING) {
-        const int v = nearestVehicle(s.p, 2.5);
-        if (v >= 0) boardVehicle(i, v);
+        // A crate within reach comes first; it is the smaller thing to aim for.
+        const int c = nearCrate(s.p + V3{0, 0, 0.3});
+        if (c >= 0) {
+          give(i, kGiveNames[crates[size_t(c)].what], crates[size_t(c)].count);
+          moveMarker(sim, crates[size_t(c)].marker, V3{0, 0, kMarkerDepth});
+        } else {
+          const int v = nearestVehicle(s.p, 2.5);
+          if (v >= 0) boardVehicle(i, v);
+        }
       }
     }
     if (pl.vehicle >= 0) {
@@ -744,6 +845,7 @@ void Duel::restart() {
   world.clearCraters();
   sim = simStart;
   for (int i = 0; i < kTanks; i++) tanks[i] = tanksStart[i];
+  for (int i = 0; i < kWrecks; i++) wrecks[i] = wrecksStart[i];
   cars = carsStart;
   winner = -1;
   phaseClock = 0;
@@ -761,6 +863,7 @@ void Duel::restart() {
   blastSeen = sim.blastCount;
   matchId++;
   blastsDone = 0;
+  rollLoot();
   placePlayers();
   updateFrames();
 }

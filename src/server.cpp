@@ -424,6 +424,9 @@ int main(int argc, char** argv) {
       for (int k = 0; k < WP_COUNT; k++) has |= u8(me.hasWeapon[k] ? 1 << k : 0);
       w.put(has);
       w.putV3(duel->wind);
+      w.put(i16(me.tankShells));
+      w.put(i16(me.tankMissiles));
+      w.put(i16(me.strikeCodes));
     }
     // Blasts stay in the packet until the player says they have gone off there.
     const auto& log = duel->sim.blastLog;

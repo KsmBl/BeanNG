@@ -652,6 +652,27 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   }
 }
 
+void Tank::makeWreck(Sim& sim) {
+  destroyed = true;
+  burnTime = 1000.0;  // long burnt out
+  ammo = 0;
+  throwTrack(sim, 0);
+  throwTrack(sim, 1);
+  damage = 1.0;
+  for (u16 oi : {hullObj, turretObj}) {
+    Obj& o = sim.objs[oi];
+    o.armoured = false;
+    o.kind = OBJ_PROP;
+    o.alwaysAwake = false;
+    o.awake = false;
+  }
+  for (u32 n : sim.objs[turretObj].nodes) sim.flags[n] |= NF_COLLIDE;
+  for (const RoadWheel& w : wheels) {
+    sim.flags[w.in] |= NF_COLLIDE;
+    sim.flags[w.out] |= NF_COLLIDE;
+  }
+}
+
 void Tank::repair(Sim& sim) {
   for (double& m : mod) m = std::max(m, 0.6);
   trackOff[0] = trackOff[1] = false;
