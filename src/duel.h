@@ -232,7 +232,7 @@ class Duel {
   void ragdollStep(Ragdoll& r, double dt) const;
   static void poseRagdoll(Sim& sim, u32 first, const Ragdoll& r);
   // Pools of blood under a body: three flat discs, one after the other as it spreads.
-  static constexpr int kBloodDiscs = 3;
+  static constexpr int kBloodDiscs = 11;
   u32 bloodFirst[2][kBloodDiscs] = {};
   int nearestVehicle(V3 p, double reach) const;
   bool occupied(int v) const { return players[0].vehicle == v || players[1].vehicle == v; }

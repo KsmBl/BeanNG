@@ -1316,8 +1316,12 @@ struct Game {
           // Blood spreads out from under it once it lies, on what is beneath the middle of it.
           const V3 mid = bodies[i].p[0];
           for (int d = 0; d < Duel::kBloodDiscs; d++) {
-            const bool show = bodies[i].clock > 0.7 + d * 1.1;
-            const V3 off{d == 1 ? 0.18 : (d == 2 ? -0.14 : 0.0), d == 2 ? 0.16 : (d == 1 ? -0.1 : 0.0), 0};
+            // Spots running together, the big ones in the middle first and the small ones further out later: no two
+            // pools the same, and none of them round.
+            const double ang = double(d) * 2.399 + i * 1.3;
+            const double out = 0.09 * std::sqrt(double(d)) * (1.0 + 0.5 * std::sin(double(d) * 5.3 + i));
+            const bool show = bodies[i].clock > 0.6 + d * 0.45;
+            const V3 off{std::cos(ang) * out * 2.2, std::sin(ang) * out, 0};
             const V3 at = mid + off;
             const double ground = world.height(at.x, at.y) + 0.018 + d * 0.002;
             const u32 n = duel.bloodFirst[i][d];
@@ -1562,7 +1566,10 @@ static void runGame() {
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
   // Blood on the ground: flat discs, each a little wider than the last.
   for (int i = 0; i < 2; i++)
-    for (int d = 0; d < Duel::kBloodDiscs; d++) G.rig.links.push_back({G.duel.bloodFirst[i][d], G.duel.bloodFirst[i][d] + 1, 0.24f + 0.14f * float(d), MM_PAINT, 0});
+    for (int d = 0; d < Duel::kBloodDiscs; d++) {
+      const float seed = std::sin(float(d) * 12.9f + float(i)) * 0.5f + 0.5f;
+      G.rig.links.push_back({G.duel.bloodFirst[i][d], G.duel.bloodFirst[i][d] + 1, (d < 3 ? 0.2f : 0.07f) + 0.1f * seed, MM_PAINT, 0});
+    }
   // Rockets of every kind: body, nose and fins.
   const auto rocketRods = [&](u32 f, float body, u8 bodyMat, u8 noseMat) {
     G.rig.links.push_back({f, f + 1, body, bodyMat, 2});
