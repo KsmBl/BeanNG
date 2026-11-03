@@ -2105,7 +2105,7 @@ static void runGame() {
           {b.centre + V3{-26 + 30, -18, 8}, b.centre + V3{-26, 0, 4}},
           {b.slot(1) + V3{14, 12, 4}, b.slot(2) + V3{0, 0, 1.5}},
           {bridge + V3{-70, 45, 22}, bridge},
-          {V3{380, -30, 40} + V3{-90, -60, 40}, V3{380, 0, 20}},
+          {World::houseInside(G.world.houses()[0], 4.5, -14, G.world.houseSites()[0].z + 3.5), World::houseInside(G.world.houses()[0], 4.5, 3, G.world.houseSites()[0].z + 1.5)},
           {V3{-600, -200, 420}, V3{0, 0, 10}},
           {V3{0, -950, 620}, V3{0, 0, 10}},
       };

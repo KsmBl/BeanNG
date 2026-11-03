@@ -298,18 +298,25 @@ void Duel::walk(Soldier& s, const WalkInput& in, double dt) const {
   }
   resolve(V3{0, 0, Soldier::kHeight}, false);
 
-  // Stones and rubble, as what they are for someone on foot: something to go round.
+  // Stones and rubble, as what they are for someone on foot: something to go round. What lies lower than a knee can
+  // be stepped over.
   for (const Block& b : sim.blocks) {
-    const V3 a = sim.pos[b.n[0]], d = sim.pos[b.n[7]];
-    const V3 mid = (a + d) * 0.5;
-    if (mid.z < s.p.z - 0.2 || mid.z > s.p.z + Soldier::kHeight) continue;
-    const V3 to{s.p.x - mid.x, s.p.y - mid.y, 0};
-    const double reach = len(V3{a.x - d.x, a.y - d.y, 0}) * 0.42 + r;
-    const double l2 = len2(to);
-    if (l2 >= reach * reach || l2 < 1e-9) continue;
+    const V3 a = sim.pos[b.n[0]];
+    const V3 ex = sim.pos[b.n[1]] - a, ey = sim.pos[b.n[2]] - a, ez = sim.pos[b.n[4]] - a;
+    const V3 mid = a + (ex + ey + ez) * 0.5;
+    if (std::fabs(mid.x - s.p.x) > 6.0 || std::fabs(mid.y - s.p.y) > 6.0) continue;
+    const V3 body{s.p.x, s.p.y, clampd(mid.z, s.p.z + 0.4, s.p.z + Soldier::kHeight)};
+    const V3 q = body - a;
+    const double lx = clampd(dot(q, ex) / len2(ex), 0, 1), ly = clampd(dot(q, ey) / len2(ey), 0, 1), lz = clampd(dot(q, ez) / len2(ez), 0, 1);
+    const V3 near = a + ex * lx + ey * ly + ez * lz;
+    V3 out = body - near;
+    out.z = 0;
+    if (near.z < s.p.z + 0.35 || near.z > s.p.z + Soldier::kHeight) continue;
+    const double l2 = len2(out);
+    if (l2 >= r * r || l2 < 1e-12) continue;
     const double l = std::sqrt(l2);
-    const V3 out = to / l;
-    s.p += out * (reach - l);
+    out = out / l;
+    s.p += out * (r - l);
     const double into = dot(s.v, out);
     if (into < 0) s.v -= out * into;
   }
@@ -516,10 +523,11 @@ void Duel::stepBullets(double dt) {
         break;
       }
       for (const Block& bl : sim.blocks) {
-        const V3 a = sim.pos[bl.n[0]], d = sim.pos[bl.n[7]];
-        const V3 mid = (a + d) * 0.5;
-        const double rr = len(a - d) * 0.5;
-        if (len2(mid - p) < rr * rr) {
+        const V3 a = sim.pos[bl.n[0]];
+        if (std::fabs(a.x - p.x) > 5.0 || std::fabs(a.y - p.y) > 5.0) continue;
+        const V3 ex = sim.pos[bl.n[1]] - a, ey = sim.pos[bl.n[2]] - a, ez = sim.pos[bl.n[4]] - a, q = p - a;
+        const double lx = dot(q, ex) / len2(ex), ly = dot(q, ey) / len2(ey), lz = dot(q, ez) / len2(ez);
+        if (lx >= 0 && lx <= 1 && ly >= 0 && ly <= 1 && lz >= 0 && lz <= 1) {
           stop = true;
           at = p;
           break;

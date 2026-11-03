@@ -68,6 +68,16 @@ class World {
   const Base& base(int side) const { return bases_[side]; }
   // Places set aside on the map: villages for houses, old wrecks for what can be taken from them.
   const std::vector<V3>& houseSites() const { return houseSites_; }
+  struct House {
+    double x, y, yaw;
+  };
+  const std::vector<House>& houses() const { return houses_; }
+  // Where someone inside a house might find something, a little above the floor.
+  static constexpr double kHouseLength = 9.0, kHouseDepth = 7.5;
+  static V3 houseInside(const House& h, double along, double across, double z) {
+    const double c = std::cos(h.yaw), s = std::sin(h.yaw);
+    return V3{h.x + c * along - s * across, h.y + s * along + c * across, z};
+  }
   const std::vector<V3>& wreckSites() const { return wreckSites_; }
   const std::vector<V3>& bridges() const { return bridges_; }
   static constexpr double kArenaLimit = 880.0;  // beyond this the rim is too steep for any vehicle
@@ -118,6 +128,7 @@ class World {
   bool arena_ = false;
   Base bases_[2];
   std::vector<V3> houseSites_, wreckSites_, bridges_;
+  std::vector<House> houses_;
   void addVisualBox(V3 c, V3 half, double yaw, float r, float g, float b);  // seen, but nothing touches it
   void rasteriseRoads(std::vector<float>& dist, std::vector<float>& roadH, std::vector<u8>& onTrail) const;
   void addCommandCentre(Base& b);

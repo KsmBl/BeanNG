@@ -21,6 +21,10 @@ void addBarrier(Sim& sim, const World& w, double x, double y, double yaw);
 void populateWorld(Sim& sim, const World& w);
 // The duel's map: its trees, and the walls and fences of its villages.
 void populateArena(Sim& sim, const World& w);
+struct House {
+  double x, y, yaw;  // the corner of the front wall; the house runs along +x and away towards +y of its own frame
+};
+void addHouse(Sim& sim, const World& w, const House& h);
 // A plain box that touches nothing, deep underground until it is moved to where it is wanted: mines and crates.
 // Returns its first node of eight.
 u32 addMarker(Sim& sim, V3 half, u8 color);

@@ -817,15 +817,31 @@ void World::buildArena() {
   for (const auto& v : villages) {
     for (int n = 0; n < 7; n++) {
       for (int tries = 0; tries < 30; tries++) {
-        const double a = rnd(0, 6.283), r = rnd(14.0, 62.0);
+        const double a = rnd(0, 6.283), r = rnd(18.0, 80.0);
         const double x = v[0] + std::cos(a) * r, y = v[1] + std::sin(a) * r;
-        if (nearRoad(x, y, 7.0) || inTheWay(x, y, 14.0)) continue;
+        if (nearRoad(x, y, 14.0) || inTheWay(x, y, 16.0)) continue;
         bool free = true;
         for (const auto& s2 : sites)
-          if (std::hypot(s2.first - x, s2.second - y) < 18.0) free = false;
+          if (std::hypot(s2.first - x, s2.second - y) < 24.0) free = false;
         if (!free) continue;
         sites.push_back({x, y});
-        houseSites_.push_back({x, y, height(x, y)});
+        // Its door towards the middle of the village, and the ground under it levelled.
+        const double yaw = std::atan2(y - v[1], x - v[0]) + PI * 0.5;
+        const World::House house{x, y, yaw};
+        const V3 mid = houseInside(house, kHouseLength * 0.5, kHouseDepth * 0.5, 0);
+        const double z = height(mid.x, mid.y);
+        for (int iy = std::max(0, int(mid.y + kHalf - 14)); iy <= std::min(N - 1, int(mid.y + kHalf + 14)); iy++)
+          for (int ix = std::max(0, int(mid.x + kHalf - 14)); ix <= std::min(N - 1, int(mid.x + kHalf + 14)); ix++) {
+            const double px = wx(ix) - mid.x, py = wx(iy) - mid.y;
+            const double cy = std::cos(yaw), sy = std::sin(yaw);
+            const double lu = std::fabs(px * cy + py * sy), lv = std::fabs(-px * sy + py * cy);
+            const double dd = std::hypot(std::max(lu - kHouseLength * 0.5 - 1.0, 0.0), std::max(lv - kHouseDepth * 0.5 - 1.0, 0.0));
+            const size_t id = size_t(iy) * N + ix;
+            const double blend = 1.0 - smoothstepd(0.0, 5.0, dd);
+            if (blend > 0) h_[id] = float(lerpd(double(h_[id]), z, blend));
+          }
+        houses_.push_back(house);
+        houseSites_.push_back({mid.x, mid.y, z});
         break;
       }
     }

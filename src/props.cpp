@@ -468,20 +468,83 @@ void populateWorld(Sim& sim, const World& w) {
   }
 }
 
+// A house: four walls of big stones, a door, windows and a slab roof, all mortared together. It stands until
+// something hits it, and what it was made of stays lying about. One object, so that it sleeps as one.
+void addHouse(Sim& sim, const World& w, const House& h) {
+  sim.beginObj(OBJ_PROP, false);
+  const Frame f{{h.x, h.y, w.height(h.x, h.y)}, std::cos(h.yaw), std::sin(h.yaw)};
+  constexpr double kL = 1.5, kD = 0.32, kH = 0.8, kGap = 0.004;
+  constexpr double kMass = 180.0;
+  const Mat mHouse{6.0e6, 1000, 0, 0, 0, 0, 0};
+  const Mat mJoint{2.5e6, 450, 0, 0, 0, 0, 24e3};
+  struct Stone {
+    u32 n[8];
+  };
+  std::vector<Stone> stones;
+  const auto addStone = [&](double x0, double x1, double y0, double y1, double z0, double z1, u8 color, double mass) {
+    Stone st{};
+    for (int i = 0; i < 8; i++) st.n[i] = sim.addNode(f.at((i & 1) ? x1 : x0, (i & 2) ? y1 : y0, (i & 4) ? z1 : z0), mass / 8.0, NF_COLLIDE, 0.7f);
+    lattice8(sim, st.n, mHouse);
+    sim.addBlock(st.n);
+    boxTris(sim, st.n, color, TF_VISUAL);
+    stones.push_back(st);
+  };
+  constexpr int kCols = 6, kDepth = 5, kRows = 4;
+  const double wx = kCols * (kL + kGap), wy = kDepth * (kL + kGap);
+  const auto stoneColor = [](int a, int b) { return u8((a * 7 + b * 3) % 3 == 0 ? COL_CONCRETE : COL_STONE); };
+  for (int row = 0; row < kRows; row++) {
+    const double z0 = 0.01 + row * (kH + kGap), z1 = z0 + kH;
+    for (int c = 0; c < kCols; c++) {
+      const double x0 = c * (kL + kGap), x1 = x0 + kL;
+      // The front with its door in the middle, as high as a man. Windows front and back above the first course.
+      const bool door = (c == 2 || c == 3) && row < 3;
+      const bool windowF = (c == 0 || c == 5) && row == 2;
+      if (!door && !windowF) addStone(x0, x1, -kD, 0, z0, z1, stoneColor(c, row), kMass);
+      const bool windowB = (c == 1 || c == 4) && row == 2;
+      if (!windowB) addStone(x0, x1, wy, wy + kD, z0, z1, stoneColor(c + 3, row), kMass);
+    }
+    for (int c = 0; c < kDepth; c++) {
+      const double y0 = c * (kL + kGap), y1 = y0 + kL;
+      const bool windowS = c == 2 && row == 2;
+      if (!windowS) {
+        addStone(-kD, 0, y0, y1, z0, z1, stoneColor(c + 1, row + 1), kMass);
+        addStone(wx, wx + kD, y0, y1, z0, z1, stoneColor(c + 2, row + 2), kMass);
+      }
+    }
+  }
+  // The roof, in slabs from wall to wall.
+  const double roofZ = 0.01 + kRows * (kH + kGap);
+  for (int c = 0; c < 3; c++) {
+    const double x0 = -kD + c * (wx + 2.0 * kD) / 3.0, x1 = -kD + (c + 1) * (wx + 2.0 * kD) / 3.0;
+    addStone(x0 + 0.01, x1 - 0.01, -kD, wy + kD, roofZ, roofZ + 0.25, COL_WOOD_DARK, 500.0);
+  }
+  // Mortar wherever two stones meet, corner to nearby corner.
+  for (size_t a = 0; a < stones.size(); a++) {
+    const V3 ma = (sim.pos[stones[a].n[0]] + sim.pos[stones[a].n[7]]) * 0.5;
+    for (size_t b = a + 1; b < stones.size(); b++) {
+      const V3 mb = (sim.pos[stones[b].n[0]] + sim.pos[stones[b].n[7]]) * 0.5;
+      if (len2(ma - mb) > 9.0 * 9.0) continue;
+      int joined = 0;
+      for (int i = 0; i < 8 && joined < 4; i++)
+        for (int j = 0; j < 8 && joined < 4; j++)
+          if (len2(sim.pos[stones[a].n[i]] - sim.pos[stones[b].n[j]]) < 0.42 * 0.42) {
+            sim.addBeam(stones[a].n[i], stones[b].n[j], mJoint);
+            joined++;
+          }
+    }
+  }
+  sim.endObj();
+}
+
 void populateArena(Sim& sim, const World& w) {
   u32 seed = 31337;
   for (const V3& t : w.trees()) {
     seed = seed * 2654435761u + 17u;
     addTree(sim, w, t, seed);
   }
-  // A wall or a fence by each house site, for something to drive through until the houses stand.
-  int n = 0;
-  for (const V3& h : w.houseSites()) {
-    const double yaw = double(n) * 0.9;
-    const double cy = std::cos(yaw), sy = std::sin(yaw);
-    if (n % 3 == 0) addStoneWall(sim, w, h.x + cy * 8.0, h.y + sy * 8.0, yaw + PI * 0.5, 10, 3);
-    else addFence(sim, w, h.x + cy * 8.0, h.y + sy * 8.0, yaw + PI * 0.5, 5);
-    n++;
+  for (const World::House& h : w.houses()) {
+    House house{h.x, h.y, h.yaw};
+    addHouse(sim, w, house);
   }
 }
 
