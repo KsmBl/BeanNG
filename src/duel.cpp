@@ -723,7 +723,12 @@ void Duel::boardVehicle(int p, int v) {
   sim.objs[b].alwaysAwake = true;
   sim.wake(a);
   sim.wake(b);
-  if (v >= kTanks) cars[size_t(v - kTanks)].engineRunning = true;
+  if (v >= kTanks) {
+    // Started for whoever gets in, at idle: below that a diesel simply stalls again.
+    Vehicle& car = cars[size_t(v - kTanks)];
+    car.engineRunning = true;
+    car.engineOmega = std::max(car.engineOmega, car.spec.idleRpm * 2.0 * PI / 60.0);
+  }
   // What one has been carrying for it goes into the tank.
   if (v < kTanks) {
     Player& pl = players[p];
@@ -864,6 +869,8 @@ void Duel::stepPlayers(const Intent in[2]) {
       pl.walkDebt -= kWalkDt;
       // Whoever lies down, or is getting up, is not going anywhere; only turning the rifle a little.
       WalkInput wi = in[i].walk;
+      // Before and after the match itself one waits where one stands.
+      if (phase != PLAYING) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
       if (s.prone > 0) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
       walk(s, wi, kWalkDt);
     }
@@ -981,10 +988,13 @@ void Duel::step(const Intent in[2]) {
     Vehicle& v = cars[i];
     // What a shell has torn open right beside it no longer works as a vehicle.
     if (blast && !v.exploded && len(v.cog - sim.lastBlast) < sim.lastBlastRadius * 0.30) v.wreck(sim);
-    const Controls* c = &parked;
+    Controls driven = parked;
     for (int p = 0; p < 2; p++)
-      if (players[p].vehicle == kTanks + int(i)) c = &in[p].c;
-    if (sim.objs[v.obj].awake) v.update(sim, *c, kDt);
+      if (players[p].vehicle == kTanks + int(i)) {
+        driven = in[p].c;
+        driven.fire = false;  // on a car that would set off a bomb under it
+      }
+    if (sim.objs[v.obj].awake) v.update(sim, driven, kDt);
   }
   sim.finish(kDt);
   updateFrames();

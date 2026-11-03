@@ -259,7 +259,8 @@ struct SoundDriver {
     f.engineOn = s.running;
     f.starter = s.starter;
     f.inputRpm = float(s.inputRpm);
-    f.speed = float(len(s.carVel));
+    // Nothing in the engine bay or under the tracks unless one is sitting in it.
+    f.speed = s.running ? float(len(s.carVel)) : 0.f;
     double skid = 0, soft = 0, grounded = 0;
     for (const WheelView& w : s.wheels) {
       const bool loose = w.surface == SURF_GRASS || w.surface == SURF_GRAVEL;
@@ -291,12 +292,12 @@ struct SoundDriver {
     };
 
     f.fire = s.scorch > 0.35 ? float(clampd(s.scorch, 0, 1)) : 0.f;
-    if (s.conventional) {
+    if (s.conventional || s.foot.inCar) {
       f.cylinders = 8;
       f.exhaustPitch = s.rpmMax < 5000 ? 0.72f : 1.15f;  // a big slow diesel, or the One:1
       f.turbo = float(s.boost) * (s.rpmMax < 5000 ? 0.45f : 1.0f);
     }
-    if (s.tank) {
+    if (s.tank && !s.foot.inCar) {
       f.cylinders = 10;
       f.exhaustPitch = 0.55f;
       f.tracks = float(clampd(f.speed / 2.0, 0, 1));
@@ -600,7 +601,7 @@ struct Game {
     s.rpm = myVehicle >= 0 ? (s.foot.inCar ? duel.cars[size_t(myVehicle - Duel::kTanks)].rpm() : tank.rpm()) : 0;
     s.rpmMax = s.foot.inCar ? 7000 : 2500;
     s.rpmRed = s.foot.inCar ? 6100 : 2300;
-    s.throttle = tank.throttleAct;
+    s.throttle = myVehicle >= 0 ? tank.throttleAct : 0.0;
     s.brake = tank.brakeAct;
     s.steer = tank.steerAct;
     s.latG = tank.latAcc / 9.81;
@@ -608,7 +609,7 @@ struct Game {
     s.gear = s.foot.inCar ? duel.cars[size_t(myVehicle - Duel::kTanks)].gear : tank.gear;
     s.running = myVehicle >= 0;
     s.fuel = tank.fuel;
-    s.engineLoad = tank.loadNow;
+    s.engineLoad = myVehicle >= 0 ? tank.loadNow : 0.0;
     s.inputRpm = 0;
     s.turretYaw = tank.turretYaw;
     s.gunPitch = tank.gunPitch;
@@ -1100,16 +1101,19 @@ struct Game {
       // On foot one's own legs answer at once.
       duel.players[mySlot].vehicle = vehicleNow;
       const bool playingNow = state == NET_IN && (phaseNow == Duel::PLAYING || phaseNow == Duel::CHOOSING || phaseNow == Duel::FINISHED);
+      const bool canWalk = state == NET_IN && phaseNow == Duel::PLAYING;
       if (vehicleNow >= 0) {
         me = shownSoldier[mySlot];
         past.clear();
       } else if (playingNow) {
         WalkInput wi;
-        wi.forward = in.c.throttle - in.c.brake;
-        wi.strafe = in.c.steer;
+        if (canWalk) {
+          wi.forward = in.c.throttle - in.c.brake;
+          wi.strafe = in.c.steer;
+          wi.jump = in.c.handbrake > 0.5;
+          wi.sprint = in.sprint;
+        }
         wi.yaw = in.yaw;
-        wi.jump = in.c.handbrake > 0.5;
-        wi.sprint = in.sprint;
         walkDebt += dt;
         walkDebt = std::min(walkDebt, 0.1);
         while (walkDebt >= Duel::kWalkDt) {
@@ -1415,6 +1419,7 @@ static void runGame() {
     const bool inMatch = netState == Game::NET_IN && phase == Duel::PLAYING;
     const bool inVehicle = inMatch && myVehicle >= 0, onFoot = inMatch && myVehicle < 0;
     const bool inTank = inVehicle && myVehicle < Duel::kTanks;
+    // Nothing to do on foot before or after the match itself: one waits where one stands.
     if (!onFoot || weaponPick != WP_SNIPER || view.foot.prone < 0.99) scoped = false;
     // The choosing comes up by itself; afterwards it is gone by itself.
     if (phase != lastPhase) {
@@ -2243,7 +2248,7 @@ int main(int argc, char** argv) {
     if (!strcmp(argv[i], "--shots") && i + 1 < argc) shotDir = argv[++i];
     if (!strcmp(argv[i], "--script") && i + 1 < argc) scriptMode = atoi(argv[++i]);
     if (!strcmp(argv[i], "--wav") && i + 1 < argc) wavPath = argv[++i];
-    if (!strcmp(argv[i], "--turret") && i + 1 < argc) gPickTurret = std::clamp(atoi(argv[++i]), 0, int(TK_COUNT) - 1);
+    if (!strcmp(argv[i], "--turret") && i + 1 < argc) gPickTurret = std::clamp(atoi(argv[++i]), 0, World::kBaseSlots - 1);
     if (!strcmp(argv[i], "--connect") && i + 1 < argc) {
       // host:port, or just the host.
       std::string target = argv[++i];
