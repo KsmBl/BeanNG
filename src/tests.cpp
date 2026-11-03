@@ -1470,6 +1470,34 @@ int main(int argc, char** argv) {
     printf("  hull after 5 s: bottom z %.3f, turret off target %.3f m, nodes sane %d\n", s->pos[t.refBottom].z, len(s->pos[t.turretNodes[0]] - s->pos[t.refFL]), std::isfinite(s->pos[t.turretNodes[0]].x));
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "one1grip")) {
+    // Pulling away on every surface, full throttle, with all the aids on.
+    for (int surface = 0; surface < 3; surface++) {
+      auto* w = new World();
+      auto* s = new Sim();
+      CarRig r;
+      w->build();
+      w->clearBoxes();
+      w->flatten();
+      if (surface == 0) w->pave();
+      const V3 at = surface == 2 ? V3{-400, 0, 0} : V3{-100, 0, 0};  // grass out there, concrete on the pad
+      s->world = w;
+      Vehicle c0 = buildOne1(*s, at, &r);
+      s->finalize();
+      settleVehicle(*s, c0, 3.0);
+      Controls c;
+      c.throttle = 1;
+      printf("%s:", surface == 0 ? "Asphalt" : (surface == 1 ? "Beton" : "Gras"));
+      for (int i = 0; i < 2000 * 8; i++) {
+        s->forces(kDt);
+        c0.update(*s, c, kDt);
+        s->finish(kDt);
+        if (i % 4000 == 3999) printf("  %.0f s: %.0f km/h (gear %d, %.0f rpm)", (i + 1) * kDt, c0.speed * 3.6, c0.gear, c0.rpm());
+      }
+      printf("\n");
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "one1run")) {
     for (int tcs = 1; tcs >= 0; tcs--) {
       auto* w = new World();

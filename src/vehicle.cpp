@@ -804,7 +804,12 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
     else
       e = throttleAct > 0.03 ? smoothstepd(1000.0, 2100.0, rpmNow) : 0.0;
     // Launch control: the clutch keeps slipping until the turbos have something to work with.
-    if (spec.turbo && gear == 1 && throttleAct > 0.3 && rIn < 3600.0) e = std::min(e, smoothstepd(3000.0, 4300.0, rpmNow));
+    // How high it holds follows the throttle: when the traction control cuts back on a slippery road the
+    // clutch must close sooner, or the two would wait for each other and the car would not move at all.
+    if (spec.turbo && gear == 1 && rIn < 3600.0) {
+      const double gate = lerpd(1500.0, 4300.0, throttleAct * throttleAct);
+      e = std::min(e, smoothstepd(gate - 1100.0, gate, rpmNow));
+    }
     clutch = e * clutchRamp_;
   }
 
