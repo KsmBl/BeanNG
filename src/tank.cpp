@@ -430,10 +430,11 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   const double th = std::max(throttleAct * gov, clampd((kIdle - engineOmega) / 12.0, 0, 0.5));
   loadNow += (th - loadNow) * clampd(dt / 0.25, 0, 1);
   const double slip = engineOmega - inputOmega;
-  // A fluid coupling's square law, stiffened by the lock-up that real converters use at speed.
+  // A fluid coupling's square law, with the lock-up that real converters use at speed. Without it a third of
+  // the power goes into heating the oil, and the engine sits on its governor at any road speed.
   const double speedRatioNow = engineOmega > 1.0 ? clampd(inputOmega / engineOmega, 0, 1) : 0;
-  const double lockUp = clampd((speedRatioNow - 0.45) / 0.35, 0, 1);
-  double Tconv = clampd(0.085 * slip * std::fabs(slip) + 40.0 * lockUp * slip, -4500.0, 4500.0);
+  const double lockUp = clampd((speedRatioNow - 0.40) / 0.30, 0, 1);
+  double Tconv = clampd(0.085 * slip * std::fabs(slip) + 180.0 * lockUp * slip, -5000.0, 5000.0);
   // Standing with the foot off: the box holds still rather than creeping off.
   if (throttleAct < 0.03 && absV < 0.7) Tconv = 0;
   const double speedRatio = engineOmega > 1.0 ? clampd(inputOmega / engineOmega, 0, 1) : 0;

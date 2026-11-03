@@ -2050,6 +2050,28 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "tankrun")) {
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    w->clearBoxes();
+    w->flatten();
+    w->pave();
+    s->world = w;
+    Tank t = buildLeopard(*s, V3{-400, 0, 0}, &r);
+    s->finalize();
+    t.settle(*s, 3.0);
+    Controls c;
+    c.throttle = 1;
+    for (int k = 0; k < 2000 * 28; k++) {
+      s->forces(kDt);
+      t.update(*s, c, kDt);
+      s->finish(kDt);
+      if (k % 3000 == 2999) printf(" t %4.1f v %5.1f km/h gear %d rpm %4.0f load %.2f | Kette %5.1f / %5.1f km/h | Radkraft %.0f N\n", (k + 1) * kDt, t.speed * 3.6, t.gear, t.rpm(), t.loadNow, t.trackOmega[0] * Tank::kSprocketR * 3.6, t.trackOmega[1] * Tank::kSprocketR * 3.6, t.wheels[3].Fn);
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "tankturn")) {
     auto* w = new World();
     auto* s = new Sim();
