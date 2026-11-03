@@ -1862,7 +1862,7 @@ struct Renderer::Impl {
         }
         case EV_BLAST: {
           const float R = e.strength;  // the blast's radius in metres
-          flash = std::max(flash, std::min(1.f, (R * 2.5f) / (1.f + float(len(e.p - lastCamEye)))));
+          flash = std::max(flash, std::min(1.f, (R * 1.2f) / (1.f + float(len(e.p - lastCamEye)))));
           // Fireball.
           for (int i = 0; i < 90; i++) {
             Particle q;

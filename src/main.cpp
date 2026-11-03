@@ -2166,6 +2166,23 @@ static void runGame() {
       else rig.pitch = 0.02;
       scriptAim = !view.missileLive && std::fmod(tNow, 4.0) > 2.0;
     }
+    if (scriptMode == 53 && netState == Game::NET_IN) {
+      // The launcher and a strike code, watched from the side.
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      if (inMatch) {
+        weaponPick = WP_RPG;
+        rig.yaw = G.world.base(slot).facing + PI;
+        rig.pitch = -0.02;
+        if (std::fmod(tNow, 2.0) < dt) sendC.fire = true;
+        static bool called = false;
+        if (!called && view.foot.codes > 0) {
+          called = true;
+          sendC.strike = true;
+          sendC.strikeAt = G.world.base(slot).centre + V3{std::cos(G.world.base(slot).facing), std::sin(G.world.base(slot).facing), 0} * 70.0;
+        }
+      }
+    }
     if (scriptMode == 51 && netState == Game::NET_IN) {
       if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
       panelKind = PANEL_NONE;
@@ -2182,15 +2199,6 @@ static void runGame() {
       panelKind = PANEL_NONE;
     }
     if ((scriptMode == 41 || scriptMode == 48 || scriptMode == 49) && netState == Game::NET_IN) {
-      {
-        // Says something once, to see it arrive on both screens.
-        static bool said = false;
-        if (!said && tNow > 3.0) {
-          said = true;
-          std::lock_guard<std::mutex> lock(G.inputMutex);
-          G.input.chatOut = "Hallo von " + gUserName + " äöü";
-        }
-      }
       if (phase == Duel::CHOOSING && tNow > 1.0 && !pickReady) {
         pickItems[IT_REPAIR] = 1;
         pickItems[IT_AR] = 2;
@@ -2540,6 +2548,13 @@ static void runGame() {
         cam.fovY = 45.0 * PI / 180.0;
       }
     }
+    if (scriptMode == 53) {
+      const V3 mid = G.world.base(slot).centre + V3{std::cos(G.world.base(slot).facing), std::sin(G.world.base(slot).facing), 0} * 70.0;
+      cam.target = mid + V3{0, 0, 40.0};
+      cam.eye = view.foot.p + V3{0, 45.0, 12.0};
+      cam.up = {0, 0, 1};
+      cam.fovY = 62.0 * PI / 180.0;
+    }
     if (scriptMode == 51) {
       // Close by, to see someone fall.
       const double a = 0.9 + tNow * 0.15;
@@ -2650,7 +2665,7 @@ static void runGame() {
         printf("fps %.0f t=%.1f v=%.0f km/h pos %.0f %.0f %.1f Phase %d Fahrzeug %d Munition %d Leben %.0f Gas %.2f Bremse %.2f Ruck %.1f mm\n", hud.fps, tNow, view.speedKmh, view.carCog.x, view.carCog.y, view.carCog.z, phase, myVehicle, view.tankAmmo, view.foot.hp, view.throttle, view.brake, jerkFrames > 0 ? jerkSum / jerkFrames * 1000.0 : 0.0);
         jerkSum = jerkFrames = 0;
         fflush(stdout);
-        nextShot += scriptMode == 47 ? 0.3 : (scriptMode == 45 || scriptMode == 51 ? 0.6 : 1.0);
+        nextShot += scriptMode == 47 ? 0.3 : (scriptMode == 45 || scriptMode == 51 ? 0.6 : (scriptMode == 53 ? 0.4 : 1.0));
         const int enough = scriptMode == 43 ? 7 : (scriptMode == 44 ? 2 : (scriptMode == 47 ? 6 : 60));
         if (shotCount >= enough) quit = true;
       }
