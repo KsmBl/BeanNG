@@ -79,6 +79,7 @@ class Duel {
   static constexpr int kTanks = 2 * HK_COUNT * TK_COUNT;
   static constexpr int kCarKinds = 3;
   static constexpr int kCars = 2 * kCarKinds;
+  static constexpr double kMedkitHeal = 50.0;
   static constexpr int kMaxPlayers = 6;
   static int teamOf(int player) { return player % 2; }
   static constexpr int kVehicles = kTanks + kCars;
@@ -94,6 +95,7 @@ class Duel {
     double walkDebt = 0;
     // A drone from a crate. While it flies, its owner stands there holding the controls.
     int drones = 0;
+    int medkits = 0;
     bool droneLive = false;
     V3 droneP, droneV;
     double droneBattery = 0;
@@ -135,6 +137,7 @@ class Duel {
     bool smoke = false;     // a grenade on foot, the launcher in a tank
     bool net = false;       // throws the camouflage net over the tank one sits in
     bool drone = false;     // sends a drone up, or calls it off
+    bool medkit = false;    // uses a carried medkit
     V3 strikeAt;
     bool setup = false;     // lies down behind the big rifle, or gets up again
     int weapon = WP_PISTOL;

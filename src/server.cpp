@@ -166,7 +166,7 @@ struct Client {
   char name[kNameBytes] = {};
   u32 chatSeq = 0;  // the last line of theirs that has gone in the log
   // One-shot controls, each seen once however many packets carry the same count.
-  bool fire = false, launch = false, repair = false, use = false, setup = false, mineFoot = false, mineTank = false, strike = false, query = false, smoke = false, net = false, drone = false;
+  bool fire = false, launch = false, repair = false, use = false, setup = false, mineFoot = false, mineTank = false, strike = false, query = false, smoke = false, net = false, drone = false, medkit = false;
   // Scenery that has moved, as far as this player has been told, and where the slow sweep has got to.
   std::vector<float> told;
   u32 sweep = 0;
@@ -304,6 +304,7 @@ int main(int argc, char** argv) {
           if (m.smokeCount != c.in.smokeCount) c.smoke = true;
           if (m.netCount != c.in.netCount) c.net = true;
           if (m.droneCount != c.in.droneCount) c.drone = true;
+          if (m.medkitCount != c.in.medkitCount) c.medkit = true;
         }
         c.in = m;
         c.haveInput = true;
@@ -474,6 +475,7 @@ int main(int argc, char** argv) {
       w.put(i16(me.tankMissiles));
       w.put(i16(me.strikeCodes));
       w.put(u8(me.drones));
+      w.put(u8(me.medkits));
       w.put(u8((me.tapped ? 1 : 0) | (me.hasFix ? 2 : 0)));
       w.put(float(me.tapClock));
       w.put(float(me.fixWait));
@@ -713,6 +715,7 @@ int main(int argc, char** argv) {
         in[i].smoke = c.smoke;
         in[i].net = c.net;
         in[i].drone = c.drone;
+        in[i].medkit = c.medkit;
         in[i].strikeAt = V3{c.in.strikeX, c.in.strikeY, 0};
         in[i].fireFoot = c.fire;
         in[i].fireHeld = c.in.fireHeld;
@@ -728,7 +731,7 @@ int main(int argc, char** argv) {
         in[i].walk.yaw = c.in.yaw;
         in[i].walk.jump = c.in.handbrake > 0.5;
         in[i].walk.sprint = c.in.sprint;
-        c.fire = c.launch = c.repair = c.use = c.setup = c.mineFoot = c.mineTank = c.strike = c.query = c.smoke = c.net = c.drone = false;
+        c.fire = c.launch = c.repair = c.use = c.setup = c.mineFoot = c.mineTank = c.strike = c.query = c.smoke = c.net = c.drone = c.medkit = false;
       }
       for (int i = 0; i < Duel::kMaxPlayers; i++) duel->players[i].present = clients[i].used;
       duel->step(in);

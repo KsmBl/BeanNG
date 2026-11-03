@@ -768,7 +768,7 @@ void Duel::rollLoot() {
   static const Roll kTable[] = {
       {"kleinmunition", 26, 60}, {"granaten", 13, 4}, {"lenkraketen", 7, 2}, {"raketen", 8, 2}, {"raketenwerfer", 7, 1},
       {"scharfschuetzengewehr", 6, 1}, {"scharfschuetzenmunition", 8, 5}, {"reparaturset", 8, 1}, {"tretmine", 6, 2},
-      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"leben", 6, 50}, {"nebelgranate", 7, 2}, {"ghillie", 4, 1}, {"tarnnetz", 4, 1}, {"drohne", 5, 1},
+      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"medikit", 6, 1}, {"nebelgranate", 7, 2}, {"ghillie", 4, 1}, {"tarnnetz", 4, 1}, {"drohne", 5, 1},
   };
   int total = 0;
   for (const Roll& r : kTable) total += r.weight;
@@ -811,18 +811,18 @@ int Duel::nearCrate(V3 p) const {
 }
 
 const char* Duel::crateLabel(const Crate& c, char* buf, size_t n) {
-  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Verbandskasten", "Nebelgranaten", "Ghillie-Anzug", "Tarnnetz", "Drohne"};
+  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Medikit", "Nebelgranaten", "Ghillie-Anzug", "Tarnnetz", "Drohne"};
   snprintf(buf, n, c.count > 1 ? "%s  x%d" : "%s", kLabels[c.what], c.count);
   return buf;
 }
 
 const char* const Duel::kGiveNames[kGiveKinds] = {
     "tretmine", "panzermine", "reparaturset", "sturmgewehr", "kleinmunition", "scharfschuetzengewehr", "scharfschuetzenmunition",
-    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "leben", "nebelgranate", "ghillie", "tarnnetz", "drohne",
+    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "medikit", "nebelgranate", "ghillie", "tarnnetz", "drohne",
 };
 
 bool Duel::give(int player, const char* name, int count) {
-  if (player < 0 || player > 1 || count < 1) return false;
+  if (player < 0 || player >= kMaxPlayers || count < 1) return false;
   Player& p = players[player];
   const std::string n = name;
   const auto addItem = [&](ItemKind k) { p.items[k] = u8(std::min(int(p.items[k]) + count, 99)); };
@@ -846,7 +846,7 @@ bool Duel::give(int player, const char* name, int count) {
   else if (n == "granaten") p.tankShells += count;
   else if (n == "lenkraketen") p.tankMissiles += count;
   else if (n == "bombencode") p.strikeCodes += count;
-  else if (n == "leben") p.soldier.hp = std::min(p.soldier.hp + count, 100.0);
+  else if (n == "medikit") p.medkits += count;
   else return false;
   return true;
 }
@@ -1398,6 +1398,11 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     s.prone = clampd(s.prone + (pl.wantProne ? 1.0 : -1.5) * kDt / kSetupTime * (pl.wantProne ? 1.0 : 3.0), 0.0, 1.0);
     if (in[i].strike && phase == PLAYING) callStrike(i, in[i].strikeAt);
     if (in[i].smoke && phase == PLAYING) useSmoke(i);
+    // Half a life back, and it is not spent on someone who has nothing to mend.
+    if (in[i].medkit && phase == PLAYING && pl.medkits > 0 && s.hp > 0 && s.hp < 100.0) {
+      pl.medkits--;
+      s.hp = std::min(s.hp + kMedkitHeal, 100.0);
+    }
     if (in[i].net && phase == PLAYING && pl.vehicle >= 0 && pl.vehicle < kTanks && pl.items[IT_NET] > 0) {
       Tank& t = tanks[pl.vehicle];
       if (!t.netOn && t.netClock <= 0 && std::fabs(t.speed) < 1.0) t.netClock = 3.0;
@@ -1575,6 +1580,7 @@ void Duel::placePlayers() {
     p.smallAmmo = 24;
     p.sniperAmmo = p.rpgAmmo = 0;
     p.tankShells = p.tankMissiles = p.strikeCodes = 0;
+    p.medkits = 0;
     p.shotClock = 0;
     p.wantProne = false;
     for (int k = 0; k < WP_COUNT; k++) p.hasWeapon[k] = k <= WP_PISTOL;

@@ -911,7 +911,7 @@ struct Game {
         in = input;
         input.chatOut.clear();
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = input.c.smoke = input.c.net = input.c.drone = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = input.c.smoke = input.c.net = input.c.drone = input.c.medkit = false;
       }
       if (!in.chatOut.empty() && state == NET_IN) {
         saying = in.chatOut;
@@ -938,6 +938,7 @@ struct Game {
       if (in.c.smoke) out.smokeCount++;
       if (in.c.net) out.netCount++;
       if (in.c.drone) out.droneCount++;
+      if (in.c.medkit) out.medkitCount++;
       if (in.c.strike) {
         out.strikeCount++;
         out.strikeX = float(in.c.strikeAt.x);
@@ -1156,6 +1157,9 @@ struct Game {
             u8 dronesHeld = 0;
             r.get(dronesHeld);
             duel.players[mySlot].drones = dronesHeld;
+            u8 medkitsHeld = 0;
+            r.get(medkitsHeld);
+            duel.players[mySlot].medkits = medkitsHeld;
             u8 tap = 0;
             float tapClock = 0, fixWait = 0, fixAge = 0;
             r.get(tap);
@@ -1529,6 +1533,8 @@ struct Game {
         snap.foot.droneP = droneShown[mySlot].shown;
         snap.foot.droneBattery = droneShown[mySlot].battery;
         snap.foot.drones = duel.players[mySlot].drones;
+        snap.foot.medkits = duel.players[mySlot].medkits;
+        snap.foot.launcher = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? duel.tanks[vehicleNow].smokeCharges : 0;
       }
       // A guided missile is a real thing to look at, for whoever is flying it and whoever it comes for.
       for (int side = 0; side < 2; side++) {
@@ -1676,13 +1682,13 @@ struct Game {
           };
         }
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
-        else if (droneShown[mySlot].live) snprintf(msg, sizeof msg, "Drohne  ·  Akku %.0f s  ·  Feuer markiert den Gegner  ·  U holt sie zurück", droneShown[mySlot].battery);
+        else if (droneShown[mySlot].live) snprintf(msg, sizeof msg, "Drohne  ·  Akku %.0f s  ·  Feuer markiert den Gegner  ·  Q: zurückholen", droneShown[mySlot].battery);
         else if (mine && mine->netClock > 0) snprintf(msg, sizeof msg, "Tarnnetz wird aufgezogen  ·  %.0f s", mine->netClock);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
         else if (vehicleNow >= 0) snprintf(msg, sizeof msg, seatNow == 0 ? "E: aussteigen" : "E: aussteigen  ·  Du bist Richtschütze");
         else if (duel.players[mySlot].tapClock > 0) snprintf(msg, sizeof msg, "Hauptcomputer wird angezapft  ·  %.0f s", duel.players[mySlot].tapClock);
         else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && !duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "E: Hauptcomputer anzapfen");
-        else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "Angezapft  ·  J fragt den Standort des Gegners ab, K zeigt ihn");
+        else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "Angezapft  ·  Q: Standort des Gegners abfragen, K zeigt ihn");
         else if (phaseNow == Duel::PLAYING && duel.nearCrate(me.p + V3{0, 0, 0.3}) >= 0) {
           char what[64];
           snprintf(msg, sizeof msg, "E: nehmen  ·  %s", Duel::crateLabel(duel.crates[size_t(duel.nearCrate(me.p + V3{0, 0, 0.3}))], what, sizeof what));
@@ -1691,7 +1697,7 @@ struct Game {
           char tankName[64] = "";
           if (v >= 0 && v < Duel::kTanks) snprintf(tankName, sizeof tankName, "%s, %s", duel.tanks[v].hullSpec().name, duel.tanks[v].spec().name);
           const char* name = v < 0 ? "" : (v < Duel::kTanks ? tankName : (v - Duel::kTanks) % Duel::kCarKinds == 0 ? "Xantia" : ((v - Duel::kTanks) % Duel::kCarKinds == 1 ? "One:1" : "Hummer"));
-          if (v >= 0) snprintf(msg, sizeof msg, duel.occupied(v) ? "E: als Richtschütze einsteigen  ·  %s" : (carrying[IT_REPAIR] > 0 ? "E: einsteigen  ·  R: reparieren  ·  %s" : "E: einsteigen  ·  %s"), name);
+          if (v >= 0) snprintf(msg, sizeof msg, duel.occupied(v) ? "E: als Richtschütze einsteigen  ·  %s" : (carrying[IT_REPAIR] > 0 ? "E: einsteigen  ·  Q: Reparaturset  ·  %s" : "E: einsteigen  ·  %s"), name);
         }
       }
       memcpy(duel.players[mySlot].items, carrying, IT_COUNT);
@@ -1899,7 +1905,7 @@ static void runGame() {
   rig.dist = 8.0;
   Camera cam;
   HudOptions hud;
-  enum { PANEL_NONE, PANEL_GAME, PANEL_MAIN, PANEL_KEYS, PANEL_ONLINE, PANEL_LOADOUT };
+  enum { PANEL_NONE, PANEL_GAME, PANEL_MAIN, PANEL_KEYS, PANEL_ONLINE, PANEL_LOADOUT, PANEL_TOOLS };
   int panelKind = PANEL_MAIN;
   bool textEntry = false;
   int panelSel = 0;
@@ -1957,6 +1963,8 @@ static void runGame() {
   bool mapOpen = false;
   bool hasMark = false;
   V3 markPoint;
+  bool strikePending = false;  // a strike code chosen: the next click on the map says where
+  std::vector<const char*> toolAbout;
   auto lastFrame = std::chrono::steady_clock::now();
   const auto startTime = lastFrame;
 
@@ -2000,9 +2008,10 @@ static void runGame() {
         panelKind = PANEL_LOADOUT;
         panelSel = 0;
         fromMain = false;
-      } else if (panelKind == PANEL_LOADOUT) {
+      } else if (panelKind == PANEL_LOADOUT || panelKind == PANEL_TOOLS) {
         panelKind = PANEL_NONE;
       }
+      strikePending = false;
       if (phase == Duel::PLAYING) {
         if (pickItems[IT_AR] > 0) weaponPick = WP_AR;
         else weaponPick = WP_PISTOL;
@@ -2069,6 +2078,44 @@ static void runGame() {
         pickReady = true;
         panelKind = PANEL_NONE;
       });
+    } else if (panelKind == PANEL_TOOLS) {
+      // Only what is actually carried. What cannot be used from here says so, and stays where it is.
+      toolAbout.clear();
+      const auto tool = [&](const char* name, std::string value, const char* blocked, const char* about, std::function<void()> act) {
+        toolAbout.push_back(about);
+        if (blocked) value += std::string(value.empty() ? "" : "  ·  ") + blocked;
+        char row[64];
+        snprintf(row, sizeof row, "%d   %s", int(items.size()) + 1, name);
+        items.push_back({row, value, -1.f, [&panelKind, blocked, act](int) {
+                           if (blocked) return;
+                           act();
+                           if (panelKind == PANEL_TOOLS) panelKind = PANEL_NONE;
+                         }});
+      };
+      const char* footOnly = onFoot ? nullptr : "nur zu Fuß";
+      const auto& f = view.foot;
+      if (f.items[IT_FOOT_MINE] > 0) tool("Tretmine", std::to_string(f.items[IT_FOOT_MINE]), footOnly, "Legst du dir vor die Füße. Nach 3 Sekunden scharf, wer drauftritt, stirbt meist.", [&] { edges.placeFoot = true; });
+      if (f.items[IT_AT_MINE] > 0) tool("Panzermine", std::to_string(f.items[IT_AT_MINE]), footOnly, "Reißt einem Panzer die Kette ab und richtet schweren Schaden an. Zu Fuß nichts zu befürchten.", [&] { edges.placeTank = true; });
+      if (f.medkits > 0) tool("Medikit", std::to_string(f.medkits), nullptr, "Gibt dir 50 Leben zurück. Bei vollen Leben bleibt es im Rucksack.", [&] { edges.medkit = true; });
+      if (f.items[IT_REPAIR] > 0) tool("Reparaturset", std::to_string(f.items[IT_REPAIR]), footOnly, "Bringt ein Fahrzeug wieder zum Laufen: 6 Sekunden, zu Fuß daneben, und es muss stillstehen.", [&] { edges.repair = true; });
+      if (inTank) tool("Nebelwerfer", std::to_string(f.launcher), f.launcher > 0 ? nullptr : "leer", "Der Werfer auf dem Turm: eine Wolke vor den Panzer, die eine halbe Minute lang die Sicht versperrt.", [&] { edges.smoke = true; });
+      else if (f.items[IT_SMOKE] > 0) tool("Nebelgranate", std::to_string(f.items[IT_SMOKE]), onFoot ? nullptr : "nur zu Fuß", "Eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen.", [&] { edges.smoke = true; });
+      if (f.items[IT_NET] > 0) tool("Tarnnetz", std::to_string(f.items[IT_NET]), inTank ? nullptr : "nur im Panzer", "Über den stehenden Panzer gezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.", [&] { edges.net = true; });
+      if (f.droneLive) tool("Drohne zurückholen", "", nullptr, "Holt die Drohne aus der Luft. Sie ist danach verbraucht.", [&] { edges.drone = true; });
+      else if (f.drones > 0) tool("Drohne", std::to_string(f.drones), footOnly, "Steigt von deinem Standort auf. Du fliegst sie selbst, Feuer markiert den Gegner.", [&] { edges.drone = true; });
+      if (f.codes > 0) tool("Bombencode", std::to_string(f.codes), nullptr, "Die Karte geht auf, ein Klick sagt wohin: vier Raketen, ziemlich ungenau.", [&] {
+        strikePending = true;
+        mapOpen = true;
+      });
+      if (f.tapped) {
+        char wait[32] = "bereit";
+        if (f.fixWait > 0) snprintf(wait, sizeof wait, "noch %.0f s", f.fixWait);
+        tool("Standort abfragen", wait, f.fixWait > 0 ? "" : nullptr, "Fragt den angezapften Computer. Der ungefähre Standort des Gegners erscheint auf der Karte.", [&] { edges.query = true; });
+      }
+      if (items.empty()) {
+        toolAbout.push_back("Finden kannst du Werkzeug in Kisten in Häusern und bei Wracks.");
+        items.push_back({"Nichts dabei", "", -1.f, [](int) {}});
+      }
     } else if (panelKind == PANEL_MAIN) {
       if (netState == Game::NET_REPLAY) {
         page("Weiter ansehen", [&] { panelKind = PANEL_NONE; });
@@ -2121,17 +2168,12 @@ static void runGame() {
       key("Rakete starten, fliegt mit der Maus", "G");
       key("Einsteigen und aussteigen", "E");
       key("Waffe wählen", "1 2 3 4 5");
-      key("Nebel: Granate zu Fuß, Werfer im Panzer", "H");
-      key("Tarnnetz über den stehenden Panzer", "V");
-      key("Drohne: starten, zurückholen; Feuer markiert", "U");
       key("Anvisieren, in jedem Panzer und mit jedem Gewehr", "Rechte Maustaste halten");
-      key("Tretmine, Panzermine legen", "M, N");
-      key("Bombencode auf den Punkt der Karte", "K, Klick, B");
-      key("Beim Gegner anzapfen, dann Standort abfragen", "E am Computer, J");
+      key("Werkzeuge: Minen, Medikit, Reparaturset, Nebel, Tarnnetz, Drohne, Bombencode", "Q");
+      key("Beim Gegner anzapfen, dann Standort abfragen", "E am Computer, Q");
       key("Scharfschützengewehr aufbauen, Zielfernrohr, Zoom", "X, rechte Maustaste, Mausrad");
       key("Visier auf Entfernung einstellen", "Pfeil hoch, runter");
       key("Rennen, springen", "Umschalt, Leertaste");
-      key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
       key("Karte, Ziel für die Artillerie", "K");
       key("Chat", "Enter");
       key("Kamera", "C");
@@ -2234,6 +2276,19 @@ static void runGame() {
         float mx0, my0, ms;
         mapLayout(pw, ph, mx0, my0, ms);
         const double wx = (double(e.button.x - mx0) / ms * 2.0 - 1.0) * kMapHalf, wy = (1.0 - double(e.button.y - my0) / ms * 2.0) * kMapHalf;
+        if (strikePending) {
+          // The code from the tools: this click is where it goes, the other button keeps it.
+          if (e.button.button == SDL_BUTTON_LEFT && std::fabs(wx) < kMapHalf && std::fabs(wy) < kMapHalf) {
+            edges.strike = true;
+            edges.strikeAt = V3{wx, wy, G.world.height(wx, wy)};
+            strikePending = false;
+            mapOpen = false;
+          } else if (e.button.button == SDL_BUTTON_RIGHT) {
+            strikePending = false;
+            mapOpen = false;
+          }
+          continue;
+        }
         if (e.button.button == SDL_BUTTON_LEFT && std::fabs(wx) < kMapHalf && std::fabs(wy) < kMapHalf) {
           hasMark = true;
           markPoint = V3{wx, wy, G.world.height(wx, wy)};
@@ -2244,7 +2299,16 @@ static void runGame() {
       // A panel on screen takes the keys and buttons it needs first.
       if (panelKind != 0) {
         bool used = true;
-        if (e.type == SDL_EVENT_KEY_DOWN) {
+        if (e.type == SDL_EVENT_KEY_DOWN && panelKind == PANEL_TOOLS && !e.key.repeat && e.key.key >= SDLK_1 && e.key.key <= SDLK_9) {
+          // A number takes the row of that number at once.
+          const int row = int(e.key.key - SDLK_1);
+          if (row < int(items.size())) {
+            panelSel = row;
+            choosePanel();
+          }
+        } else if (e.type == SDL_EVENT_KEY_DOWN && panelKind == PANEL_TOOLS && e.key.key == SDLK_Q) {
+          if (!e.key.repeat) panelKind = PANEL_NONE;
+        } else if (e.type == SDL_EVENT_KEY_DOWN) {
           switch (e.key.key) {
             case SDLK_UP: case SDLK_W: panelMove(-1); break;
             case SDLK_DOWN: case SDLK_S: panelMove(1); break;
@@ -2329,16 +2393,29 @@ static void runGame() {
             case SDLK_LEFTBRACKET: if (replayOn) G.replaySpeed = std::max(25, G.replaySpeed.load() / 2); break;
             case SDLK_RIGHTBRACKET: if (replayOn) G.replaySpeed = std::min(800, G.replaySpeed.load() * 2); break;
             case SDLK_ESCAPE:
-              if (mapOpen) mapOpen = false;
-              else {
+              if (mapOpen) {
+                mapOpen = false;
+                strikePending = false;
+              } else {
                 panelKind = PANEL_MAIN;
                 panelSel = 0;
                 fromMain = false;
               }
               break;
-            case SDLK_R: edges.repair = true; break;
+            case SDLK_Q:
+              if (netState == Game::NET_IN && phase == Duel::PLAYING) {
+                panelKind = PANEL_TOOLS;
+                panelSel = 0;
+                fromMain = false;
+                mapOpen = false;
+                strikePending = false;
+              }
+              break;
             case SDLK_G: edges.launch = true; break;
-            case SDLK_K: mapOpen = !mapOpen; break;
+            case SDLK_K:
+              mapOpen = !mapOpen;
+              strikePending = false;
+              break;
             case SDLK_C: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.pitch = 0.22; break;
             case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5: {
               const int pick = int(e.key.key - SDLK_1);
@@ -2353,22 +2430,6 @@ static void runGame() {
             case SDLK_X: edges.setup = true; break;
             case SDLK_UP: if (scoped) scopeZero = std::min(scopeZero + 50, 2000); break;
             case SDLK_DOWN: if (scoped) scopeZero = std::max(scopeZero - 50, 100); break;
-            case SDLK_B:
-              // On the point marked on the map; without one, the map comes up to mark it on.
-              if (hasMark && view.foot.codes > 0) {
-                edges.strike = true;
-                edges.strikeAt = markPoint;
-                hasMark = false;
-              } else {
-                mapOpen = true;
-              }
-              break;
-            case SDLK_J: edges.query = true; break;
-            case SDLK_H: edges.smoke = true; break;
-            case SDLK_V: edges.net = true; break;
-            case SDLK_U: edges.drone = true; break;
-            case SDLK_M: edges.placeFoot = true; break;
-            case SDLK_N: edges.placeTank = true; break;
             case SDLK_F12: wantShot = true; break;
             default: break;
           }
@@ -2481,6 +2542,53 @@ static void runGame() {
         scopeZoom = 6.0;
         if (std::fmod(tNow, 2.5) < dt) sendC.fire = true;
       }
+    }
+    if (scriptMode == 60 && netState == Game::NET_IN) {
+      // The tools, through the real keys: the old shortcuts do nothing, the list does.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickItems[IT_FOOT_MINE] = 3;
+        pickItems[IT_NET] = 1;
+        pickReady = true;
+      }
+      static double started = -1;
+      static int stage = 0;
+      if (phase != Duel::PLAYING) started = -1, stage = 0;
+      else if (started < 0) started = tNow;
+      const auto press = [](SDL_Keycode k) {
+        SDL_Event ev{};
+        ev.type = SDL_EVENT_KEY_DOWN;
+        ev.key.key = k;
+        SDL_PushEvent(&ev);
+      };
+      const double at = started < 0 ? -1 : tNow - started;
+      const auto state = [&](const char* what) { printf("%s: Panel %d Karte %d Zeilen %zu Minen %d Medikits %d Codes %d\n", what, panelKind, int(mapOpen), items.size(), view.foot.items[IT_FOOT_MINE], view.foot.medkits, view.foot.codes); };
+      if (stage == 0 && at > 2) { state("Start"); press(SDLK_M); press(SDLK_B); stage++; }
+      if (stage == 1 && at > 3) { state("nach M und B"); press(SDLK_Q); stage++; }
+      if (stage == 2 && at > 4) { state("nach Q"); for (const Item& it : items) printf("  %s | %s\n", it.label.c_str(), it.value.c_str()); wantShot = true; stage++; }
+      if (stage == 3 && at > 5) { press(SDLK_1); stage++; }
+      if (stage == 4 && at > 6) { state("nach 1"); press(SDLK_Q); stage++; }
+      if (stage == 5 && at > 7) {
+        int row = -1;
+        for (size_t i = 0; i < items.size(); i++) if (items[i].label.find("Bombencode") != std::string::npos) row = int(i);
+        printf("Bombencode in Zeile %d\n", row);
+        if (row >= 0) press(SDL_Keycode(SDLK_1 + row));
+        stage++;
+      }
+      if (stage == 6 && at > 8) { state("nach Bombencode"); wantShot = true; stage++; }
+      if (stage == 7 && at > 9) {
+        int pw, ph;
+        SDL_GetWindowSizeInPixels(window, &pw, &ph);
+        float mx0, my0, ms;
+        mapLayout(pw, ph, mx0, my0, ms);
+        SDL_Event ev{};
+        ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        ev.button.button = SDL_BUTTON_LEFT;
+        ev.button.x = mx0 + ms * 0.5f;
+        ev.button.y = my0 + ms * 0.5f;
+        SDL_PushEvent(&ev);
+        stage++;
+      }
+      if (stage == 8 && at > 10) { state("nach Klick"); stage++; }
     }
     if (scriptMode == 54 && netState == Game::NET_IN && phase == Duel::CHOOSING) {
       // The loadout menu, with something chosen.
@@ -2695,6 +2803,7 @@ static void runGame() {
       c.smoke |= sendC.smoke;
       c.net |= sendC.net;
       c.drone |= sendC.drone;
+      c.medkit |= sendC.medkit;
       if (sendC.strike) {
         c.strike = true;
         c.strikeAt = sendC.strikeAt;
@@ -2855,14 +2964,14 @@ static void runGame() {
 
     hud.panel.open = panelKind != 0;
     if (hud.panel.open) {
-      static const char* titles[6] = {"", "Spiel-Einstellungen", "BeanNG", "Steuerung", "Online spielen", "Ausrüstung"};
+      static const char* titles[7] = {"", "Spiel-Einstellungen", "BeanNG", "Steuerung", "Online spielen", "Ausrüstung", "Werkzeug"};
       hud.panel.title = titles[panelKind];
       if (panelKind == PANEL_LOADOUT) {
         char b[64];
         snprintf(b, sizeof b, "Ausrüstung  ·  noch %.0f s", std::max(0.0, Duel::kChooseTime - phaseClock));
         hud.panel.title = b;
       }
-      hud.panel.foot = panelKind == PANEL_ONLINE ? "Tippen  ·  Pfeile wählen  ·  ENTER weiter  ·  ESC zurück" : panelKind == PANEL_MAIN ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
+      hud.panel.foot = panelKind == PANEL_TOOLS ? "Zahl oder ENTER benutzen  ·  Q schließen" : panelKind == PANEL_ONLINE ? "Tippen  ·  Pfeile wählen  ·  ENTER weiter  ·  ESC zurück" : panelKind == PANEL_MAIN ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
       hud.panel.sel = panelSel;
       hud.panel.rows.clear();
       hud.panel.values.clear();
@@ -2871,14 +2980,14 @@ static void runGame() {
       hud.panel.slots.clear();
       if (panelKind == PANEL_LOADOUT) {
         static const char* kAbout[IT_COUNT] = {
-            "Tretmine: liegt flach am Boden und ist nach 3 Sekunden scharf. Wer drauftritt, stirbt meist. Auch ein Fahrzeug löst sie aus. Legen mit M.",
-            "Panzermine: reißt die Kette auf der Seite ab und richtet schweren Schaden an. Zu Fuß nichts zu befürchten. Legen mit N.",
-            "Reparaturset: bringt ein Fahrzeug wieder zum Laufen. Dauert 6 Sekunden zu Fuß daneben, und es muss stillstehen. Taste R.",
+            "Tretmine: liegt flach am Boden und ist nach 3 Sekunden scharf. Wer drauftritt, stirbt meist. Auch ein Fahrzeug löst sie aus. Liegt im Werkzeugmenü (Q).",
+            "Panzermine: reißt die Kette auf der Seite ab und richtet schweren Schaden an. Zu Fuß nichts zu befürchten. Liegt im Werkzeugmenü (Q).",
+            "Reparaturset: bringt ein Fahrzeug wieder zum Laufen. Dauert 6 Sekunden zu Fuß daneben, und es muss stillstehen. Liegt im Werkzeugmenü (Q).",
             "Sturmgewehr: Dauerfeuer auf mittlere Entfernung. Schießt mit der Kleinmunition. Gegen Panzer fast wirkungslos. Taste 3.",
             "Kleinmunition: 60 Schuss für Pistole und Sturmgewehr, zusätzlich zu den 24, die du immer hast.",
-            "Nebelgranate: eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen. Werfen mit H. Jeder Panzer hat außerdem 3 Ladungen im Werfer.",
+            "Nebelgranate: eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen. Liegt im Werkzeugmenü (Q). Jeder Panzer hat außerdem 3 Ladungen im Werfer.",
             "Ghillie-Anzug: ein zottiger Blätteranzug. Wer ihn trägt, ist im Gras und liegend kaum zu erkennen. Wirkt von selbst, solange du lebst.",
-            "Tarnnetz: im stehenden Panzer mit V drübergezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.",
+            "Tarnnetz: im stehenden Panzer über das Werkzeugmenü (Q) drübergezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.",
         };
         if (panelSel >= 1 && panelSel <= IT_COUNT) hud.panel.detail = kAbout[panelSel - 1];
         else if (panelSel == 0) hud.panel.detail = "Das hast du immer dabei: Pistole mit 24 Schuss und Kampfmesser. Alles andere findest du in Kisten in Häusern und bei Wracks: Scharfschützengewehr, Raketenwerfer, Granaten und Bombencodes.";
@@ -2887,6 +2996,7 @@ static void runGame() {
           for (int n = 0; n < pickItems[k] * kItems[k].slots; n++) hud.panel.slots.push_back(k);
         while (int(hud.panel.slots.size()) < kLoadoutSlots) hud.panel.slots.push_back(-1);
       }
+      if (panelKind == PANEL_TOOLS && size_t(panelSel) < toolAbout.size()) hud.panel.detail = toolAbout[size_t(panelSel)];
       for (const Item& it : items) {
         hud.panel.rows.push_back(it.label);
         hud.panel.values.push_back(it.value);
@@ -2950,6 +3060,7 @@ static void runGame() {
     if (view.foot.noSight && rig.mode == CAM_HOOD) rig.mode = CAM_CHASE;
     hud.map.open = mapOpen && panelKind == 0;
     hud.map.hasMark = hasMark;
+    hud.map.strike = strikePending;
     hud.map.mark = markPoint;
     hud.map.hasEnemy = view.foot.hasFix;
     hud.map.enemy = view.foot.fix;

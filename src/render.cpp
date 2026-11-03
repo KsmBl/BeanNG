@@ -2608,7 +2608,7 @@ struct Renderer::Impl {
       // And what else is carried.
       snprintf(buf, sizeof buf, "Tretminen %d  ·  Panzerminen %d  ·  Reparatursets %d", s.foot.items[0], s.foot.items[1], s.foot.items[2]);
       label(wx, wy - 12 * u, buf, 13 * u, dim);
-      snprintf(buf, sizeof buf, "Granaten %d  ·  Lenkraketen %d  ·  Bombencodes %d  ·  Nebel %d", s.foot.shells, s.foot.missiles, s.foot.codes, s.foot.items[5]);
+      snprintf(buf, sizeof buf, "Granaten %d  ·  Lenkraketen %d  ·  Bombencodes %d  ·  Nebel %d  ·  Medikits %d", s.foot.shells, s.foot.missiles, s.foot.codes, s.foot.items[5], s.foot.medkits);
       label(wx, wy - 30 * u, buf, 13 * u, dim);
       float kx = wx + 16 * u;
       for (int i = 0; i < 5; i++) {
@@ -2856,7 +2856,7 @@ struct Renderer::Impl {
         toMap(o.map.me.x, o.map.me.y, sx, sy);
         rrect(sx + float(std::cos(o.map.meYaw)) * 9 * u - 2 * u, sy - float(std::sin(o.map.meYaw)) * 9 * u - 2 * u, 4 * u, 4 * u, 2 * u, {.35f, .85f, .95f, 1});
       }
-      label(mx0 + 14 * u, my0 + ms - 18 * u, "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  B: Bombencode  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
+      label(mx0 + 14 * u, my0 + ms - 18 * u, o.map.strike ? "Bombencode  ·  Klick: Ziel des Schlags  ·  Rechtsklick: abbrechen" : "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }
 
     // A hit landed: a cross in the crosshair.
@@ -2977,15 +2977,17 @@ struct Renderer::Impl {
         rrect(bx, y - 2.0f * rowH, bw, bh, 18 * sc, {.04f, .045f, .055f, .88f});
         static const Col kKinds[6] = {{.95f, .35f, .25f, 1}, {.95f, .65f, .2f, 1}, {.35f, .85f, .95f, 1}, {.45f, .85f, .45f, 1}, {.8f, .8f, .55f, 1}, {.7f, .6f, .95f, 1}};
         float ty = y - 1.05f * rowH;
-        label(bx + 18 * sc, ty, "Slots", 17 * sc, white);
-        ty += rowH * .7f;
         const float cell = (bw - 36 * sc) / 10.f;
+        if (!P.slots.empty()) {
+          label(bx + 18 * sc, ty, "Slots", 17 * sc, white);
+          ty += rowH * .7f;
+        }
         for (size_t i = 0; i < P.slots.size(); i++) {
           const float cxx = bx + 18 * sc + float(i % 10) * cell, cyy = ty + float(i / 10) * cell;
           const int k = P.slots[i];
           rrect(cxx + 1.5f * sc, cyy + 1.5f * sc, cell - 3 * sc, cell - 3 * sc, 4 * sc, k < 0 ? Col{1, 1, 1, .08f} : kKinds[size_t(k) % 6]);
         }
-        ty += cell * 2.f + rowH * .7f;
+        if (!P.slots.empty()) ty += cell * 2.f + rowH * .7f;
         // The words, broken at spaces to fit.
         const float fs = 15 * sc, maxW = bw - 36 * sc;
         std::string line, word;

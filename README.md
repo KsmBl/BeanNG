@@ -75,17 +75,12 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 | Rakete starten, Feuer sprengt sie | G | – |
 | Einsteigen, aussteigen | E | – |
 | Rennen, springen | Umschalt, Leertaste | – |
-| Reparaturset, zu Fuß neben dem Fahrzeug | R | – |
 | Karte: Klick markiert das Ziel | K | – |
 | Waffe wählen | 1 bis 5 | – |
+| Werkzeug-Overlay: Minen, Medikit, Reparaturset, Nebel, Tarnnetz, Drohne, Bombencode, Standortabfrage | Q, dann Zahl oder ENTER | – |
 | Anvisieren, auch im Panzer | rechte Maustaste halten | – |
-| Tretmine, Panzermine legen | M, N | – |
-| Nebel: Granate zu Fuß, Werfer im Panzer | H | – |
-| Tarnnetz über den stehenden Panzer | V | – |
-| Drohne starten, zurückholen; Feuer markiert den Gegner | U | – |
-| Bombencode auf den markierten Kartenpunkt: vier Raketen, ungenau | K, Klick, B | – |
 | Scharfschützengewehr aufbauen, Zielfernrohr, Zoom 6x bis 24x | X, rechte Maustaste, Mausrad | – |
-| Beim Gegner anzapfen, dann Standort abfragen (alle 30 s) | E am Computer, J | – |
+| Beim Gegner anzapfen, dann Standort abfragen (alle 30 s) | E am Computer, Q | – |
 | Visier auf Entfernung einstellen | Pfeil hoch, runter | – |
 | Chat | Enter | – |
 | Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | – |

@@ -77,7 +77,8 @@ struct Snapshot {
     bool droneLive = false;
     V3 droneP;
     double droneBattery = 0;
-    int drones = 0;
+    int drones = 0, medkits = 0;
+    int launcher = 0;  // smoke charges of the tank one sits in
     bool noSight = false, noRange = false, noPeriscope = false, noRadio = false;
     V3 fix;
     double fixAge = 0, fixWait = 0;
@@ -160,6 +161,7 @@ inline void panelLayout(int w, int h, size_t rows, float& x, float& y, float& pw
 struct UiMap {
   bool open = false;
   bool hasMark = false;
+  bool strike = false;  // the next click calls in a strike code
   V3 mark, me;
   double meYaw = 0;
   bool hasEnemy = false;

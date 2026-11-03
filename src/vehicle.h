@@ -34,6 +34,7 @@ struct Controls {
   bool smoke = false;     // edge-triggered: a smoke grenade or the tank's launcher
   bool net = false;       // edge-triggered: the camouflage net
   bool drone = false;     // edge-triggered: a drone up, or back
+  bool medkit = false;    // edge-triggered: patches up whoever carries one
   V3 strikeAt;
 };
 
