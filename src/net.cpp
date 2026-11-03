@@ -76,9 +76,6 @@ void write(Writer& w, const InputMsg& m) {
   w.put(m.handbrake);
   w.putV3(m.aim);
   w.put(m.fireCount);
-  w.put(m.shiftUpCount);
-  w.put(m.shiftDownCount);
-  w.put(m.autoCount);
   w.put(m.launchCount);
   w.put(m.repairCount);
   w.put(u8(m.indirect ? 1 : 0));
@@ -105,9 +102,6 @@ bool read(Reader& r, InputMsg& m) {
   r.get(m.handbrake);
   m.aim = r.getV3();
   r.get(m.fireCount);
-  r.get(m.shiftUpCount);
-  r.get(m.shiftDownCount);
-  r.get(m.autoCount);
   r.get(m.launchCount);
   r.get(m.repairCount);
   u8 indirect = 0;

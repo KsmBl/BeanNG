@@ -13,7 +13,7 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 2;
+constexpr u16 kProtocol = 3;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1200;  // safely under any path's MTU
 
@@ -109,7 +109,7 @@ struct InputMsg {
   u32 seq = 0;
   float steer = 0, throttle = 0, brake = 0, handbrake = 0;
   V3 aim;
-  u16 fireCount = 0, shiftUpCount = 0, shiftDownCount = 0, autoCount = 0, launchCount = 0, repairCount = 0;
+  u16 fireCount = 0, launchCount = 0, repairCount = 0;
   bool indirect = false;  // aim is a point marked on the map
   i8 requestGear = 0;  // 0 nothing, otherwise forward or reverse, for as long as it is wanted
   // What this player has chosen for the match, in every packet until the match has begun.

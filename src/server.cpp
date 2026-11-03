@@ -26,7 +26,7 @@ struct Client {
   InputMsg in;
   bool haveInput = false;
   // One-shot controls, each seen once however many packets carry the same count.
-  bool fire = false, shiftUp = false, shiftDown = false, toggleAuto = false, launch = false, repair = false;
+  bool fire = false, launch = false, repair = false;
   // Scenery that has moved, as far as this player has been told, and where the slow sweep has got to.
   std::vector<float> told;
   u32 sweep = 0;
@@ -127,9 +127,6 @@ int main(int argc, char** argv) {
         if (c.haveInput && int32_t(m.seq - c.in.seq) <= 0) continue;
         if (c.haveInput) {
           if (m.fireCount != c.in.fireCount) c.fire = true;
-          if (m.shiftUpCount != c.in.shiftUpCount) c.shiftUp = true;
-          if (m.shiftDownCount != c.in.shiftDownCount) c.shiftDown = true;
-          if (m.autoCount != c.in.autoCount) c.toggleAuto = true;
           if (m.launchCount != c.in.launchCount) c.launch = true;
           if (m.repairCount != c.in.repairCount) c.repair = true;
         }
@@ -291,10 +288,7 @@ int main(int argc, char** argv) {
         in[i].launch = c.launch;
         in[i].repair = c.repair;
         in[i].fire = c.fire;
-        in[i].shiftUp = c.shiftUp;
-        in[i].shiftDown = c.shiftDown;
-        in[i].toggleAuto = c.toggleAuto;
-        c.fire = c.shiftUp = c.shiftDown = c.toggleAuto = c.launch = c.repair = false;
+        c.fire = c.launch = c.repair = false;
       }
       for (int i = 0; i < 2; i++) duel->players[i].present = clients[i].used;
       duel->step(in);

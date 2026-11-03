@@ -62,7 +62,6 @@ Im Spiel: **Online spielen**, Adresse und Port eintragen, **Verbinden**. Oder di
 | Gas / Bremse, im Stand rückwärts | W / S | RT / LT |
 | Lenken | A / D | linker Stick |
 | Bremse | Leertaste | A |
-| Gang runter / hoch, Automatik | Q / E, T | LB / RB |
 | Zielen, Kamera | Maus, C, Mausrad | rechter Stick, Y |
 | Feuer | linke Maustaste, F | – |
 | Rakete starten, Feuer sprengt sie | G | – |

@@ -442,15 +442,12 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
 
   if (in.requestGear == -1 && absV < 1.0) gear = -1;
   if (in.requestGear == 1 && absV < 1.0) gear = 1;
-  if (in.toggleAuto) autoBox = !autoBox;
-  if (in.shiftUp && gear > 0 && gear < 4) gear++;
-  if (in.shiftDown && gear > 1) gear--;
   shiftClock += dt;
 
   const double avgTrack = 0.5 * (trackOmega[0] + trackOmega[1]);
   const double ratio = gear < 0 ? -kRatios[0] : kRatios[std::clamp(gear, 1, 4)];
   const double inputOmega = std::fabs(avgTrack * ratio);
-  if (autoBox && gear > 0 && shiftClock > 1.2) {
+  if (gear > 0 && shiftClock > 1.2) {
     const double rpmIn = inputOmega * 60.0 / (2.0 * PI);
     if (rpmIn > 1780 && gear < 4) {
       gear++;
@@ -885,7 +882,6 @@ Tank::NetState Tank::netState() const {
   n.gear = gear;
   n.ammo = ammo;
   n.destroyed = destroyed;
-  n.autoBox = autoBox;
   for (int i = 0; i < TM_COUNT; i++) n.mod[i] = float(mod[i]);
   n.missiles = missiles;
   n.repairKits = repairKits;
@@ -928,7 +924,6 @@ void Tank::applyNetState(Sim& sim, const NetState& n, double dt) {
   gear = n.gear;
   ammo = n.ammo;
   destroyed = n.destroyed;
-  autoBox = n.autoBox;
   for (int i = 0; i < TM_COUNT; i++) mod[i] = n.mod[i];
   missiles = n.missiles;
   repairKits = n.repairKits;

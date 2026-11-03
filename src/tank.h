@@ -59,7 +59,6 @@ class Tank {
   double trackPhase[2] = {};
   double steerAct = 0;
   double loadNow = 0;
-  bool autoBox = true;
   double reloadTime = 4;
   double shotsFired = 0;
   int ammo = -1;  // rounds left; -1 never runs out, as in free driving
@@ -111,7 +110,7 @@ class Tank {
     float trackPhase[2] = {}, trackOmega[2] = {};
     float engineOmega = 0, throttle = 0, brake = 0, steer = 0, speed = 0, latAcc = 0, lonAcc = 0, fuel = 0, load = 0;
     int gear = 1, ammo = -1;
-    bool destroyed = false, trackOff[2] = {}, autoBox = true;
+    bool destroyed = false, trackOff[2] = {};
     float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1};
     int missiles = 0, repairKits = 0;
     float repairClock = 0;

@@ -2208,9 +2208,8 @@ struct Renderer::Impl {
       // Gear in a chip below.
       if (s.gear > 0) snprintf(buf, sizeof buf, "%d", s.gear);
       else snprintf(buf, sizeof buf, "%s", s.gear < 0 ? "R" : "N");
-      rrect(cx - 21 * u, cy + 44 * u, 42 * u, 34 * u, 9 * u, s.autoBox ? Col{.35f, .85f, .95f, .22f} : Col{1.f, .72f, .18f, .28f});
-      labelMid(cx, cy + 60 * u, buf, 25 * u, s.autoBox ? teal : amber);
-      labelMid(cx, cy + 90 * u, s.autoBox ? "AUTO" : "MANUELL", 11 * u, dim);
+      rrect(cx - 21 * u, cy + 44 * u, 42 * u, 34 * u, 9 * u, Col{.35f, .85f, .95f, .22f});
+      labelMid(cx, cy + 60 * u, buf, 25 * u, teal);
       if (!s.running) labelMid(cx, cy - 56 * u, "MOTOR AUS", 13 * u, red);
     }
 

@@ -587,7 +587,6 @@ struct Game {
     s.latG = tank.latAcc / 9.81;
     s.lonG = tank.lonAcc / 9.81;
     s.gear = tank.gear;
-    s.autoBox = tank.autoBox;
     s.running = myTank >= 0;
     s.fuel = tank.fuel;
     s.engineLoad = tank.loadNow;
@@ -694,14 +693,10 @@ struct Game {
       {
         std::lock_guard<std::mutex> lock(inputMutex);
         in = input;
-        input.c.shiftUp = input.c.shiftDown = input.c.toggleAuto = false;
         input.c.requestGear = 99;
         input.c.fire = input.c.launch = input.c.repair = false;
       }
       if (in.c.fire) out.fireCount++;
-      if (in.c.shiftUp) out.shiftUpCount++;
-      if (in.c.shiftDown) out.shiftDownCount++;
-      if (in.c.toggleAuto) out.autoCount++;
       if (in.c.launch) out.launchCount++;
       if (in.c.repair) out.repairCount++;
 
@@ -1193,7 +1188,6 @@ static void runGame() {
       key("Gas und Bremse, im Stand rückwärts", "W S");
       key("Lenken", "A D");
       key("Bremse", "Leertaste");
-      key("Schalten / Automatik", "Q E / T");
       key("Zielen", "Maus");
       key("Feuer", "Linke Maustaste, F");
       key("Rakete starten, fliegt mit der Maus", "G");
@@ -1340,8 +1334,6 @@ static void runGame() {
           break;
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
           switch (e.gbutton.button) {
-            case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: edges.shiftDown = true; break;
-            case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: edges.shiftUp = true; break;
             case SDL_GAMEPAD_BUTTON_NORTH: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); break;
             default: break;
           }
@@ -1357,9 +1349,6 @@ static void runGame() {
                 fromMain = false;
               }
               break;
-            case SDLK_Q: edges.shiftDown = true; break;
-            case SDLK_E: edges.shiftUp = true; break;
-            case SDLK_T: edges.toggleAuto = true; break;
             case SDLK_R: edges.repair = true; break;
             case SDLK_G: edges.launch = true; break;
             case SDLK_K: mapOpen = !mapOpen; break;
@@ -1417,7 +1406,7 @@ static void runGame() {
     // Holding the brake at a standstill selects reverse, holding the throttle selects drive. In reverse the
     // pedals swap, so that S always means "go backwards".
     Controls sendC = edges;
-    if (view.autoBox) {
+    {
       const bool stopped = std::fabs(view.speedKmh) < 1.5;
       if (stopped && brake > 0.1 && gas < 0.05 && view.gear >= 0) sendC.requestGear = -1;
       if (stopped && gas > 0.1 && brake < 0.05 && view.gear <= 0) sendC.requestGear = 1;
@@ -1458,9 +1447,6 @@ static void runGame() {
       c.throttle = gas;
       c.brake = brake;
       c.handbrake = hb;
-      c.shiftUp |= sendC.shiftUp;
-      c.shiftDown |= sendC.shiftDown;
-      c.toggleAuto |= sendC.toggleAuto;
       c.fire |= sendC.fire;
       c.launch |= sendC.launch;
       c.repair |= sendC.repair;
@@ -1526,7 +1512,6 @@ static void runGame() {
       view.ram = G.snap.ram;
       view.gear = G.snap.gear;
       view.heightMode = G.snap.heightMode;
-      view.autoBox = G.snap.autoBox;
       view.soft = G.snap.soft;
       view.sport = G.snap.sport;
       view.activa = G.snap.activa;
