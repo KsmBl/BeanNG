@@ -19,4 +19,8 @@ if [[ ! -f assets/leopard.mesh || tools/gen_leopard.py -nt assets/leopard.mesh ]
   python3 tools/gen_leopard.py assets/leopard.mesh
 fi
 
+if [[ ! -f assets/ui.atlas || tools/gen_ui.py -nt assets/ui.atlas ]]; then
+  python3 tools/gen_ui.py assets/ui.atlas
+fi
+
 exec ./build/beanng "$@"

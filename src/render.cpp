@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <unordered_map>
 #include "props.h"
 
 namespace {
@@ -418,28 +419,19 @@ in vec4 vCol; out vec4 frag; void main(){ frag=vCol; })";
 const char* kHudVS = R"(#version 330 core
 layout(location=0) in vec2 aPos;
 layout(location=1) in vec4 aCol;
-uniform vec2 uRes; out vec4 vCol;
-void main(){ gl_Position=vec4(aPos.x/uRes.x*2.0-1.0, 1.0-aPos.y/uRes.y*2.0, 0.0, 1.0); vCol=aCol; })";
+layout(location=2) in vec2 aUv;
+uniform vec2 uRes; out vec4 vCol; out vec2 vUv;
+void main(){ gl_Position=vec4(aPos.x/uRes.x*2.0-1.0, 1.0-aPos.y/uRes.y*2.0, 0.0, 1.0); vCol=aCol; vUv=aUv; })";
+// Shapes come as plain coloured triangles with a soft fringe. Letters and icons are distance fields.
 const char* kHudFS = R"(#version 330 core
-in vec4 vCol; out vec4 frag; void main(){ frag=vCol; })";
+in vec4 vCol; in vec2 vUv; out vec4 frag; uniform sampler2D uAtlas;
+void main(){
+  if(vUv.x < 0.0){ frag = vCol; return; }
+  float d = texture(uAtlas, vUv).r;
+  float w = max(fwidth(d)*0.75, 0.02);
+  frag = vec4(vCol.rgb, vCol.a*smoothstep(0.5-w, 0.5+w, d));
+})";
 
-// Classic public-domain 5x7 column font for ASCII 32..90.
-const u8 kFont[59][5] = {
-    {0, 0, 0, 0, 0},          {0, 0, 0x5F, 0, 0},       {0, 7, 0, 7, 0},          {0x14, 0x7F, 0x14, 0x7F, 0x14},
-    {0x24, 0x2A, 0x7F, 0x2A, 0x12}, {0x23, 0x13, 8, 0x64, 0x62}, {0x36, 0x49, 0x56, 0x20, 0x50}, {0, 8, 7, 3, 0},
-    {0, 0x1C, 0x22, 0x41, 0}, {0, 0x41, 0x22, 0x1C, 0}, {0x2A, 0x1C, 0x7F, 0x1C, 0x2A}, {8, 8, 0x3E, 8, 8},
-    {0, 0x80, 0x70, 0x30, 0}, {8, 8, 8, 8, 8},          {0, 0, 0x60, 0x60, 0},    {0x20, 0x10, 8, 4, 2},
-    {0x3E, 0x51, 0x49, 0x45, 0x3E}, {0, 0x42, 0x7F, 0x40, 0}, {0x72, 0x49, 0x49, 0x49, 0x46}, {0x21, 0x41, 0x49, 0x4D, 0x33},
-    {0x18, 0x14, 0x12, 0x7F, 0x10}, {0x27, 0x45, 0x45, 0x45, 0x39}, {0x3C, 0x4A, 0x49, 0x49, 0x31}, {0x41, 0x21, 0x11, 9, 7},
-    {0x36, 0x49, 0x49, 0x49, 0x36}, {0x46, 0x49, 0x49, 0x29, 0x1E}, {0, 0, 0x14, 0, 0}, {0, 0x40, 0x34, 0, 0},
-    {0, 8, 0x14, 0x22, 0x41}, {0x14, 0x14, 0x14, 0x14, 0x14}, {0, 0x41, 0x22, 0x14, 8}, {2, 1, 0x59, 9, 6},
-    {0x3E, 0x41, 0x5D, 0x59, 0x4E}, {0x7C, 0x12, 0x11, 0x12, 0x7C}, {0x7F, 0x49, 0x49, 0x49, 0x36}, {0x3E, 0x41, 0x41, 0x41, 0x22},
-    {0x7F, 0x41, 0x41, 0x41, 0x3E}, {0x7F, 0x49, 0x49, 0x49, 0x41}, {0x7F, 9, 9, 9, 1}, {0x3E, 0x41, 0x41, 0x51, 0x73},
-    {0x7F, 8, 8, 8, 0x7F},    {0, 0x41, 0x7F, 0x41, 0}, {0x20, 0x40, 0x41, 0x3F, 1}, {0x7F, 8, 0x14, 0x22, 0x41},
-    {0x7F, 0x40, 0x40, 0x40, 0x40}, {0x7F, 2, 0x1C, 2, 0x7F}, {0x7F, 4, 8, 0x10, 0x7F}, {0x3E, 0x41, 0x41, 0x41, 0x3E},
-    {0x7F, 9, 9, 9, 6},       {0x3E, 0x41, 0x51, 0x21, 0x5E}, {0x7F, 9, 0x19, 0x29, 0x46}, {0x26, 0x49, 0x49, 0x49, 0x32},
-    {3, 1, 0x7F, 1, 3},       {0x3F, 0x40, 0x40, 0x40, 0x3F}, {0x1F, 0x20, 0x40, 0x20, 0x1F}, {0x3F, 0x40, 0x38, 0x40, 0x3F},
-    {0x63, 0x14, 8, 0x14, 0x63}, {3, 4, 0x78, 4, 3},    {0x61, 0x59, 0x49, 0x4D, 0x43}};
 
 struct Vtx {
   float x, y, z, nx, ny, nz;
@@ -457,6 +449,7 @@ struct LineV {
 struct HudV {
   float x, y;
   float r, g, b, a;
+  float u = -1.f, v = 0.f;
 };
 struct Particle {
   V3 p, v;
@@ -1771,256 +1764,470 @@ struct Renderer::Impl {
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(partVerts.size() * sizeof(PartV)), partVerts.data(), GL_STREAM_DRAW);
   }
 
-  // ---- HUD helpers.
-  void rect(float x, float y, float w, float h, float r, float g, float b, float a) {
-    const HudV v[6] = {{x, y, r, g, b, a},         {x + w, y, r, g, b, a},     {x + w, y + h, r, g, b, a},
-                       {x, y, r, g, b, a},         {x + w, y + h, r, g, b, a}, {x, y + h, r, g, b, a}};
-    hudVerts.insert(hudVerts.end(), v, v + 6);
-  }
-  void text(float x, float y, const char* s, float px, float r, float g, float b, float a = 1.f) {
-    float cx = x;
-    for (; *s; s++) {
-      int c = u8(*s);
-      if (c >= 'a' && c <= 'z') c -= 32;
-      if (c >= 32 && c <= 90) {
-        const u8* gl = kFont[c - 32];
-        for (int col = 0; col < 5; col++)
-          for (int row = 0; row < 8; row++)
-            if (gl[col] & (1 << row)) rect(cx + col * px, y + row * px, px, px, r, g, b, a);
+  // ---- UI toolkit. Everything is a coloured triangle or a distance-field glyph, in pixels.
+  struct Col { float r, g, b, a; };
+  struct Glyph { float u0, v0, u1, v1, xo, yo, w, h, adv; };
+  std::unordered_map<u32, Glyph> glyphs;
+  GLuint atlasTex = 0;
+  bool loadAtlas(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+      fprintf(stderr, "%s fehlt: Starte das Spiel mit ./run.sh\n", path);
+      return false;
+    }
+    char magic[4];
+    u32 head[3];
+    bool ok = fread(magic, 1, 4, f) == 4 && !memcmp(magic, "UIAT", 4) && fread(head, 4, 3, f) == 3;
+    if (ok) {
+      for (u32 i = 0; i < head[2]; i++) {
+        u32 code;
+        float m[9];
+        if (fread(&code, 4, 1, f) != 1 || fread(m, 4, 9, f) != 9) {
+          ok = false;
+          break;
+        }
+        glyphs[code] = Glyph{m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]};
       }
-      cx += 6 * px;
+      std::vector<u8> px(size_t(head[0]) * head[1]);
+      ok = ok && fread(px.data(), 1, px.size(), f) == px.size();
+      if (ok) {
+        glGenTextures(1, &atlasTex);
+        glBindTexture(GL_TEXTURE_2D, atlasTex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, GLsizei(head[0]), GLsizei(head[1]), 0, GL_RED, GL_UNSIGNED_BYTE, px.data());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      }
+    }
+    fclose(f);
+    return ok;
+  }
+  void tri(float x0, float y0, Col c0, float x1, float y1, Col c1, float x2, float y2, Col c2) {
+    hudVerts.push_back({x0, y0, c0.r, c0.g, c0.b, c0.a});
+    hudVerts.push_back({x1, y1, c1.r, c1.g, c1.b, c1.a});
+    hudVerts.push_back({x2, y2, c2.r, c2.g, c2.b, c2.a});
+  }
+  // A filled convex shape with a one pixel soft edge. Points run round it in either direction.
+  void shape(const std::vector<std::pair<float, float>>& p, Col c) {
+    const size_t n = p.size();
+    if (n < 3) return;
+    float cx = 0, cy = 0;
+    for (const auto& q : p) {
+      cx += q.first;
+      cy += q.second;
+    }
+    cx /= float(n);
+    cy /= float(n);
+    Col e = c;
+    e.a = 0;
+    for (size_t i = 0; i < n; i++) {
+      const auto& a = p[i];
+      const auto& b = p[(i + 1) % n];
+      tri(cx, cy, c, a.first, a.second, c, b.first, b.second, c);
+      auto out = [&](const std::pair<float, float>& q, float& x, float& y) {
+        const float dx = q.first - cx, dy = q.second - cy, l = std::max(std::sqrt(dx * dx + dy * dy), 1e-3f);
+        x = q.first + dx / l;
+        y = q.second + dy / l;
+      };
+      float ax, ay, bx, by;
+      out(a, ax, ay);
+      out(b, bx, by);
+      tri(a.first, a.second, c, b.first, b.second, c, bx, by, e);
+      tri(a.first, a.second, c, bx, by, e, ax, ay, e);
     }
   }
-  void bar(float x, float y, float w, float h, float v, float r, float g, float b) {
-    rect(x, y, w, h, 0, 0, 0, .45f);
-    rect(x + 1, y + 1, (w - 2) * float(std::clamp(v, 0.0f, 1.0f)), h - 2, r, g, b, .95f);
+  void rrect(float x, float y, float w, float h, float rad, Col c) {
+    rad = std::min({rad, w * 0.5f, h * 0.5f});
+    std::vector<std::pair<float, float>> p;
+    const float cx[4] = {x + w - rad, x + w - rad, x + rad, x + rad}, cy[4] = {y + rad, y + h - rad, y + h - rad, y + rad};
+    const float start[4] = {-1.5708f, 0.f, 1.5708f, 3.1416f};
+    for (int k = 0; k < 4; k++)
+      for (int i = 0; i <= 6; i++) {
+        const float a = start[k] + 1.5708f * float(i) / 6.f;
+        p.push_back({cx[k] + std::cos(a) * rad, cy[k] + std::sin(a) * rad});
+      }
+    shape(p, c);
   }
+  void circle(float x, float y, float r, Col c) {
+    std::vector<std::pair<float, float>> p;
+    const int n = std::clamp(int(r * 1.2f), 12, 64);
+    for (int i = 0; i < n; i++) {
+      const float a = 6.28319f * float(i) / float(n);
+      p.push_back({x + std::cos(a) * r, y + std::sin(a) * r});
+    }
+    shape(p, c);
+  }
+  // A thick arc, angles in radians clockwise on screen from the right.
+  void arc(float x, float y, float r, float th, float a0, float a1, Col c) {
+    if (a1 <= a0) return;
+    const int n = std::clamp(int((a1 - a0) * r / 5.f) + 2, 3, 96);
+    const float ri = r - th * .5f, ro = r + th * .5f;
+    Col e = c;
+    e.a = 0;
+    for (int i = 0; i < n; i++) {
+      const float t0 = a0 + (a1 - a0) * float(i) / float(n), t1 = a0 + (a1 - a0) * float(i + 1) / float(n);
+      const float c0 = std::cos(t0), s0 = std::sin(t0), c1 = std::cos(t1), s1 = std::sin(t1);
+      auto ring = [&](float ra, Col ca, float rb, Col cb) {
+        tri(x + c0 * ra, y + s0 * ra, ca, x + c1 * ra, y + s1 * ra, ca, x + c1 * rb, y + s1 * rb, cb);
+        tri(x + c0 * ra, y + s0 * ra, ca, x + c1 * rb, y + s1 * rb, cb, x + c0 * rb, y + s0 * rb, cb);
+      };
+      ring(ri, c, ro, c);
+      ring(ri - 1.f, e, ri, c);
+      ring(ro, c, ro + 1.f, e);
+    }
+  }
+  void quadGlyph(const Glyph& g, float x, float y, float size, Col c) {
+    const float x0 = x + g.xo * size, y0 = y + g.yo * size, x1 = x0 + g.w * size, y1 = y0 + g.h * size;
+    const HudV v[6] = {{x0, y0, c.r, c.g, c.b, c.a, g.u0, g.v0}, {x1, y0, c.r, c.g, c.b, c.a, g.u1, g.v0}, {x1, y1, c.r, c.g, c.b, c.a, g.u1, g.v1},
+                       {x0, y0, c.r, c.g, c.b, c.a, g.u0, g.v0}, {x1, y1, c.r, c.g, c.b, c.a, g.u1, g.v1}, {x0, y1, c.r, c.g, c.b, c.a, g.u0, g.v1}};
+    hudVerts.insert(hudVerts.end(), v, v + 6);
+  }
+  static u32 nextCode(const char*& s) {
+    const u8 c = u8(*s++);
+    if (c < 0x80) return c;
+    if ((c & 0xE0) == 0xC0 && *s) return u32(c & 0x1F) << 6 | (u8(*s++) & 0x3F);
+    if ((c & 0xF0) == 0xE0 && s[0] && s[1]) {
+      const u32 a = u8(*s++) & 0x3F, b = u8(*s++) & 0x3F;
+      return u32(c & 0x0F) << 12 | a << 6 | b;
+    }
+    return '?';
+  }
+  float textWidth(const char* s, float size) {
+    float w = 0;
+    while (*s) {
+      const auto it = glyphs.find(nextCode(s));
+      if (it != glyphs.end()) w += it->second.adv * size;
+    }
+    return w;
+  }
+  // y is the middle of the line, which is what lining things up in a row wants.
+  float label(float x, float y, const char* s, float size, Col c) {
+    y -= size * 0.70f;
+    while (*s) {
+      const auto it = glyphs.find(nextCode(s));
+      if (it == glyphs.end()) continue;
+      quadGlyph(it->second, x, y, size, c);
+      x += it->second.adv * size;
+    }
+    return x;
+  }
+  float labelRight(float x, float y, const char* s, float size, Col c) { return label(x - textWidth(s, size), y, s, size, c); }
+  float labelMid(float x, float y, const char* s, float size, Col c) { return label(x - textWidth(s, size) * .5f, y, s, size, c); }
+  void icon(u32 code, float x, float y, float size, Col c) {
+    const auto it = glyphs.find(code);
+    if (it != glyphs.end()) quadGlyph(it->second, x, y, size, c);
+  }
+  void meter(float x, float y, float w, float h, float v, Col c) {
+    rrect(x, y, w, h, h * .5f, {1, 1, 1, .13f});
+    v = std::clamp(v, 0.f, 1.f);
+    if (v > 0.005f) rrect(x, y, std::max(w * v, h), h, h * .5f, c);
+  }
+  enum { IC_WATER = 0xE000, IC_OIL, IC_FUEL, IC_WRENCH, IC_ENGINE, IC_TYRE, IC_WARN, IC_BRAKE, IC_SKID, IC_CAMERA, IC_CLOCK, IC_SHELL, IC_TURRET, IC_PAD };
 
   void buildHud(const Snapshot& s, const HudOptions& o, int w, int h) {
     hudVerts.clear();
     const float W = float(w), H = float(h);
-    const float scale = std::max(1.f, std::floor(H / 720.f + 0.5f));
-    const float px2 = 2 * scale, px3 = 3 * scale, px1 = scale;
+    const float u = std::max(0.7f, H / 900.f);
     char buf[160];
+    const Col card{.035f, .04f, .05f, .62f}, white{1, 1, 1, .95f}, dim{1, 1, 1, .62f}, faint{1, 1, 1, .32f};
+    const Col amber{1.f, .72f, .18f, 1}, red{1.f, .27f, .22f, 1}, green{.36f, .86f, .50f, 1}, teal{.35f, .85f, .95f, 1};
+    const float kPi2 = 6.28319f;
 
-    // Lower right: speed, gear, rev bar.
-    const float bx = W - 300 * scale, by = H - 130 * scale;
-    rect(bx - 10 * scale, by - 10 * scale, 300 * scale, 130 * scale, 0, 0, 0, .35f);
-    snprintf(buf, sizeof buf, "%3.0f", std::fabs(s.speedKmh));
-    text(bx, by, buf, 8 * scale, 1, 1, 1);
-    text(bx + 150 * scale, by + 35 * scale, "KM/H", px2, .8f, .8f, .8f);
-    snprintf(buf, sizeof buf, "%s%s", s.gear < 0 ? "R" : (s.gear == 0 ? "N" : ""), "");
-    if (s.gear > 0) snprintf(buf, sizeof buf, "%d", s.gear);
-    text(bx + 220 * scale, by, buf, 7 * scale, s.autoBox ? .6f : 1.f, 1.f, s.autoBox ? 1.f : .4f);
-    text(bx + 222 * scale, by + 58 * scale, s.autoBox ? "AUTO" : "MAN", px1 * 2, .7f, .7f, .7f);
-    const float rpmN = float(s.rpm / s.rpmMax);
-    bar(bx, by + 76 * scale, 270 * scale, 14 * scale, rpmN, s.rpm > s.rpmRed ? 1.f : .35f, s.rpm > s.rpmRed ? .15f : .8f, .25f);
-    snprintf(buf, sizeof buf, "%4.0f U/MIN %2.0FL %s", s.rpm, s.fuel, s.running ? "" : "MOTOR AUS");
-    text(bx, by + 94 * scale, buf, px1 * 2, .85f, .85f, .85f);
-
-    // Lower left: the vehicle's systems.
-    const float lx = 14 * scale;
-    if (s.tank) {
-      float ly = H - 148 * scale;
-      rect(lx - 6 * scale, ly - 8 * scale, 290 * scale, 144 * scale, 0, 0, 0, .35f);
-      text(lx, ly, "LEOPARD 1", px2, .75f, .95f, .55f);
-      ly += 22 * scale;
-      snprintf(buf, sizeof buf, "TURM %+4.0F ROHR %+3.0F", s.turretYaw * 57.3, s.gunPitch * 57.3);
-      text(lx, ly, buf, px2, .85f, .85f, .85f);
-      ly += 22 * scale;
-      if (s.reload > 0) {
-        text(lx, ly, "LADEN", px2, 1, .7f, .3f);
-        bar(lx + 70 * scale, ly, 200 * scale, 14 * scale, float(1.0 - s.reload / std::max(s.reloadTime, 0.1)), 1.f, .7f, .25f);
-      } else {
-        text(lx, ly, "FEUERBEREIT", px2, .5f, 1.f, .5f);
+    // ---- Lower right: the round instrument, revs around the speed.
+    {
+      const float R = 118 * u, cx = W - R - 26 * u, cy = H - R - 26 * u;
+      circle(cx, cy, R + 12 * u, card);
+      const float a0 = 2.356f, a1 = a0 + 4.712f;  // from lower left, clockwise over the top
+      const float rn = float(std::clamp(s.rpm / s.rpmMax, 0.0, 1.0));
+      const float red0 = float(s.rpmRed / s.rpmMax);
+      arc(cx, cy, R - 5 * u, 11 * u, a0, a0 + (a1 - a0) * red0, {1, 1, 1, .12f});
+      arc(cx, cy, R - 5 * u, 11 * u, a0 + (a1 - a0) * red0, a1, {1.f, .25f, .2f, .45f});
+      const Col revCol = rn >= red0 ? red : (rn > red0 * .8f ? amber : teal);
+      arc(cx, cy, R - 5 * u, 11 * u, a0, a0 + (a1 - a0) * rn, revCol);
+      // Scale: one number per thousand, or per five hundred for the slow-revving diesel.
+      const double step = s.rpmMax > 4000 ? 1000 : 500;
+      for (double t = 0; t <= s.rpmMax + 1; t += step) {
+        const float an = a0 + (a1 - a0) * float(t / s.rpmMax);
+        const float c = std::cos(an), n = std::sin(an);
+        snprintf(buf, sizeof buf, step > 900 ? "%.0f" : "%.1f", t / 1000.0);
+        labelMid(cx + c * (R - 27 * u), cy + n * (R - 27 * u), buf, 13 * u, dim);
       }
-      ly += 22 * scale;
-      snprintf(buf, sizeof buf, "QUER %+4.2FG KRAFTSTOFF %4.0FL", s.latG, s.fuel);
-      text(lx, ly, buf, px2 * 0.85f, .85f, .85f, .85f);
-      ly += 22 * scale;
-      text(lx, ly, "GAS", px1 * 2, .8f, .8f, .8f);
-      bar(lx + 40 * scale, ly, 90 * scale, 12 * scale, float(s.throttle), .3f, .9f, .3f);
-      text(lx + 140 * scale, ly, "BR", px1 * 2, .8f, .8f, .8f);
-      bar(lx + 170 * scale, ly, 100 * scale, 12 * scale, float(s.brake), .95f, .25f, .2f);
-    } else {
-    float ly = H - 234 * scale;
-    rect(lx - 6 * scale, ly - 8 * scale, 290 * scale, 230 * scale, 0, 0, 0, .35f);
-    text(lx, ly, "HYDRACTIVE", px2, .75f, .85f, 1);
-    text(lx + 130 * scale, ly, s.soft ? "SOFT" : "FIRM", px2, s.soft ? .5f : 1.f, 1.f, s.soft ? .7f : .3f);
-    if (s.sport) text(lx + 200 * scale, ly, "SPORT", px2, 1, .6f, .2f);
-    ly += 22 * scale;
-    text(lx, ly, "ACTIVA", px2, .75f, .85f, 1);
-    text(lx + 130 * scale, ly, s.activa ? "AN" : "AUS", px2, s.activa ? .4f : 1.f, s.activa ? 1.f : .3f, .4f);
-    ly += 22 * scale;
-    static const char* heights[3] = {"NIEDRIG", "STRASSE", "HOCH"};
-    snprintf(buf, sizeof buf, "NIVEAU %s", heights[s.heightMode]);
-    text(lx, ly, buf, px2, .85f, .85f, .85f);
-    ly += 22 * scale;
-    snprintf(buf, sizeof buf, "ROLL %+5.1f QUER %+4.2fG", s.roll * 57.3, s.latG);
-    text(lx, ly, buf, px2, .85f, .85f, .85f);
-    ly += 22 * scale;
-    snprintf(buf, sizeof buf, "LHM %3.0F BAR %.1FL", s.accum / 1e5, s.lhm * 1000.0);
-    text(lx, ly, buf, px2, s.accum > 90e5 ? .55f : 1.f, s.accum > 90e5 ? .95f : .3f, .55f);
-    ly += 22 * scale;
-    snprintf(buf, sizeof buf, "WASSER %3.0F C", s.coolant);
-    text(lx, ly, buf, px2, s.coolant > 112 ? 1.f : .85f, s.coolant > 112 ? .3f : .85f, s.coolant > 112 ? .25f : .85f);
-    bar(lx + 150 * scale, ly, 120 * scale, 14 * scale, float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? 1.f : .4f, s.coolant > 112 ? .2f : .7f, .3f);
-    ly += 22 * scale;
-    snprintf(buf, sizeof buf, "OEL    %3.0F C", s.oilTemp);
-    text(lx, ly, buf, px2, s.oilTemp > 135 ? 1.f : .85f, s.oilTemp > 135 ? .3f : .85f, s.oilTemp > 135 ? .25f : .85f);
-    bar(lx + 150 * scale, ly, 120 * scale, 14 * scale, float((s.oilTemp - 40.0) / 150.0), s.oilTemp > 135 ? 1.f : .9f, s.oilTemp > 135 ? .2f : .65f, .2f);
-    ly += 22 * scale;
-    snprintf(buf, sizeof buf, "OELSTAND %3.0F%%", s.oilLevel * 100.0);
-    text(lx, ly, buf, px2, s.oilLevel < .35 ? 1.f : .85f, s.oilLevel < .35 ? .3f : .85f, s.oilLevel < .35 ? .25f : .85f);
-    ly += 22 * scale;
-    text(lx, ly, "GAS", px1 * 2, .8f, .8f, .8f);
-    bar(lx + 40 * scale, ly, 90 * scale, 12 * scale, float(s.throttle), .3f, .9f, .3f);
-    text(lx + 140 * scale, ly, "BR", px1 * 2, .8f, .8f, .8f);
-    bar(lx + 170 * scale, ly, 100 * scale, 12 * scale, float(s.brake), .95f, .25f, .2f);
-
+      snprintf(buf, sizeof buf, "%.0f", std::fabs(s.speedKmh));
+      labelMid(cx, cy - 8 * u, buf, 62 * u, white);
+      labelMid(cx, cy + 27 * u, "km/h", 15 * u, dim);
+      // Gear in a chip below.
+      if (s.gear > 0) snprintf(buf, sizeof buf, "%d", s.gear);
+      else snprintf(buf, sizeof buf, "%s", s.gear < 0 ? "R" : "N");
+      rrect(cx - 21 * u, cy + 44 * u, 42 * u, 34 * u, 9 * u, s.autoBox ? Col{.35f, .85f, .95f, .22f} : Col{1.f, .72f, .18f, .28f});
+      labelMid(cx, cy + 60 * u, buf, 25 * u, s.autoBox ? teal : amber);
+      labelMid(cx, cy + 90 * u, s.autoBox ? "AUTO" : "MANUELL", 11 * u, dim);
+      if (!s.running) labelMid(cx, cy - 56 * u, "MOTOR AUS", 13 * u, red);
     }
 
-    // Upper left: crash telemetry and warnings.
-    float ty = 10 * scale;
-    snprintf(buf, sizeof buf, "CRASH %5.1f KJ  PEAK %4.1f G", s.plastic / 1e3, s.peakG);
-    text(10 * scale, ty, buf, px2, 1, 1, 1);
-    ty += 22 * scale;
-    auto warn = [&](bool on, const char* label) {
-      if (!on) return;
-      rect(8 * scale, ty - 3 * scale, float(strlen(label)) * 12 * scale + 8 * scale, 20 * scale, .7f, .05f, .03f, .85f);
-      text(12 * scale, ty, label, px2, 1, 1, 1);
-      ty += 24 * scale;
-    };
-    warn(s.hydraulics, "STOP HYDRAULIK");
-    warn(s.seized, "MOTOR DEFEKT");
-    warn(s.radiator && !s.seized, "KUEHLER LECK");
-    warn(s.mount, "MOTORLAGER");
-    warn(s.steering, "LENKUNG DEFEKT");
-    warn(s.flat[0] || s.flat[1] || s.flat[2] || s.flat[3], "REIFENSCHADEN");
-    warn(s.gearboxBad, "GETRIEBE DEFEKT");
-    warn(s.tankBad, "TANK LECK");
-    warn(s.oilBad, "OELVERLUST");
-
-    // Upper right: status.
-    float ry = 10 * scale;
-    auto rtext = [&](const char* t, float r, float g, float b) {
-      text(W - float(strlen(t)) * 12 * scale - 10 * scale, ry, t, px2, r, g, b);
-      ry += 20 * scale;
-    };
-    snprintf(buf, sizeof buf, "%3.0F FPS  %s", o.fps, o.gpuName.c_str());
-    rtext(buf, .75f, .85f, .75f);
-    snprintf(buf, sizeof buf, "PHYSIK %3.0F%%  ECHTZEIT %3.0F%%  WACH %d/%d", s.physLoad * 100.0, s.realtime * 100.0, s.awake, s.objectCount);
-    rtext(buf, s.realtime < s.timeScale * 0.9 ? 1.f : .75f, s.realtime < s.timeScale * 0.9 ? .35f : .85f, .75f);
-    rtext(o.gamepad ? "CONTROLLER AKTIV" : "TASTATUR/MAUS", .75f, .75f, .75f);
-    snprintf(buf, sizeof buf, "KAMERA %s", o.cameraName.c_str());
-    rtext(buf, .75f, .75f, .75f);
-    if (o.mouseSteer) rtext("MAUSLENKUNG AN", 1, .85f, .35f);
+    // ---- Lower left: the vehicle's systems.
+    {
+      const float cw = 400 * u, ch = 186 * u;
+      const float x = 22 * u, y = H - ch - 22 * u;
+      rrect(x, y, cw, ch, 14 * u, card);
+      float ry = y + 28 * u;
+      const float ix = x + 16 * u, tx = x + 44 * u, bx = x + 104 * u, bw = 100 * u, vx = x + 284 * u;
+      auto row = [&](u32 ic, const char* name, float v, Col c, const char* value) {
+        icon(ic, ix, ry - 10 * u, 20 * u, c.a > 0 ? Col{c.r, c.g, c.b, 1} : dim);
+        label(tx, ry, name, 13 * u, dim);
+        meter(bx, ry - 4 * u, bw, 8 * u, v, c);
+        labelRight(vx, ry, value, 15 * u, white);
+        ry += 28 * u;
+      };
+      const float gx = x + 344 * u, gy = y + 62 * u, gr = 40 * u;
+      if (!s.tank) {
+        snprintf(buf, sizeof buf, "%.0f °C", s.coolant);
+        row(IC_WATER, "Wasser", float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? red : teal, buf);
+        snprintf(buf, sizeof buf, "%.0f °C", s.oilTemp);
+        row(IC_OIL, "Öl", float((s.oilTemp - 40.0) / 150.0), s.oilTemp > 135 ? red : amber, buf);
+        snprintf(buf, sizeof buf, "%.0f %%", s.oilLevel * 100.0);
+        row(IC_OIL, "Ölstand", float(s.oilLevel), s.oilLevel < .35 ? red : green, buf);
+        snprintf(buf, sizeof buf, "%.0f bar", s.accum / 1e5);
+        row(IC_WRENCH, "LHM", float(s.accum / 170e5), s.accum > 90e5 ? green : red, buf);
+        snprintf(buf, sizeof buf, "%.0f L", s.fuel);
+        row(IC_FUEL, "Tank", float(s.fuel / 55.0), s.fuel < 6 ? red : green, buf);
+      } else {
+        if (s.reload > 0) snprintf(buf, sizeof buf, "%.1f s", s.reload);
+        else snprintf(buf, sizeof buf, "bereit");
+        row(IC_SHELL, "Kanone", s.reload > 0 ? float(1.0 - s.reload / std::max(s.reloadTime, 0.1)) : 1.f, s.reload > 0 ? amber : green, buf);
+        snprintf(buf, sizeof buf, "%+.0f°", s.gunPitch * 57.3);
+        row(IC_TURRET, "Rohr", float((s.gunPitch * 57.3 + 9.0) / 29.0), teal, buf);
+        snprintf(buf, sizeof buf, "%.0f L", s.fuel);
+        row(IC_FUEL, "Tank", float(s.fuel / 1160.0), green, buf);
+        snprintf(buf, sizeof buf, "%.0f %%", s.engineLoad * 100.0);
+        row(IC_ENGINE, "Last", float(s.engineLoad), amber, buf);
+        ry += 28 * u;
+      }
+      // Pedals, as two bars side by side at the end of the card.
+      const float px = x + 335 * u, ph = 42 * u, py = y + 128 * u;
+      auto pedal = [&](float xx, double v, Col c) {
+        rrect(xx, py, 8 * u, ph, 4 * u, {1, 1, 1, .13f});
+        const float f = float(std::clamp(v, 0.0, 1.0));
+        if (f > .01f) rrect(xx, py + ph * (1 - f), 8 * u, std::max(ph * f, 8 * u), 4 * u, c);
+      };
+      pedal(px, s.throttle, green);
+      pedal(px + 12 * u, s.brake, red);
+      if (!s.tank) {
+        // The tyres' friction circle: where the car is using its grip right now.
+        circle(gx, gy, gr, {1, 1, 1, .06f});
+        arc(gx, gy, gr, 1.2f * u, 0, kPi2, {1, 1, 1, .25f});
+        arc(gx, gy, gr * .5f, 1.f * u, 0, kPi2, {1, 1, 1, .14f});
+        rrect(gx - gr, gy - .5f * u, 2 * gr, 1 * u, 0, {1, 1, 1, .14f});
+        rrect(gx - .5f * u, gy - gr, 1 * u, 2 * gr, 0, {1, 1, 1, .14f});
+        const float dx = float(std::clamp(-s.latG, -1.2, 1.2)), dy = float(std::clamp(-s.lonG, -1.2, 1.2));
+        circle(gx + dx * gr * .83f, gy + dy * gr * .83f, 5 * u, amber);
+        labelMid(gx, gy + gr + 11 * u, "G", 11 * u, faint);
+      } else {
+        // Hull and gun seen from above: which way the turret points relative to the tracks.
+        circle(gx, gy, gr, {1, 1, 1, .06f});
+        arc(gx, gy, gr, 1.2f * u, 0, kPi2, {1, 1, 1, .25f});
+        rrect(gx - 10 * u, gy - 20 * u, 20 * u, 40 * u, 3 * u, {1, 1, 1, .25f});
+        const float ya = float(s.turretYaw);
+        const float dx = -std::sin(ya), dy = -std::cos(ya);
+        const float nx = -dy, ny = dx;
+        const float L = gr - 5 * u, wd = 1.6f * u;
+        shape({{gx + nx * wd, gy + ny * wd}, {gx + dx * L + nx * wd, gy + dy * L + ny * wd}, {gx + dx * L - nx * wd, gy + dy * L - ny * wd}, {gx - nx * wd, gy - ny * wd}}, amber);
+        circle(gx, gy, 8 * u, amber);
+      }
+    }
+    // Driver aids and drive modes, as a row of small lamps above the card.
     if (!s.tank) {
-      // Driver aid lamps: amber while working, dark when off.
-      if (s.absActive) rtext("ABS", 1, .75f, .2f);
-      if (s.espActive) rtext("ESP", 1, .75f, .2f);
-      if (s.tcsActive) rtext("ASR", 1, .75f, .2f);
-      if (!s.absOn) rtext("ABS AUS", .75f, .4f, .3f);
-      if (!s.espOn) rtext("ESP AUS", .75f, .4f, .3f);
-      if (!s.tcsOn) rtext("ASR AUS", .75f, .4f, .3f);
+      float x = 22 * u;
+      const float y = H - 186 * u - 22 * u - 40 * u;
+      auto lamp = [&](u32 ic, const char* name, bool available, bool working) {
+        const float tw = textWidth(name, 13 * u);
+        const float wid = 36 * u + tw;
+        const Col bg = !available ? Col{.5f, .1f, .08f, .55f} : (working ? Col{1.f, .68f, .12f, .95f} : card);
+        const Col fg = !available ? Col{1, .6f, .55f, 1} : (working ? Col{.08f, .06f, .02f, 1} : dim);
+        rrect(x, y, wid, 30 * u, 15 * u, bg);
+        icon(ic, x + 9 * u, y + 6 * u, 18 * u, fg);
+        label(x + 30 * u, y + 15 * u, name, 13 * u, fg);
+        x += wid + 7 * u;
+      };
+      lamp(IC_BRAKE, "ABS", s.absOn, s.absActive);
+      lamp(IC_SKID, "ESP", s.espOn, s.espActive);
+      lamp(IC_TYRE, "ASR", s.tcsOn, s.tcsActive);
+      lamp(IC_WRENCH, s.soft ? "Soft" : "Firm", true, false);
+      if (s.activa) lamp(IC_SKID, "Activa", true, false);
+      if (s.sport) lamp(IC_ENGINE, "Sport", true, true);
     }
-    if (s.timeScale < 0.99) {
-      snprintf(buf, sizeof buf, "ZEITLUPE %.2fX", s.timeScale);
-      rtext(buf, 1, .85f, .35f);
+
+    // ---- Upper left: warnings, as pills with a symbol.
+    {
+      float ty = 20 * u;
+      if (s.plastic > 500.0) {
+        snprintf(buf, sizeof buf, "Verformung %.0f kJ   Spitze %.0f g", s.plastic / 1e3, s.peakG);
+        const float tw = textWidth(buf, 14 * u);
+        rrect(20 * u, ty, tw + 24 * u, 28 * u, 14 * u, card);
+        label(32 * u, ty + 14 * u, buf, 14 * u, dim);
+        ty += 34 * u;
+      }
+      auto warn = [&](bool on, u32 ic, const char* name) {
+        if (!on) return;
+        const float tw = textWidth(name, 15 * u);
+        rrect(20 * u, ty, tw + 46 * u, 30 * u, 15 * u, {.72f, .10f, .07f, .92f});
+        icon(ic, 30 * u, ty + 5 * u, 20 * u, white);
+        label(56 * u, ty + 15 * u, name, 15 * u, white);
+        ty += 35 * u;
+      };
+      warn(s.hydraulics, IC_WRENCH, "Stop: Hydraulik");
+      warn(s.seized, IC_ENGINE, "Motor defekt");
+      warn(s.radiator && !s.seized, IC_WATER, "Kühler leck");
+      warn(s.mount, IC_ENGINE, "Motorlager");
+      warn(s.steering, IC_WARN, "Lenkung defekt");
+      warn(s.flat[0] || s.flat[1] || s.flat[2] || s.flat[3], IC_TYRE, "Reifenschaden");
+      warn(s.gearboxBad, IC_WARN, "Getriebe defekt");
+      warn(s.tankBad, IC_FUEL, "Tank leck");
+      warn(s.oilBad, IC_OIL, "Ölverlust");
     }
-    if (s.paused) rtext("PAUSE", 1, .85f, .35f);
-    if (!o.help) rtext("F1 HILFE", .6f, .6f, .6f);
+
+    // ---- Upper right: small status.
+    {
+      float ry = 26 * u;
+      const float rx = W - 22 * u;
+      snprintf(buf, sizeof buf, "%.0f FPS  ·  %s", o.fps, o.gpuName.c_str());
+      labelRight(rx, ry, buf, 14 * u, dim);
+      ry += 22 * u;
+      const bool behind = s.realtime < s.timeScale * 0.9;
+      snprintf(buf, sizeof buf, "Physik %.0f %%  ·  Echtzeit %.0f %%  ·  wach %d/%d", s.physLoad * 100.0, s.realtime * 100.0, s.awake, s.objectCount);
+      labelRight(rx, ry, buf, 14 * u, behind ? red : dim);
+      ry += 26 * u;
+      {
+        const float tw = textWidth(o.cameraName.c_str(), 13 * u);
+        label(rx - tw, ry, o.cameraName.c_str(), 13 * u, dim);
+        icon(IC_CAMERA, rx - tw - 24 * u, ry - 9 * u, 18 * u, dim);
+        if (o.gamepad) icon(IC_PAD, rx - tw - 50 * u, ry - 9 * u, 18 * u, teal);
+      }
+      ry += 28 * u;
+      auto chip = [&](const char* t, Col c) {
+        const float tw = textWidth(t, 14 * u);
+        rrect(rx - tw - 22 * u, ry - 13 * u, tw + 22 * u, 26 * u, 13 * u, {c.r, c.g, c.b, .85f});
+        label(rx - tw - 11 * u, ry, t, 14 * u, {.05f, .05f, .05f, 1});
+        ry += 31 * u;
+      };
+      if (o.mouseSteer) chip("Mauslenkung", amber);
+      if (s.timeScale < 0.99) {
+        snprintf(buf, sizeof buf, "Zeitlupe %.2fx", s.timeScale);
+        chip(buf, amber);
+      }
+      if (s.paused) chip("Pause", amber);
+    }
 
     // Latest damage message, fading out.
     if (s.damageAge < 4.0 && !s.damageMsg.empty()) {
       const float a = float(std::min(1.0, 4.0 - s.damageAge));
-      const float tw = float(s.damageMsg.size()) * 18 * scale;
-      text((W - tw) * 0.5f, 60 * scale, s.damageMsg.c_str(), px3, 1, .55f, .25f, a);
+      const float tw = textWidth(s.damageMsg.c_str(), 20 * u);
+      rrect((W - tw) * .5f - 22 * u, 22 * u, tw + 44 * u, 40 * u, 20 * u, {.05f, .05f, .06f, .7f * a});
+      labelMid(W * .5f, 42 * u, s.damageMsg.c_str(), 20 * u, {1.f, .72f, .3f, a});
     }
 
+    // ---- The vehicle from above, every part coloured by its state.
     if (o.damageView && !s.parts.empty()) {
-      // The vehicle from above, every part coloured by its state, with the inside parts drawn over.
-      const float dw = 92 * scale, dh = 220 * scale;
-      const float dx = W - dw - 14 * scale, dy = H - 130 * scale - dh - 26 * scale;
-      rect(dx - 6 * scale, dy - 6 * scale, dw + 12 * scale, dh + 12 * scale, 0, 0, 0, .42f);
+      const float dw = 84 * u, dh = 202 * u;
+      const float dx = W - dw - 30 * u, dy = H - 2 * 130 * u - 26 * u - dh - 20 * u;
+      rrect(dx - 12 * u, dy - 30 * u, dw + 24 * u, dh + 42 * u, 14 * u, card);
+      icon(IC_WRENCH, dx - 3 * u, dy - 25 * u, 16 * u, dim);
+      label(dx + 16 * u, dy - 16 * u, "Zustand", 12 * u, dim);
       const float ux = dw / 100.f, uy = dh / 240.f;
       for (const PartState& p : s.parts) {
         const float d = std::clamp(p.damage, 0.f, 1.f);
         // Green through amber to red, and dark when it is gone.
-        float cr = d < .5f ? .2f + d * 1.6f : 1.f, cg = d < .5f ? .8f : .8f - (d - .5f) * 1.4f, cb = .22f;
-        if (d >= .98f) { cr = .35f; cg = .05f; cb = .05f; }
-        rect(dx + p.x * ux, dy + p.y * uy, p.w * ux - 1, p.h * uy - 1, cr, cg, cb, .9f);
-        if (p.label) text(dx + p.x * ux + 2, dy + p.y * uy + 2, p.label, scale * 1.2f, 0, 0, 0, .9f);
+        Col c{d < .5f ? .25f + d * 1.5f : 1.f, d < .5f ? .82f - d * .1f : .77f - (d - .5f) * 1.3f, .28f, .88f};
+        if (d >= .98f) c = {.32f, .05f, .05f, .9f};
+        rrect(dx + p.x * ux, dy + p.y * uy, p.w * ux - 1, p.h * uy - 1, 2 * u, c);
       }
     }
+
+    // ---- The crosshair is where the gunner looks. The ring is where the gun really points just now.
     if (o.crosshair) {
-      // The crosshair is where the gunner looks. The ring shows where the gun really points just now.
-      const float cx = W * .5f, cy = H * .5f, a = 2 * scale, l = 11 * scale;
-      rect(cx - l - 6 * scale, cy - a * .5f, l, a, 1, 1, 1, .8f);
-      rect(cx + 6 * scale, cy - a * .5f, l, a, 1, 1, 1, .8f);
-      rect(cx - a * .5f, cy + 6 * scale, a, l, 1, 1, 1, .8f);
+      const float cx = W * .5f, cy = H * .5f;
+      const Col line{1, 1, 1, .85f};
+      for (float sgn : {-1.f, 1.f}) {
+        rrect(cx + (sgn < 0 ? -22 * u : 8 * u), cy - .75f * u, 14 * u, 1.5f * u, 0, line);
+        if (sgn > 0) rrect(cx - .75f * u, cy + 8 * u, 1.5f * u, 14 * u, 0, line);
+      }
       const V3 p = s.muzzle + s.gunDir * 400.0;
       const Mat4& m = camVP;
       const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
       const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
       const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
       if (qw > 0.1) {
-        const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H), k = 9 * scale;
-        const float col = s.reload > 0 ? .55f : 1.f;
-        rect(sx - k, sy - k, 2 * k, a, 1, col, col * .3f, .9f);
-        rect(sx - k, sy + k, 2 * k, a, 1, col, col * .3f, .9f);
-        rect(sx - k, sy - k, a, 2 * k, 1, col, col * .3f, .9f);
-        rect(sx + k, sy - k, a, 2 * k, 1, col, col * .3f, .9f);
+        const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H);
+        const bool ready = s.reload <= 0;
+        const float fr = ready ? 1.f : float(1.0 - s.reload / std::max(s.reloadTime, 0.1));
+        arc(sx, sy, 14 * u, 2.f * u, 0, kPi2, {1, 1, 1, .22f});
+        arc(sx, sy, 14 * u, 2.f * u, -1.5708f, -1.5708f + kPi2 * fr, ready ? green : amber);
       }
     }
+
+    // ---- Lists: the vehicle menu and the settings.
     if (o.panel.open) {
-      // A list with a header: vehicle menu or settings overlay.
       const UiPanel& P = o.panel;
       float x, y, pw, rowH;
       panelLayout(w, h, P.rows.size(), x, y, pw, rowH);
-      rect(x, y - 2.0f * rowH, pw, (float(P.rows.size()) + 3.6f) * rowH, 0, 0, 0, .8f);
-      text(x + 16 * scale, y - 1.5f * rowH, P.title.c_str(), px3, 1, .9f, .55f);
+      const float sc = rowH / 27.f;
+      rrect(x, y - 2.0f * rowH, pw, (float(P.rows.size()) + 3.6f) * rowH, 18 * sc, {.04f, .045f, .055f, .88f});
+      label(x + 22 * sc, y - 1.05f * rowH, P.title.c_str(), 25 * sc, white);
       for (size_t i = 0; i < P.rows.size(); i++) {
-        const float ry2 = y + float(i) * rowH;
+        const float ry = y + float(i) * rowH;
+        const float mid = ry + rowH * .46f;
         const bool sel = int(i) == P.sel;
-        if (sel) rect(x + 6 * scale, ry2 - 2 * scale, pw - 12 * scale, rowH - 2 * scale, .85f, .55f, .15f, .35f);
-        const float c = P.rows[i].empty() ? .5f : (sel ? 1.f : .85f);
-        text(x + 18 * scale, ry2 + 2 * scale, P.rows[i].c_str(), px2, c, c, c);
-        if (i < P.fill.size() && P.fill[i] >= 0) bar(x + pw * .52f, ry2 + 3 * scale, pw * .26f, 12 * scale, P.fill[i], .85f, .65f, .2f);
-        if (i < P.values.size() && !P.values[i].empty()) {
-          const char* val = P.values[i].c_str();
-          text(x + pw - float(strlen(val)) * 12 * scale - 18 * scale, ry2 + 2 * scale, val, px2, sel ? 1.f : .8f, sel ? .85f : .8f, sel ? .4f : .8f);
+        if (sel) rrect(x + 8 * sc, ry, pw - 16 * sc, rowH - 2 * sc, 8 * sc, {.35f, .85f, .95f, .17f});
+        label(x + 22 * sc, mid, P.rows[i].c_str(), 16 * sc, sel ? white : Col{1, 1, 1, .8f});
+        const std::string val = i < P.values.size() ? P.values[i] : "";
+        const float right = x + pw - 22 * sc;
+        if (val == "AN" || val == "AUS") {
+          // A switch.
+          const bool on = val == "AN";
+          const float sw = 40 * sc, sh = 20 * sc;
+          rrect(right - sw, mid - sh * .5f, sw, sh, sh * .5f, on ? Col{.35f, .85f, .95f, .9f} : Col{1, 1, 1, .18f});
+          circle(on ? right - sh * .5f : right - sw + sh * .5f, mid, sh * .38f, white);
+        } else {
+          if (!val.empty()) labelRight(right, mid, val.c_str(), 15 * sc, sel ? teal : dim);
+          if (i < P.fill.size() && P.fill[i] >= 0) {
+            // A slider.
+            const float tx = x + pw * .50f, tw = pw * .30f, f = std::clamp(P.fill[i], 0.f, 1.f);
+            rrect(tx, mid - 2.5f * sc, tw, 5 * sc, 2.5f * sc, {1, 1, 1, .16f});
+            rrect(tx, mid - 2.5f * sc, std::max(tw * f, 5 * sc), 5 * sc, 2.5f * sc, teal);
+            circle(tx + tw * f, mid, 7 * sc, white);
+          }
         }
       }
-      text(x + 16 * scale, y + (float(P.rows.size()) + .35f) * rowH, P.foot.c_str(), px1 * 2, .65f, .65f, .65f);
-    }
-    if (o.help) {
+      label(x + 22 * sc, y + (float(P.rows.size()) + .75f) * rowH, P.foot.c_str(), 13 * sc, faint);
+    } else if (o.help) {
       static const char* lines[] = {
-          "BEANNG - CITROEN XANTIA ACTIVA",
+          "W S  oder  Pfeile   Gas und Bremse, im Stand rückwärts",
+          "A D   lenken     Leertaste   Handbremse",
+          "Q E   schalten     T   Automatik/Manuell",
+          "F   Autobombe zünden, beim Leopard schießen",
+          "O   Einstellungen     TAB   Fahrzeug wählen",
+          "C   Kamera     M   Mauslenkung     P   Pause     [ ]   Zeitlupe",
+          "R   zum Start     F5   reparieren",
+          "F1 Hilfe   F2 Beams   F3 Röntgen   F12 Screenshot   ESC Ende",
+          "Maus: rechts ziehen dreht die Kamera, links zieht am Auto",
           "",
-          "W/UP GAS   S/DOWN BREMSE (STEHEND: RUECKWAERTS)",
-          "A D / LEFT RIGHT LENKEN    SPACE HANDBREMSE",
-          "Q E GANG RUNTER/HOCH      T AUTO/MANUELL",
-          "G HYDRACTIVE SPORT   H NIVEAU   V ACTIVA AN/AUS",
-          "I ZUENDUNG   R ZURUECK ZUM START   F5 REPARIEREN   F BOMBE/FEUER",
-          "C KAMERA   M MAUSLENKUNG   P PAUSE   [ ] ZEITLUPE",
-          "O EINSTELLUNGEN   TAB FAHRZEUG WAEHLEN   B BLUR   J WACKELN   N TON   + -",
-          "F2 BEAM-ANSICHT   F3 ROENTGEN   F12 SCREENSHOT   ESC BEENDEN",
-          "MAUS: RECHTS ZIEHEN KAMERA, RAD ZOOM, LINKS ZIEHEN PACKT DAS AUTO",
-          "",
-          "CONTROLLER: L-STICK LENKEN  RT GAS  LT BREMSE",
-          "R-STICK KAMERA  A HANDBREMSE  LB/RB GANG  Y KAMERA",
-          "X BOMBE/FEUER  R3 SPORT  B REPARIEREN  BACK START  START PAUSE",
+          "Controller: L-Stick lenkt, RT Gas, LT Bremse, R-Stick Kamera",
+          "A Handbremse   X Bombe/Feuer   LB/RB Gang   Y Kamera   L3 Einstellungen",
       };
-      const float hw = 720 * scale, hh = float(sizeof(lines) / sizeof(lines[0])) * 22 * scale + 24 * scale;
-      const float hx = (W - hw) * 0.5f, hy = (H - hh) * 0.5f;
-      rect(hx, hy, hw, hh, 0, 0, 0, .72f);
-      float yy = hy + 12 * scale;
+      const float lh = 26 * u, hw = 700 * u, hh = float(sizeof(lines) / sizeof(lines[0])) * lh + 76 * u;
+      const float hx = (W - hw) * .5f, hy = (H - hh) * .5f;
+      rrect(hx, hy, hw, hh, 18 * u, {.04f, .045f, .055f, .86f});
+      label(hx + 24 * u, hy + 32 * u, "Steuerung", 23 * u, white);
+      float yy = hy + 66 * u;
       for (const char* l : lines) {
-        text(hx + 14 * scale, yy, l, px2, .95f, .95f, .95f);
-        yy += 22 * scale;
+        label(hx + 24 * u, yy, l, 15 * u, {1, 1, 1, .85f});
+        yy += lh;
       }
+    } else {
+      labelRight(W - 22 * u, H - 2 * 130 * u - 26 * u + 8 * u, "F1 Hilfe  ·  O Einstellungen  ·  TAB Fahrzeug", 12 * u, faint);
     }
+
     glBindBuffer(GL_ARRAY_BUFFER, hudVbo);
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(hudVerts.size() * sizeof(HudV)), hudVerts.data(), GL_STREAM_DRAW);
   }
@@ -2165,6 +2372,7 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   d->setupVtxAttribs();
 
   d->buildScratchData();
+  d->loadAtlas("assets/ui.atlas");
   d->buildDetailTexture();
 
   glGenVertexArrays(1, &d->propVao);
@@ -2211,6 +2419,8 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)0);
   glEnableVertexAttribArray(1);
   glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)8);
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)24);
   glBindVertexArray(0);
 
   glEnable(GL_PROGRAM_POINT_SIZE);
@@ -2543,6 +2753,9 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glUseProgram(D.progHud);
   glUniform2f(glGetUniformLocation(D.progHud, "uRes"), float(w), float(h));
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, D.atlasTex);
+  glUniform1i(glGetUniformLocation(D.progHud, "uAtlas"), 0);
   glBindVertexArray(D.hudVao);
   glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.hudVerts.size()));
   glDisable(GL_BLEND);

@@ -89,7 +89,7 @@ inline void panelLayout(int w, int h, size_t rows, float& x, float& y, float& pw
   const float H = float(h), W = float(w);
   const float scale = H / 720.f < 1.f ? 1.f : float(int(H / 720.f + 0.5f));
   pw = 620 * scale;
-  rowH = 27 * scale;
+  rowH = 31 * scale;
   x = (W - pw) * 0.5f;
   y = (H - (float(rows) + 3.6f) * rowH) * 0.5f + 2.0f * rowH;
 }

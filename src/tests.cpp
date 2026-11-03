@@ -518,7 +518,7 @@ void testCrash(double kmh) {
   Bench b({85, -30, 0}, 0);
   printf("== Frontal wall crash at %.0f km/h ==\n", kmh);
   b.launchAt(kmh / 3.6, 3);
-  const Obj& o = b.sim.objs[b.car.obj];
+  const Obj o = b.sim.objs[b.car.obj];  // a copy: tearing grows the list and moves its entries
   auto noseFirewall = [&] {
     // Distance from the firewall to the rear axle: stays nearly constant unless the cabin folds.
     return std::make_pair(b.car.refFrontL, b.car.refRearL);

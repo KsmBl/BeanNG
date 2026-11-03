@@ -3,6 +3,21 @@
 Soft-Body-Fahrsimulation im Stil von BeamNG, in C++20 mit SDL3 und OpenGL 3.3.
 Fahrzeug: Citroën Xantia Activa (3.0 V6).
 
+## Fahrzeuge
+
+Beim Start und jederzeit mit **TAB** wählst du das Fahrzeug: den Citroën Xantia Activa oder den
+Leopard 1. Mit **F** zündest du beim Xantia die Autobombe und feuerst beim Leopard die Kanone (auch
+linke Maustaste). Beim Leopard zielt die Maus: der Turm folgt dem Fadenkreuz, der Ring zeigt, wohin das
+Rohr gerade wirklich zeigt und wie weit das Nachladen ist.
+
+**O** öffnet die Einstellungen: ABS, ESP, ASR, Activa, Fahrwerk, Motorleistung, Reifen und mehr.
+
+Weitere Tasten: **B** Bewegungsunschärfe, **J** Kamera-Wackeln, **N** Ton an/aus, **+ / -** Lautstärke.
+
+`tools/gen_xantia.py`, `tools/gen_leopard.py` und `tools/gen_ui.py` erzeugen die Modelle und die
+Schrift unter `assets/`. Das macht `./run.sh` von selbst (braucht numpy, scipy, shapely und Pillow).
+Testläufe: `beanng-test buckle`, `tree`, `bomb`, `tank`, `esp`.
+
 ## Bauen und starten
 
     ./run.sh

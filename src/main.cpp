@@ -441,7 +441,7 @@ struct Game {
 };
 
 enum CamMode { CAM_CHASE, CAM_ORBIT, CAM_HOOD, CAM_DRIVER, CAM_COUNT };
-const char* kCamNames[CAM_COUNT] = {"VERFOLGER", "ORBIT", "HAUBE", "FAHRER"};
+const char* kCamNames[CAM_COUNT] = {"Verfolger", "Orbit", "Haube", "Fahrer"};
 
 // Everything that tells the driver how fast and how rough it is, read from the running simulation.
 // Shared by the camera and the sound, so that what shakes is also what is heard.
@@ -987,45 +987,45 @@ static int playSession(int kind, bool openMenu) {
       items.push_back({name, b, float((val - lo) / (hi - lo)), [&val, lo, hi, step](int d) { val = clampd(val + d * step, lo, hi); }});
     };
     if (panelKind == 1) {
-      items.push_back({"CITROEN XANTIA ACTIVA", "V6  190 PS  1,5 T", -1.f, [&](int) {}});
-      items.push_back({"LEOPARD 1", "830 PS  42 T  105 MM", -1.f, [&](int) {}});
+      items.push_back({"Citroën Xantia Activa", "V6  ·  190 PS  ·  1,5 t", -1.f, [&](int) {}});
+      items.push_back({"Leopard 1", "V10  ·  830 PS  ·  42 t", -1.f, [&](int) {}});
     } else if (panelKind == 2) {
       if (kind == VK_XANTIA) {
         toggle("ABS", tuning.abs, [&] { tuning.abs = !tuning.abs; });
         toggle("ESP", tuning.esp, [&] { tuning.esp = !tuning.esp; });
         toggle("ASR", tuning.tcs, [&] { tuning.tcs = !tuning.tcs; });
-        toggle("ACTIVA", view.activa, [&] { panelEdges.toggleActiva = true; });
-        toggle("HYDRACTIVE SPORT", view.sport, [&] { panelEdges.toggleSport = true; });
+        toggle("Activa", view.activa, [&] { panelEdges.toggleActiva = true; });
+        toggle("Hydractive Sport", view.sport, [&] { panelEdges.toggleSport = true; });
         {
-          static const char* heights[3] = {"NIEDRIG", "STRASSE", "HOCH"};
-          items.push_back({"NIVEAU", heights[std::clamp(view.heightMode, 0, 2)], -1.f, [&](int) { panelEdges.cycleHeight = true; }});
+          static const char* heights[3] = {"Niedrig", "Straße", "Hoch"};
+          items.push_back({"Niveau", heights[std::clamp(view.heightMode, 0, 2)], -1.f, [&](int) { panelEdges.cycleHeight = true; }});
         }
-        items.push_back({"GETRIEBE", view.autoBox ? "AUTOMATIK" : "MANUELL", -1.f, [&](int) { panelEdges.toggleAuto = true; }});
-        percent("MOTORLEISTUNG", tuning.power, 0.3, 3.0, 0.1);
-        percent("BREMSKRAFT", tuning.brake, 0.4, 1.6, 0.1);
-        percent("REIFENHAFTUNG", tuning.grip, 0.4, 1.6, 0.05);
-        percent("DAEMPFUNG", tuning.damper, 0.4, 2.0, 0.1);
-        percent("STABILISATOR", tuning.bar, 0.0, 2.0, 0.1);
-        percent("LENKUEBERSETZUNG", tuning.steer, 0.6, 1.4, 0.05);
+        items.push_back({"Getriebe", view.autoBox ? "Automatik" : "Manuell", -1.f, [&](int) { panelEdges.toggleAuto = true; }});
+        percent("Motorleistung", tuning.power, 0.3, 3.0, 0.1);
+        percent("Bremskraft", tuning.brake, 0.4, 1.6, 0.1);
+        percent("Reifenhaftung", tuning.grip, 0.4, 1.6, 0.05);
+        percent("Dämpfung", tuning.damper, 0.4, 2.0, 0.1);
+        percent("Stabilisator", tuning.bar, 0.0, 2.0, 0.1);
+        percent("Lenkübersetzung", tuning.steer, 0.6, 1.4, 0.05);
       } else {
-        items.push_back({"GETRIEBE", view.autoBox ? "AUTOMATIK" : "MANUELL", -1.f, [&](int) { panelEdges.toggleAuto = true; }});
-        percent("MOTORLEISTUNG", tankPower, 0.3, 3.0, 0.1);
-        percent("KETTENHAFTUNG", tankGrip, 0.4, 1.6, 0.05);
+        items.push_back({"Getriebe", view.autoBox ? "Automatik" : "Manuell", -1.f, [&](int) { panelEdges.toggleAuto = true; }});
+        percent("Motorleistung", tankPower, 0.3, 3.0, 0.1);
+        percent("Kettenhaftung", tankGrip, 0.4, 1.6, 0.05);
         {
           char b[32];
           snprintf(b, sizeof b, "%.1f S", tankReload);
-          items.push_back({"NACHLADEZEIT", b, float(tankReload / 8.0), [&](int d) { tankReload = clampd(tankReload + d * 0.5, 0.5, 8.0); }});
+          items.push_back({"Nachladezeit", b, float(tankReload / 8.0), [&](int d) { tankReload = clampd(tankReload + d * 0.5, 0.5, 8.0); }});
         }
       }
-      toggle("BEWEGUNGSUNSCHAERFE", hud.motionBlur, [&] { hud.motionBlur = !hud.motionBlur; });
-      toggle("KAMERA-WACKELN", shakeOn, [&] { shakeOn = !shakeOn; });
-      toggle("SCHADENSANZEIGE", hud.damageView, [&] { hud.damageView = !hud.damageView; });
+      toggle("Bewegungsunschärfe", hud.motionBlur, [&] { hud.motionBlur = !hud.motionBlur; });
+      toggle("Kamera-Wackeln", shakeOn, [&] { shakeOn = !shakeOn; });
+      toggle("Schadensanzeige", hud.damageView, [&] { hud.damageView = !hud.damageView; });
       {
         char b[32];
         snprintf(b, sizeof b, "%3.0f%%", sound->volume * 100.0);
-        items.push_back({"LAUTSTAERKE", b, float(sound->volume / 1.5), [&](int d) { sound->volume = clampd(sound->volume + d * 0.1, 0.0, 1.5); }});
+        items.push_back({"Lautstärke", b, float(sound->volume / 1.5), [&](int d) { sound->volume = clampd(sound->volume + d * 0.1, 0.0, 1.5); }});
       }
-      items.push_back({"AUTO REPARIEREN", "", -1.f, [&](int) { panelRepair = true; }});
+      items.push_back({"Fahrzeug reparieren", "", -1.f, [&](int) { panelRepair = true; }});
     }
     auto choosePanel = [&] {
       if (panelKind == 1) {
@@ -1378,8 +1378,14 @@ static int playSession(int kind, bool openMenu) {
           rig.pitch = 0.08;
           if (tNow > 11.5 && std::fmod(tNow, 3.0) < dt) sendC.fire = true;
           break;
+        case 23:  // switches vehicle in mid-game, as the menu does, and back out
+          if (tNow > 4.0) {
+            nextVehicle = kind == VK_XANTIA ? VK_LEOPARD : -1;
+            quit = true;
+          }
+          break;
         case 21:  // the vehicle menu, then the settings
-          panelKind = tNow < 4.0 ? 1 : 2;
+          panelKind = shotCount < 2 ? 1 : 2;
           break;
         case 19:
           rig.mode = CAM_ORBIT;
@@ -1585,8 +1591,8 @@ static int playSession(int kind, bool openMenu) {
     }
     hud.panel.open = panelKind != 0;
     if (hud.panel.open) {
-      hud.panel.title = panelKind == 1 ? "FAHRZEUG WAEHLEN" : "FAHRZEUG-EINSTELLUNGEN";
-      hud.panel.foot = panelKind == 1 ? "PFEILE WAEHLEN   ENTER FAHREN   ESC ZU" : "PFEILE WAEHLEN/AENDERN   ESC ZU";
+      hud.panel.title = panelKind == 1 ? "Fahrzeug wählen" : "Einstellungen";
+      hud.panel.foot = panelKind == 1 ? "Pfeile wählen  ·  ENTER fahren  ·  ESC zurück" : "Pfeile wählen und ändern  ·  ESC schließen";
       hud.panel.sel = panelSel;
       hud.panel.rows.clear();
       hud.panel.values.clear();
