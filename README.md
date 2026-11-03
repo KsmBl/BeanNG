@@ -38,14 +38,20 @@ Abhängigkeiten: SDL3, libepoxy, CMake, ein C++20-Compiler, Python 3 mit numpy, 
 
 ## Online-Duell
 
-Zwei Spieler auf einer eigenen Karte: je eine Basis im Westen und im Osten, dazwischen Dörfer, ein Fluss mit drei Brücken und zwei hohe Sperrmauern, über die nur die Artillerie schießen kann. Die Physik läuft allein auf dem Server, die Spieler schicken nur ihre Eingaben.
+Zwei Spieler auf einer eigenen Karte: je eine Basis im Westen und im Osten, dazwischen Dörfer, Hügel, Wälder, ein Fluss mit drei Brücken und zwei hohe Sperrmauern, über die nur die Artillerie schießen kann. Die Physik läuft allein auf dem Server, die Spieler schicken nur ihre Eingaben.
 
 ```sh
 ./run.sh --help                 # baut auch den Server
 build/beanng-server 27015       # auf dem Rechner, den beide erreichen können
 ```
 
-Im Spiel: **Online spielen**, Adresse und Port eintragen, **Verbinden**. Oder direkt mit `./run.sh --connect 1.2.3.4:27015`. Der Port ist UDP und muss von außen erreichbar sein. Sind beide da, wählt jeder Turm und Ausrüstung (20 Slots, 60 Sekunden Zeit). Wessen Panzer zerstört wird, verliert; nach 8 Sekunden geht es von vorn los.
+Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbinden**. Oder direkt mit `./run.sh --connect 1.2.3.4:27015`. Der Port ist UDP und muss von außen erreichbar sein.
+
+**Ablauf:** Sind beide da, wählt jeder seine Ausrüstung (20 Slots, 60 Sekunden). Du startest zu Fuß mit Pistole und Messer in deiner Basis, dort stehen alle Panzer und Autos. Wer stirbt, verliert; nach 8 Sekunden geht es von vorn los.
+
+**Finden:** In Häusern und bei alten Wracks stehen Kisten mit Munition, Scharfschützengewehr, Raketenwerfer, Reparatursets, Minen, Verbandskästen und Bombencodes. Der Inhalt ändert sich mit jedem Match.
+
+**Computer:** Im Kommandozentrum des Gegners lässt sich der Hauptcomputer in 5 Sekunden anzapfen. Danach zeigt die Karte alle 30 Sekunden auf Anfrage ungefähr, wo er ist.
 
 | Turm | Waffe | Besonderheit |
 |---|---|---|
@@ -53,6 +59,8 @@ Im Spiel: **Online spielen**, Adresse und Port eintragen, **Verbinden**. Oder di
 | Leichte Kanone | 120 Schuss, schnell | leicht, wenig Schaden pro Schuss |
 | Artillerie | 8 Granaten, Steilfeuer | schießt auf den Punkt auf der Karte, schwer und langsam |
 | Lenkraketen | 8 Raketen und ein schwaches Geschütz | Rakete wird mit der Maus über die ganze Karte geflogen |
+
+**Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kick`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt beiden von Anfang an alle Waffen, zum Ausprobieren.
 
 ## Steuerung
 
