@@ -167,10 +167,58 @@ void World::addCrater(double x, double y, double r, double depth) {
 }
 
 void World::clearCraters() {
+  if (!boxes0_.empty()) {
+    // assign() keeps the storage: the renderer may be looking at this list.
+    boxes_.assign(boxes0_.begin(), boxes0_.end());
+    boxGrid_ = boxGrid0_;
+    boxes0_.clear();
+    boxGeneration_++;
+  }
   if (h0_.empty()) return;
   h_ = h0_;
   surf_ = surf0_;
   craters_.clear();
+}
+
+std::vector<std::pair<V3, double>> World::breakRocks(V3 c, double reach) {
+  std::vector<std::pair<V3, double>> out;
+  const auto rnd = [&](double a, double b) {
+    chipSeed_ = chipSeed_ * 1664525u + 1013904223u;
+    return a + (b - a) * double(chipSeed_ >> 16) / 65535.0;
+  };
+  const size_t count = boxes_.size();
+  for (size_t i = 0; i < count; i++) {
+    StaticBox& b = boxes_[i];
+    if (b.surface != SURF_ROCK || b.h.x <= 0) continue;
+    const double size = std::max({b.h.x, b.h.y, b.h.z});
+    if (len(b.c - c) > reach + size) continue;
+    if (boxes0_.empty()) {
+      boxes0_ = boxes_;
+      boxGrid0_ = boxGrid_;
+    }
+    const StaticBox old = b;
+    out.push_back({old.c, size});
+    // Taken out of the collision grid, and with no size left it is not drawn either.
+    const double rad = len(old.h) + 1.0;
+    const int x0 = std::max(0, int((old.c.x - rad + kHalf) / kBoxCell)), x1 = std::min(kBoxGrid - 1, int((old.c.x + rad + kHalf) / kBoxCell));
+    const int y0 = std::max(0, int((old.c.y - rad + kHalf) / kBoxCell)), y1 = std::min(kBoxGrid - 1, int((old.c.y + rad + kHalf) / kBoxCell));
+    for (int y = y0; y <= y1; y++)
+      for (int x = x0; x <= x1; x++) {
+        auto& cell = boxGrid_[size_t(y) * kBoxGrid + x];
+        cell.erase(std::remove(cell.begin(), cell.end(), u16(i)), cell.end());
+      }
+    b.h = {0, 0, 0};
+    if (size < 0.45 || boxes_.size() > 60000) continue;
+    const int chips = 4 + int(rnd(0, 3));
+    for (int k = 0; k < chips; k++) {
+      const double a = rnd(0, 6.283), d = size * rnd(0.3, 1.1);
+      const double x = old.c.x + std::cos(a) * d, y = old.c.y + std::sin(a) * d;
+      const double chip = size * rnd(0.22, 0.42);
+      addBox({x, y, height(x, y) + chip * 0.3}, {chip * rnd(0.7, 1.3), chip * rnd(0.7, 1.2), chip * rnd(0.5, 0.9)}, rnd(0, 3.1), rnd(-0.4, 0.4), SURF_ROCK, old.r, old.g, old.b);
+    }
+  }
+  if (!out.empty()) boxGeneration_++;
+  return out;
 }
 
 void World::pave() { std::fill(surf_.begin(), surf_.end(), u8(SURF_ASPHALT)); }
@@ -208,6 +256,7 @@ void World::build() {
   h_.assign(size_t(N) * N, 0.f);
   surf_.assign(size_t(N) * N, SURF_GRASS);
   boxGrid_.assign(size_t(kBoxGrid) * kBoxGrid, {});
+  boxes_.reserve(62000);  // never moves: the renderer reads it while blasts add to it
 
   // Base terrain, flattened towards the test pad.
   std::vector<float> dist(size_t(N) * N, 1e9f), roadH(size_t(N) * N, 0.f);

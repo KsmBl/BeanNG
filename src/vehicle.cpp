@@ -89,6 +89,47 @@ void Vehicle::updateRimDamage(Sim& sim, Wheel& w) {
   }
 }
 
+void Vehicle::shiftIndices(long dn, long db, long dobj) {
+  const auto N = [&](u32& i) { i = u32(long(i) + dn); };
+  const auto B = [&](u32& i) { i = u32(long(i) + db); };
+  obj = u16(long(obj) + dobj);
+  for (Wheel& w : wheels) {
+    N(w.axIn);
+    N(w.axOut);
+    for (u32& r : w.ring) N(r);
+    for (auto& s : w.spoke)
+      for (u32& e : s) B(e);
+  }
+  for (HydroAxle& a : axle)
+    for (HydroStrut& s : a.s) {
+      N(s.top);
+      N(s.low);
+    }
+  for (auto* list : {&engineNodes, &gearboxNodes, &structureNodes})
+    for (u32& n : *list) N(n);
+  for (auto* list : {&radiatorBeams, &engineMountBeams, &hydraulicBeams, &engineBlockBeams, &gearboxBeams, &bellBeams, &tankBeams, &wingMountBeams})
+    for (u32& b : *list) B(b);
+  N(refFrontL);
+  N(refFrontR);
+  N(refRearL);
+  N(refRearR);
+  for (u32& b : tieBeam) B(b);
+  for (u32& n : shaftNode) N(n);
+}
+
+void Vehicle::wreck(Sim& sim) {
+  if (exploded) return;
+  exploded = true;
+  burnTime = 1000.0;  // no fire: it was only broken
+  engineRunning = false;
+  for (Wheel& w : wheels) w.attached = false;
+  for (Obj& o : sim.objs)
+    if (o.root == obj) {
+      o.kind = OBJ_PROP;
+      o.alwaysAwake = false;
+    }
+}
+
 void Vehicle::detonate(Sim& sim) {
   if (exploded) return;
   exploded = true;

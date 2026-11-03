@@ -338,6 +338,7 @@ bool Sim::adoptWorld(const Sim& old, u32 oldCars, u32 newCars) {
     if (objs[i].awake) active.push_back(u32(i));
   blasts.clear();
   plasticEnergy = 0;
+  splitGeneration = old.splitGeneration + 1;  // what the visible meshes follow has to be looked at afresh
   triObjDirty = true;
   stamp.assign(tris.size() + blocks.size(), 0xffffffffu);
   return true;
@@ -377,10 +378,46 @@ static constexpr double kBlastEnd = 450.0;
 
 void Sim::explode(V3 c, double impulse, double radius) {
   blasts.push_back({c, impulse, radius, 0.0});
+  blastCount++;
+  lastBlast = c;
+  lastBlastRadius = radius;
+  lastBlastImpulse = impulse;
   if (craterWorld) {
     // Only what goes off close to the ground digs into it.
     const double above = c.z - craterWorld->height(c.x, c.y);
     if (above < 3.0) craterWorld->addCrater(c.x, c.y, radius * 0.18, radius * 0.05 * (1.0 - std::max(above, 0.0) / 3.0));
+    // Boulders crack apart.
+    for (const auto& hit : craterWorld->breakRocks(c, radius * 0.42)) event(EV_ROCK, hit.first, V3{}, float(hit.second));
+  }
+  // Stones of a wall right beside it are simply pulverised: their nodes leave the world, deep under the ground,
+  // and what shows is the dust and rubble. Further out the blast only throws them.
+  {
+    const double crush = radius * 0.30;
+    for (Block& bl : blocks) {
+      V3 mid{};
+      for (u32 n : bl.n) mid += pos[n];
+      mid = mid * 0.125;
+      const double d = len(mid - c);
+      if (d > crush) continue;
+      if (double(blastRng() & 0xffff) / 65535.0 > 1.25 * (1.0 - d / crush) + 0.15) continue;
+      if (flags[bl.n[0]] & NF_FIXED) continue;
+      Obj& owner = objs[nodeObj[bl.n[0]]];
+      for (u32 bi : owner.beamList) {
+        Beam& b = beams[bi];
+        if (b.flags & BF_BROKEN) continue;
+        for (u32 n : bl.n)
+          if (b.a == n || b.b == n) {
+            breakBeam(b, false, 0);
+            break;
+          }
+      }
+      event(EV_ROCK, mid, V3{}, 0.25f);
+      for (u32 n : bl.n) {
+        pos[n].z -= 400.0;
+        vel[n] = {};
+        flags[n] = u8((flags[n] | NF_FIXED) & ~NF_COLLIDE);
+      }
+    }
   }
   event(EV_BLAST, c, V3{}, float(radius));
   const double r2 = radius * radius;

@@ -5,7 +5,7 @@ Fahrzeug: Citroën Xantia Activa (3.0 V6).
 
 ## Fahrzeuge
 
-Drei Fahrzeuge stehen zur Wahl: Citroën Xantia Activa, Leopard 1 und Koenigsegg One:1.
+Vier Fahrzeuge stehen zur Wahl: Citroën Xantia Activa, Leopard 1, Koenigsegg One:1 und ein Geländewagen.
 
 Das Spiel startet im Hauptmenü, **ESC** öffnet es jederzeit wieder. Dort findest du Fahrzeugwahl,
 Fahrzeug-Einstellungen, Spiel-Einstellungen und die Tastenbelegung. Direkt erreichst du die Fahrzeugwahl
@@ -20,6 +20,15 @@ Spiel-Einstellungen bleiben in `settings.cfg` gespeichert.
 `tools/gen_xantia.py`, `tools/gen_leopard.py`, `tools/gen_one1.py` und `tools/gen_ui.py` erzeugen die Modelle und die
 Schrift unter `assets/`. Das macht `./run.sh` von selbst (braucht numpy, scipy, shapely und Pillow).
 Testläufe: `beanng-test buckle`, `tree`, `bomb`, `tank`, `tankcrash`, `one1`, `esp`.
+
+Am Spawn steht von jedem Modell eines. Sie schlafen, bis etwas sie trifft, und lassen sich anfahren und
+beschießen; ein Wrack bleibt auch beim Fahrzeugwechsel eines.
+
+Der Leopard ist nicht unzerstörbar: Ein direkter Treffer richtet etwa die Hälfte des Schadens an, der ihn
+vernichtet, und eine Explosion nahe am Laufwerk wirft die Kette ab. Am Ende geht die Munition hoch und der
+Turm fliegt davon. Harte Einschläge zählen ebenfalls. Der Zustand steht in der Anzeige unten links.
+
+Felsbrocken zerbrechen in Explosionen zu kleineren Brocken, Mauersteine direkt daneben werden pulverisiert.
 
 ## Bauen und starten
 

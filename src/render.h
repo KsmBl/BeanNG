@@ -38,6 +38,12 @@ struct Snapshot {
   u32 headNode = 0;
   u32 splitGeneration = 0;
   u32 carResets = 0;
+  std::vector<V3> parkedTrackPath[2];  // the Leopard that stands about
+  V3 parkedTrackLeft[2];
+  V3 trackLeft[2];
+  float parkedScorch[4] = {};
+  double tankArmour = 1;
+  bool tankDead = false;
   std::vector<u16> nodeObj;
   int objectCount = 0;
 

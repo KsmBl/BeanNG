@@ -202,6 +202,10 @@ class Vehicle {
   Tuning tune;
   bool absActive = false, espActive = false, tcsActive = false;
   void update(Sim& sim, const Controls& in, double dt);
+  // Makes this a vehicle standing at other indices of the same sim layout.
+  void shiftIndices(long nodes, long beams, long objects);
+  // Nobody is driving it, and it has come apart: from now on it is scrap.
+  void wreck(Sim& sim);
   // The bomb under the back seat.
   void detonate(Sim& sim);
   bool exploded = false;
@@ -258,6 +262,10 @@ struct CarRig {
   bool scratches = true;
   std::vector<NodeGroup> groups;
   std::vector<VisLink> links;
+  // What belongs to the vehicles parked about the place: their links come after the driven one's.
+  size_t playerLinks = size_t(-1);
+  struct NodeRange { u32 first = 0, count = 0; };
+  std::vector<NodeRange> parkedNodes;
 };
 
 

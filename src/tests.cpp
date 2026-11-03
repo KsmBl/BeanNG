@@ -2480,6 +2480,106 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "tankkill")) {
+    // Three shells at it, then into a wall, on a second one: nothing may blow up numerically, and it has to die.
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    s->world = w;
+    s->craterWorld = w;
+    Tank t = buildLeopard(*s, V3{130, 0, 0}, &r);
+    s->finalize();
+    t.settle(*s, 3.0);
+    const auto run = [&](double secs) {
+      Controls c;
+      for (int i = 0; i < int(secs * 2000); i++) {
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+      }
+    };
+    double top0 = 0;
+    for (u32 n : t.turretNodes) top0 = std::max(top0, s->pos[n].z);
+    for (int shot = 0; shot < 3; shot++) {
+      s->explode(t.cog + t.up * 1.9, 2200.0, 15.0);
+      double top = 0;
+      for (int i = 0; i < 12; i++) {
+        run(0.25);
+        for (u32 n : t.turretNodes) top = std::max(top, s->pos[n].z);
+      }
+      printf("Treffer %d: Schaden %.2f, zerstoert %d, Turm hoechstens %.1f m (war %.1f), Ketten ab %d/%d\n", shot + 1, t.damage, int(t.destroyed), top, top0, int(t.trackOff[0]), int(t.trackOff[1]));
+    }
+    run(8.0);
+    double maxV = 0;
+    size_t worst = 0;
+    bool bad = false;
+    for (size_t i = 0; i < s->pos.size(); i++) {
+      if (!(s->pos[i].x == s->pos[i].x) || std::fabs(s->pos[i].x) > 1e5) bad = true;
+      if (len(s->vel[i]) > maxV) {
+        maxV = len(s->vel[i]);
+        worst = i;
+      }
+    }
+    printf("schnellster Knoten %zu: Masse %.1f, z %.2f, Objekt %d\n", worst, s->mass[worst], s->pos[worst].z, int(s->nodeObj[worst]));
+    printf("danach: hoechste Knotengeschw. %.2f m/s, kaputte Zahlen %d, wach %zu\n", maxV, int(bad), s->active.size());
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "rocks")) {
+    // Boulders split, then vanish; stones of a wall right beside the blast are gone, those further off are not.
+    auto* w = new World();
+    auto* s = new Sim();
+    w->build();
+    s->world = w;
+    s->craterWorld = w;
+    populateWorld(*s, *w);
+    s->finalize();
+    V3 rock{};
+    size_t rocksAlive = 0;
+    for (const StaticBox& b : w->boxes())
+      if (b.surface == SURF_ROCK && b.h.x > 0) {
+        rocksAlive++;
+        if (std::max({b.h.x, b.h.y, b.h.z}) > 0.5 && rock.x == 0) rock = b.c;
+      }
+    const auto alive = [&] {
+      size_t n = 0;
+      for (const StaticBox& b : w->boxes()) n += b.surface == SURF_ROCK && b.h.x > 0;
+      return n;
+    };
+    printf("Felsen: %zu, Sprengung bei %.0f %.0f\n", rocksAlive, rock.x, rock.y);
+    for (int i = 0; i < 4; i++) {
+      const u32 gen = w->boxGeneration();
+      auto hits = w->breakRocks(rock, 6.0);
+      printf(" Durchgang %d: %zu zerbrochen, %zu Felsen da, Generation %u -> %u\n", i + 1, hits.size(), alive(), gen, w->boxGeneration());
+    }
+    w->clearCraters();
+    printf(" nach Zuruecksetzen: %zu\n", alive());
+    if (s->blocks.empty()) {
+      printf("keine Mauersteine\n");
+      return 0;
+    }
+    const auto mid = [&](const Block& b) {
+      V3 m{};
+      for (u32 n : b.n) m += s->pos[n];
+      return m * 0.125;
+    };
+    const V3 at = mid(s->blocks[s->blocks.size() / 2]);
+    s->explode(at + V3{0.8, 0, 0}, 2200.0, 15.0);
+    for (int i = 0; i < 6000; i++) {
+      s->forces(kDt);
+      s->finish(kDt);
+    }
+    size_t gone = 0, moved = 0;
+    double maxV = 0;
+    for (const Block& b : s->blocks) {
+      const V3 m = mid(b);
+      if (m.z < -100) gone++;
+      else if (len(m - s->rest[b.n[0]]) > 0.5) moved++;
+    }
+    for (const V3& v : s->vel) maxV = std::max(maxV, len(v));
+    printf("Mauer: %zu Steine, zerstoert %zu, weggeschleudert %zu, hoechste Knotengeschw. %.1f m/s, Stabilitaets-Eingriffe %llu\n", s->blocks.size(), gone, moved, maxV, (unsigned long long)s->clampedSteps);
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "tankcrash")) {
     // Into the end wall at full speed: how wildly do the track's points jump between frames?
     auto* w = new World();

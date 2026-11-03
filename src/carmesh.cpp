@@ -89,6 +89,67 @@ bool CarMesh::load(const std::string& path) {
   return true;
 }
 
+void CarMesh::addParked(const CarMesh& o, int k, V3 oSpawn, double oNose, V3 mySpawn, const std::vector<ParkedHub>& hubs) {
+  // Into my own design frame, which runs backwards from my nose, wherever in the world that lands it.
+  const auto toMine = [&](V3 w, float* out) {
+    out[0] = float(noseX - (w.x - mySpawn.x));
+    out[1] = float(w.y - mySpawn.y);
+    out[2] = float(w.z - mySpawn.z);
+  };
+  const auto append = [&](const MeshPart& p, const std::string& group, const std::string& suffix, auto mapPos, auto mapNormal, bool wheel) {
+    MeshPart q;
+    q.name = "p" + std::to_string(k) + "_" + p.name + suffix;
+    q.group = std::to_string(k) + ":" + group;
+    q.mat = p.mat;
+    q.instance = k;
+    q.firstVert = u32(restPos.size() / 3);
+    q.vertCount = p.vertCount;
+    q.firstTri = u32(tris.size() / 3);
+    q.triCount = p.triCount;
+    for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++) {
+      const V3 d{o.restPos[v * 3], o.restPos[v * 3 + 1], o.restPos[v * 3 + 2]};
+      const V3 n{o.restNormal[v * 3], o.restNormal[v * 3 + 1], o.restNormal[v * 3 + 2]};
+      float out[3];
+      toMine(mapPos(d), out);
+      restPos.insert(restPos.end(), out, out + 3);
+      const V3 nw = mapNormal(n);
+      restNormal.push_back(float(-nw.x));
+      restNormal.push_back(float(nw.y));
+      restNormal.push_back(float(nw.z));
+    }
+    for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++) {
+      u32 a = o.tris[t * 3] - p.firstVert + q.firstVert, b = o.tris[t * 3 + 1] - p.firstVert + q.firstVert, c = o.tris[t * 3 + 2] - p.firstVert + q.firstVert;
+      if (wheel) {
+        // The renderer takes the normal from the winding, seen in the mirrored design frame. Put it right.
+        const auto P = [&](u32 i) { return V3{restPos[i * 3], restPos[i * 3 + 1], restPos[i * 3 + 2]}; };
+        const V3 cr = cross(P(b) - P(a), P(c) - P(a));
+        const V3 nA{restNormal[a * 3], restNormal[a * 3 + 1], restNormal[a * 3 + 2]};
+        if (dot(cr, nA) < 0) std::swap(b, c);
+      }
+      tris.push_back(a);
+      tris.push_back(b);
+      tris.push_back(c);
+      const auto Q = [&](u32 i) { return V3{restPos[i * 3], restPos[i * 3 + 1], restPos[i * 3 + 2]}; };
+      restEdge2.push_back(float(len2(Q(b) - Q(a))));
+      restEdge2.push_back(float(len2(Q(c) - Q(b))));
+      restEdge2.push_back(float(len2(Q(a) - Q(c))));
+    }
+    parts.push_back(q);
+  };
+  for (const MeshPart& p : o.parts) {
+    if (p.group.rfind("wheel", 0) != 0) {
+      append(p, p.group, "", [&](V3 d) { return oSpawn + V3{oNose - d.x, d.y, d.z}; }, [](V3 n) { return V3{-n.x, n.y, n.z}; }, false);
+      continue;
+    }
+    for (size_t h = 0; h < hubs.size(); h++) {
+      const ParkedHub& hub = hubs[h];
+      const double side = hub.left ? 1.0 : -1.0;
+      // The wheel's own frame: x up, y out of its face, z along the car.
+      append(p, hub.group, "_" + std::to_string(h), [&, side](V3 d) { return hub.at + V3{-side * d.z, side * d.y * hub.width, d.x}; }, [side](V3 n) { return V3{-side * n.z, side * n.y, n.x}; }, true);
+    }
+  }
+}
+
 void CarMesh::bind(const std::vector<V3>& rest, const std::vector<NodeGroup>& groups, V3 spawn) {
   const size_t nv = restPos.size() / 3;
   bindNode.assign(nv * kK, 0);
@@ -108,7 +169,9 @@ void CarMesh::bind(const std::vector<V3>& rest, const std::vector<NodeGroup>& gr
       if (part.group.rfind("wheel", 0) != 0) fprintf(stderr, "mesh part %s: no node group '%s'\n", part.name.c_str(), part.group.c_str());
       continue;
     }
-    double partH = g->nodes.size() <= kK ? 50.0 : (part.group == "frame" ? 0.9 : (part.group == "hull" ? 3.0 : 0.45));
+    const size_t colon = part.group.find(':');
+    const std::string plain = colon == std::string::npos ? part.group : part.group.substr(colon + 1);
+    double partH = g->nodes.size() <= kK ? 50.0 : (plain == "frame" ? 0.9 : (plain == "hull" ? 3.0 : 0.45));
     for (int pass = 0; pass < 2; pass++)
     for (u32 v = part.firstVert; v < part.firstVert + part.vertCount; v++) {
       const V3 p = designToWorld(restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2], spawn, noseX);

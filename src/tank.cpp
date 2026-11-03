@@ -492,15 +492,20 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     // is what lets a tank turn at all. Taken separately, the scrub of 14 wheels would simply hold it straight.
     const double sx = slipX / 0.30, sy = dot(vC, l) / 0.28;
     const double sn = std::max(1.0, std::hypot(sx, sy));
-    const double Fx = mu * Fn * sx / sn;
-    const double Fy = -0.85 * mu * Fn * sy / sn;
+    // Without its track a wheel only rolls: no drive, no brake, and much less to hold it sideways.
+    const double Fx = trackOff[s] ? -0.12 * Fn * clampd(dot(vC, t) / 0.3, -1, 1) : mu * Fn * sx / sn;
+    const double Fy = (trackOff[s] ? -0.45 : -0.85) * mu * Fn * sy / sn;
     const V3 F = nBest * Fn + t * Fx + l * Fy;
     sim.force[w.in] += F * 0.5;
     sim.force[w.out] += F * 0.5;
-    Fsum[s] += Fx;
+    if (!trackOff[s]) Fsum[s] += Fx;
   }
   constexpr double kTrackInertia = 900.0;
   for (int s = 0; s < 2; s++) {
+    if (trackOff[s]) {
+      trackOmega[s] = 0;
+      continue;
+    }
     double om = trackOmega[s] + (Tside[s] - Fsum[s] * kSprocketR) * dt / kTrackInertia;
     // Rolling resistance of the track, and the brake bands. They can stop a track, not reverse it.
     double Fn = 0;
@@ -560,18 +565,176 @@ void Tank::updateShells(Sim& sim, double dt) {
   }
 }
 
+void Tank::throwTrack(Sim& sim, int side) {
+  if (trackOff[side]) return;
+  // It runs off the wheels and stays lying where this happened, whatever the tank then does.
+  std::vector<V3> path;
+  trackPath(sim, side, path);
+  double mid = 0;
+  for (const V3& p : path) mid += p.z;
+  mid /= std::max<size_t>(path.size(), 1);
+  for (V3& p : path) {
+    const bool upper = p.z > mid;
+    p.z = sim.world->height(p.x, p.y) + (upper ? 0.09 : 0.035);
+  }
+  thrown_[side] = std::move(path);
+  thrownLeft_[side] = left;
+  trackOff[side] = true;
+  trackOmega[side] = 0;
+  sim.event(EV_ROCK, thrown_[side][thrown_[side].size() / 2], V3{}, 0.3f);
+}
+
+void Tank::takeHit(Sim& sim, double hit, V3 at) {
+  damage += hit;
+  // The hull gives where it was hit: what is drawn over it follows.
+  const double scale = std::min(hit / 0.5, 1.0);
+  for (u16 oi : {hullObj, turretObj})
+    for (u32 bi : sim.objs[oi].beamList) {
+      Beam& b = sim.beams[bi];
+      if (b.flags & BF_BROKEN) continue;
+      const double d = len((sim.pos[b.a] + sim.pos[b.b]) * 0.5 - at);
+      if (d < 2.2) b.L0 *= 1.0 - 0.07 * scale * (1.0 - d / 2.2);
+    }
+  if (damage >= 1.0) destroy(sim);
+}
+
+void Tank::checkDamage(Sim& sim, double dt) {
+  // A blast: what counts is how close it got.
+  if (sim.blastCount != blastSeen_) {
+    blastSeen_ = sim.blastCount;
+    const V3 c = sim.lastBlast;
+    double dmin = 1e9;
+    for (u16 oi : {hullObj, turretObj})
+      for (u32 n : sim.objs[oi].nodes) dmin = std::min(dmin, len(sim.pos[n] - c));
+    if (sim.lastBlastRadius > 0 && dmin < sim.lastBlastRadius) {
+      const double reach = std::min(1.3 / std::max(dmin, 0.3), 1.0);
+      const double hit = 0.55 * (sim.lastBlastImpulse / 2200.0) * reach * reach;
+      if (hit > 0.01) {
+        // Low down beside it, it is the running gear that takes it.
+        const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
+        const double ground = sim.world->height(c.x, c.y);
+        if (hit >= 0.15 && c.z - ground < 1.1) throwTrack(sim, dot(c - O, left) > 0 ? 0 : 1);
+        takeHit(sim, hit, c);
+      }
+    }
+  }
+  // A crash: a sudden change in speed, against what the hull was doing a moment ago.
+  crashHold_ -= dt;
+  const double jump = len(vCog - vSlow_);
+  vSlow_ += (vCog - vSlow_) * clampd(dt / 0.12, 0, 1);
+  if (jump > 7.0 && crashHold_ <= 0) {
+    crashHold_ = 0.4;
+    const double over = (jump - 7.0) / 13.0;
+    const V3 at = cog + norm(vSlow_ - vCog) * -3.0;
+    takeHit(sim, over * over * 0.8, at);
+    if (jump > 13.0) {
+      throwTrack(sim, 0);
+      throwTrack(sim, 1);
+    }
+  }
+}
+
+void Tank::destroy(Sim& sim) {
+  if (destroyed) return;
+  destroyed = true;
+  burnTime = 0;
+  engineOmega = 0;
+  loadNow = throttleAct = 0;
+  throwTrack(sim, 0);
+  throwTrack(sim, 1);
+  const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
+  for (u16 oi : {hullObj, turretObj}) {
+    Obj& o = sim.objs[oi];
+    o.armoured = false;
+    o.kind = OBJ_PROP;
+    o.alwaysAwake = false;
+    for (u32 bi : o.beamList) {
+      Beam& b = sim.beams[bi];
+      b.yC *= 0.45;
+      b.yT *= 0.45;
+      if (b.fBreak > 0) b.fBreak *= 0.5;
+    }
+  }
+  // Without the track forces the wheels have to find the ground themselves.
+  for (const RoadWheel& w : wheels) {
+    sim.flags[w.in] |= NF_COLLIDE;
+    sim.flags[w.out] |= NF_COLLIDE;
+  }
+  // The same for the turret: until now it was held, from here on it has to land.
+  for (u32 n : sim.objs[turretObj].nodes) sim.flags[n] |= NF_COLLIDE;
+  // The ammunition in the hull goes up, and the turret goes with it: nothing holds it but its own weight.
+  const double a = double(sim.stepCount % 628) * 0.01;
+  const V3 kick = up * 11.0 + V3{std::cos(a), std::sin(a), 0} * 2.5;
+  const V3 spin = norm(V3{std::sin(a * 3.0), std::cos(a * 2.0), 0.4}) * 1.1;
+  V3 tc{};
+  for (u32 n : turretNodes) tc += sim.pos[n];
+  tc = tc / std::max<size_t>(turretNodes.size(), 1);
+  for (u32 n : sim.objs[turretObj].nodes) sim.vel[n] += kick + cross(spin, sim.pos[n] - tc);
+  sim.explode(O + up * 0.2, 3500.0, 9.0);
+  blastSeen_ = sim.blastCount;
+}
+
+void Tank::tickFire(Sim& sim, double dt) {
+  if (destroyed) {
+    burnTime += dt;
+    // Once down, a turret on its edge would otherwise roll away like a coin: it is nine tonnes of steel on tarmac.
+    if (burnTime > 1.0 && sim.objs[turretObj].awake)
+      for (u32 n : sim.objs[turretObj].nodes)
+        if (sim.pos[n].z < sim.world->height(sim.pos[n].x, sim.pos[n].y) + 2.5) sim.force[n] -= sim.vel[n] * (sim.mass[n] * 2.0);
+    if ((sim.stepCount & 31) == 0 && burnTime < 75.0) {
+      const double fierce = clampd(1.0 - burnTime / 75.0, 0.2, 1.0);
+      sim.event(EV_FIRE, cog + fwd * ((sim.stepCount % 7) * 0.5 - 1.5) + up * 0.1, V3{}, float(fierce));
+    }
+  } else if (damage > 0.5 && (sim.stepCount & 127) == 0) {
+    // Something inside it has started to smoulder.
+    sim.event(EV_FIRE, cog + fwd * -1.5 + up * 0.6, V3{}, 0.15f);
+  }
+}
+
 void Tank::update(Sim& sim, const Controls& in, double dt) {
   updateFrame(sim, dt);
+  tickFire(sim, dt);
+  if (destroyed) {
+    updateShells(sim, dt);
+    return;
+  }
+  checkDamage(sim, dt);
+  if (destroyed) return;
   dampHull(sim, dt);
+  // The reference nodes do not lie level on the hull: this is what was straight up when it was built.
+  const V3 restFwd = norm(sim.rest[refFL] + sim.rest[refFR] - sim.rest[refRL] - sim.rest[refRR]);
+  const V3 restUp = norm(cross(restFwd, sim.rest[refFL] + sim.rest[refRL] - sim.rest[refFR] - sim.rest[refRR]));
+  const V3 levelUp = fwd * restFwd.z + up * restUp.z;
   // What the track follows: wheel height against the hull, within the travel it really has.
   for (size_t i = 0; i < wheels.size() && i < 14; i++) {
     const V3 hub = (sim.pos[wheels[i].in] + sim.pos[wheels[i].out]) * 0.5;
-    const double lift = clampd(dot(hub - sim.pos[idler[wheels[i].left ? 0 : 1][0]], up) - (kWheelR - kIdlerZ), -0.22, 0.30);
+    const double lift = clampd(dot(hub - sim.pos[idler[wheels[i].left ? 0 : 1][0]], levelUp) - (kWheelR - kIdlerZ), -0.22, 0.30);
     wheelLift_[i] += (lift - wheelLift_[i]) * clampd(dt / 0.02, 0, 1);
   }
   updateTurret(sim, in, dt);
   updateDrive(sim, in, dt);
   updateShells(sim, dt);
+}
+
+void Tank::shiftIndices(long dn, long, long dobj) {
+  const auto N = [&](u32& i) { i = u32(long(i) + dn); };
+  hullObj = u16(long(hullObj) + dobj);
+  turretObj = u16(long(turretObj) + dobj);
+  for (RoadWheel& w : wheels) {
+    N(w.in);
+    N(w.out);
+  }
+  for (auto* list : {&rigidNodes_, &turretNodes, &gunNodes})
+    for (u32& n : *list) N(n);
+  N(refFL);
+  N(refFR);
+  N(refRL);
+  N(refRR);
+  N(refBottom);
+  for (auto& a : sprocket)
+    for (u32& n : a) N(n);
+  for (auto& a : idler)
+    for (u32& n : a) N(n);
 }
 
 void Tank::settle(Sim& sim, double seconds) {
@@ -586,18 +749,26 @@ void Tank::settle(Sim& sim, double seconds) {
 }
 
 void Tank::trackPath(const Sim& sim, int side, std::vector<V3>& out) const {
+  if (trackOff[side]) {
+    out = thrown_[side];
+    return;
+  }
   out.clear();
   // Everything in the hull's own frame and at its fixed place along the hull, with only the wheels'
   // smoothed height free to change. So the track keeps its length and shape whatever the hull goes
   // through, as a real one under tension does, and it still follows every bump.
   const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
   const V3 O0 = (sim.rest[refFL] + sim.rest[refFR] + sim.rest[refRL] + sim.rest[refRR]) * 0.25;
+  const V3 restFwd = norm(sim.rest[refFL] + sim.rest[refFR] - sim.rest[refRL] - sim.rest[refRR]);
+  const V3 restUp = norm(cross(restFwd, sim.rest[refFL] + sim.rest[refRL] - sim.rest[refFR] - sim.rest[refRR]));
+  const V3 restLeft = cross(restUp, restFwd);
   const double groundZ = sim.rest[idler[side][0]].z - kIdlerZ;
   const double y = (side == 0 ? 1.0 : -1.0) * kTrackY;
   const double noseWorldX = sim.rest[idler[side][0]].x + kIdlerX;  // where design x = 0 was built
   auto P = [&](double x, double z) {
-    const double f = (noseWorldX - x) - O0.x;
-    return O + fwd * f + left * y + up * (z + groundZ - O0.z);
+    // Where it was built, seen from the reference nodes, which do not lie level on the hull.
+    const V3 d{(noseWorldX - x) - O0.x, y, z + groundZ - O0.z};
+    return O + fwd * dot(d, restFwd) + left * dot(d, restLeft) + up * dot(d, restUp);
   };
   auto arc = [&](double cx, double cz, double r, double a0, double a1, int n) {
     // Angle measured towards the front of the tank, which is decreasing design x.

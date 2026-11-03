@@ -67,6 +67,9 @@ class World {
     double x, y, r;
   };
   void addCrater(double x, double y, double r, double depth);
+  // Boulders in reach of a blast split into smaller ones, and the small ones are gone. Returns where it happened.
+  std::vector<std::pair<V3, double>> breakRocks(V3 c, double reach);
+  u32 boxGeneration() const { return boxGeneration_; }
   void clearCraters();
   const std::vector<Crater>& craters() const { return craters_; }
 
@@ -95,6 +98,10 @@ class World {
   bool levelled_ = false;
   std::vector<Place> places_;
   std::vector<Crater> craters_;
+  std::vector<StaticBox> boxes0_;
+  std::vector<std::vector<u16>> boxGrid0_;
+  u32 boxGeneration_ = 0;
+  u32 chipSeed_ = 77;
   std::vector<float> h0_;
   std::vector<u8> surf0_;
   static constexpr double kBoxCell = 8.0;

@@ -57,13 +57,32 @@ class Tank {
   double fuel = 1160;
   double rpm() const { return engineOmega * 60.0 / (2.0 * PI); }
 
+  // Damage. A direct hit does about half of what it takes; beside the running gear it throws the track off.
+  // At the end the ammunition goes up, and that is the end of the tank.
+  double damage = 0;
+  bool destroyed = false;
+  double burnTime = 0;
+  bool trackOff[2] = {false, false};
+  V3 trackWidthDir(int side) const { return trackOff[side] ? thrownLeft_[side] : left; }
+
   void update(Sim& sim, const Controls& in, double dt);
+  void tickFire(Sim& sim, double dt);  // goes on burning while the wreck itself sleeps
+  void shiftIndices(long nodes, long beams, long objects);
   void settle(Sim& sim, double seconds);
   // The closed line of the track around sprocket, wheels and idler, in world space.
   void trackPath(const Sim& sim, int side, std::vector<V3>& out) const;
 
  private:
   V3 prevV_;
+  V3 vSlow_;
+  double crashHold_ = 0;
+  u32 blastSeen_ = 0;
+  std::vector<V3> thrown_[2];
+  V3 thrownLeft_[2];
+  void takeHit(Sim& sim, double hit, V3 at);
+  void checkDamage(Sim& sim, double dt);
+  void throwTrack(Sim& sim, int side);
+  void destroy(Sim& sim);
   double wheelLift_[14] = {};        // road wheel height against the hull, smoothed, as drawn
   void dampHull(Sim& sim, double dt);
   double tetDet_ = 0;

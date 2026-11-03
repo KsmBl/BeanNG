@@ -92,7 +92,7 @@ struct Obj {
 // Beam tags of trees: their breaking is heard and seen differently from steel.
 constexpr u8 kTagWood = 200, kTagBranch = 201;
 
-enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH };
+enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH, EV_ROCK };
 struct SimEvent {
   V3 p, v;
   float strength;
@@ -135,6 +135,10 @@ class Sim {
   u32 brokenBeams = 0;
   u64 stepCount = 0;
   size_t statTriPairs = 0, statBlockPairs = 0;
+  u32 blastCount = 0;   // for whoever wants to know what just went off
+  V3 lastBlast;
+  double lastBlastRadius = 0, lastBlastImpulse = 0;
+  u32 firstSceneryNode = 0;  // what comes before is drawn as vehicles, what comes after from its triangles
   u32 splitGeneration = 0;  // goes up whenever an object tears into pieces
   u64 clampedSteps = 0;  // times the per-step velocity guard had to act: should stay at zero
 

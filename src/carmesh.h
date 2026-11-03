@@ -28,6 +28,7 @@ struct MeshPart {
   u32 firstVert = 0, vertCount = 0;
   u32 firstTri = 0, triCount = 0;
   bool bound = false;  // false for wheel parts, which are drawn with a matrix
+  int instance = -1;   // -1 the vehicle being driven, otherwise which of the parked ones
 };
 
 struct CarMesh {
@@ -42,6 +43,15 @@ struct CarMesh {
   std::vector<float> bindWeight;  // kK per vertex
 
   bool load(const std::string& path);
+  // Adds another vehicle's whole mesh, standing where its nodes are. Its parts bind to groups named "k:name".
+  // hubs are the wheels at rest, with which side and how wide: its wheels stand still, so they become parts too.
+  struct ParkedHub {
+    V3 at;
+    bool left;
+    float width;
+    std::string group;
+  };
+  void addParked(const CarMesh& other, int k, V3 otherSpawn, double otherNose, V3 mySpawn, const std::vector<ParkedHub>& hubs);
   // Computes the weights. toWorld maps a design position to the world position at rest.
   void bind(const std::vector<V3>& restNodes, const std::vector<NodeGroup>& groups, V3 spawn);
   // After a tear: each vertex that follows nodes of several pieces is re-fitted to one of them, so the

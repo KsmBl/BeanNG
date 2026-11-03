@@ -1,4 +1,5 @@
 #include "render.h"
+#include <array>
 #include <epoxy/gl.h>
 #include <algorithm>
 #include <chrono>
@@ -558,6 +559,7 @@ struct Renderer::Impl {
   std::vector<Chunk> chunks[2];  // near/far LOD
   GLuint staticVao = 0, staticVbo = 0;
   GLsizei staticCount = 0;  // roads, markings and static boxes
+  u32 builtBoxGeneration = 0;
   V3 origin;                // static meshes are stored relative to the world origin
 
   // Flexbody mesh, deformed on the CPU from the node snapshot every frame.
@@ -761,7 +763,7 @@ struct Renderer::Impl {
     std::vector<float> restN(nv * 3, 0.f);
     scratchGrid.assign(size_t(kGridX) * kGridY * kGridZ, {});
     for (const MeshPart& p : M.parts) {
-      if (!p.bound) continue;
+      if (!p.bound || p.instance >= 0) continue;
       // Only the outer skin takes scratches. Glass, lenses and everything inside stay as they are.
       const bool skin = p.mat == MM_PAINT || p.mat == MM_BLACK || p.mat == MM_DARK || p.mat == MM_CHROME || p.mat == MM_PEARL || p.mat == MM_CARBON || p.mat == MM_ACCENT || p.mat == MM_SAND;
       const bool outer = p.group != "frame" && p.group != "engine" && p.group != "gearbox" && p.group != "radiator" && p.group != "battery" && p.group != "tank";
@@ -1312,8 +1314,11 @@ struct Renderer::Impl {
         }
     }
     staticCount = GLsizei(v.size());
-    glGenVertexArrays(1, &staticVao);
-    glGenBuffers(1, &staticVbo);
+    builtBoxGeneration = world->boxGeneration();
+    if (!staticVao) {
+      glGenVertexArrays(1, &staticVao);
+      glGenBuffers(1, &staticVbo);
+    }
     glBindVertexArray(staticVao);
     glBindBuffer(GL_ARRAY_BUFFER, staticVbo);
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(Vtx)), v.data(), GL_STATIC_DRAW);
@@ -1330,9 +1335,11 @@ struct Renderer::Impl {
   // Track links: boxes spaced along the track's line, moving with the track.
   GLuint trackVao = 0, trackVbo = 0;
   std::vector<Vtx> trackVerts;
+  size_t trackDriven = 0;
   void updateTrack(const Snapshot& s) {
     trackVerts.clear();
-    if (!s.tank) return;
+    trackDriven = 0;
+    if (!s.tank && s.parkedTrackPath[0].empty()) return;
     if (!trackVao) {
       glGenVertexArrays(1, &trackVao);
       glGenBuffers(1, &trackVbo);
@@ -1342,8 +1349,10 @@ struct Renderer::Impl {
     }
     const MatDef& md = kMats[MM_TRACK];
     constexpr double kPitch = 0.19, kThick = 0.05, kHalfW = 0.275;
-    for (int side = 0; side < 2; side++) {
-      const std::vector<V3>& path = s.trackPath[side];
+    for (int side = 0; side < 4; side++) {
+      // The driven tank's two tracks, then the two of the one that stands about.
+      if (side == 2) trackDriven = trackVerts.size();
+      const std::vector<V3>& path = side < 2 ? s.trackPath[side] : s.parkedTrackPath[side - 2];
       const size_t n = path.size();
       if (n < 3) continue;
       double total = 0;
@@ -1352,10 +1361,10 @@ struct Renderer::Impl {
       const double step = total / links;
       // Above a few m/s single links only strobe at 60 frames a second, as a wagon wheel does. To the
       // eye a fast track is a smooth blur, so here the links close up into one belt.
-      const double closeUp = clampd((std::fabs(s.trackSpeed[side]) - 2.5) / 3.0, 0, 1);
+      const double closeUp = side < 2 ? clampd((std::fabs(s.trackSpeed[side]) - 2.5) / 3.0, 0, 1) : 0.0;
       const double kLen = lerpd(step * 0.86, step * 1.04, closeUp);
       // In the blur the pattern stands still instead of crawling or running backwards.
-      double along = closeUp >= 1.0 ? 0.0 : std::fmod(s.trackPhase[side], step);
+      double along = closeUp >= 1.0 ? 0.0 : std::fmod(side < 2 ? s.trackPhase[side] : 0.0, step);
       if (along < 0) along += step;
       size_t seg = 0;
       double segStart = 0;
@@ -1371,7 +1380,7 @@ struct Renderer::Impl {
         const double L = std::max(len(b - a), 1e-6);
         const V3 t = (b - a) / L;
         const V3 c = a + t * (d - segStart);
-        const V3 w = s.carLeft;
+        const V3 w = side < 2 ? s.trackLeft[side] : s.parkedTrackLeft[side - 2];
         const V3 o = norm(cross(t, w));  // out of the track's plane
         const V3 lf = t * (kLen * 0.5), wd = w * kHalfW, up = o * (kThick * 0.5);
         const V3 corner[8] = {c - lf - wd - up, c + lf - wd - up, c + lf + wd - up, c - lf + wd - up, c - lf - wd + up, c + lf - wd + up, c + lf + wd + up, c - lf + wd + up};
@@ -1383,6 +1392,13 @@ struct Renderer::Impl {
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(trackVerts.size() * sizeof(Vtx)), trackVerts.data(), GL_STREAM_DRAW);
   }
 
+  std::vector<u8> parkedDirty;
+  std::vector<V3> parkedPrint;
+  std::vector<std::array<std::vector<u32>, 3>> parkedLists;  // body, glass, lenses
+  std::vector<std::pair<u32, u32>> parkedRange;              // first vertex, one past the last
+  std::vector<u32> parkedIdx;
+  size_t parkedIdxCount[3] = {};
+  bool carBuffersMade = false;
   std::vector<size_t> steerParts;
   int steerRim = -1;
   void updateCar(const Snapshot& s) {
@@ -1403,8 +1419,33 @@ struct Renderer::Impl {
     }
     constexpr int K = CarMesh::kK;
     const V3* pos = s.pos.data();
+    // A parked vehicle costs nothing until something has actually moved it: most of the mesh is theirs.
+    const size_t parkedCount = rig->parkedNodes.size();
+    if (parkedDirty.size() != parkedCount) {
+      parkedDirty.assign(parkedCount, 1);
+      parkedPrint.assign(parkedCount, V3{1e30, 0, 0});
+      parkedLists.assign(parkedCount, {});
+      parkedRange.assign(parkedCount, {u32(nv), 0u});
+      for (const MeshPart& p : M.parts)
+        if (p.instance >= 0) {
+          auto& r = parkedRange[size_t(p.instance)];
+          r.first = std::min(r.first, p.firstVert);
+          r.second = std::max(r.second, p.firstVert + p.vertCount);
+        }
+    }
+    bool anyParkedDirty = false;
+    for (size_t k = 0; k < parkedCount; k++) {
+      const auto& range = rig->parkedNodes[k];
+      V3 sum{};
+      for (u32 n = range.first; n < range.first + range.count; n++) sum += pos[n];
+      parkedDirty[k] = !(sum.x == parkedPrint[k].x && sum.y == parkedPrint[k].y && sum.z == parkedPrint[k].z);
+      parkedPrint[k] = sum;
+      if (parkedDirty[k]) anyParkedDirty = true;
+    }
+    const auto skip = [&](const MeshPart& p) { return p.instance >= 0 && !parkedDirty[size_t(p.instance)]; };
+    const size_t drivenVerts = parkedCount ? size_t(parkedRange[0].first) : nv;
     for (const MeshPart& p : M.parts) {
-      if (!p.bound) continue;
+      if (!p.bound || skip(p)) continue;
       for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++) {
         const u32* idx = &M.bindNode[size_t(v) * K];
         const float* wg = &M.bindWeight[size_t(v) * K];
@@ -1464,16 +1505,22 @@ struct Renderer::Impl {
     carIdx.clear();
     glassIdx.clear();
     lensIdx.clear();
-    std::fill(nrmAccum.begin(), nrmAccum.end(), 0.f);
+    std::fill(nrmAccum.begin(), nrmAccum.begin() + long(drivenVerts) * 3, 0.f);
+    for (size_t k = 0; k < parkedCount; k++)
+      if (parkedDirty[k]) {
+        std::fill(nrmAccum.begin() + long(parkedRange[k].first) * 3, nrmAccum.begin() + long(parkedRange[k].second) * 3, 0.f);
+        for (auto& l : parkedLists[k]) l.clear();
+      }
     constexpr float kTear = 1.45f * 1.45f;
     constexpr float kShatter = 1.04f * 1.04f;
     for (size_t pi = 0; pi < M.parts.size(); pi++) {
       const MeshPart& p = M.parts[pi];
-      if (!p.bound) continue;
+      if (!p.bound || skip(p)) continue;
       const bool isGlass = p.mat == MM_GLASS;
-      if (partHidden[pi] || (xrayNow && !isMechanical(p))) continue;
-      if (s.scorch > 0 && (p.mat == MM_GLASS || p.mat == MM_LENS)) continue;
-      auto& list = isGlass ? glassIdx : (p.mat == MM_LENS ? lensIdx : carIdx);
+      const bool parked = p.instance >= 0;
+      if (partHidden[pi] || (!parked && xrayNow && !isMechanical(p))) continue;
+      if (!parked && s.scorch > 0 && (p.mat == MM_GLASS || p.mat == MM_LENS)) continue;
+      auto& list = parked ? parkedLists[size_t(p.instance)][isGlass ? 1 : (p.mat == MM_LENS ? 2 : 0)] : (isGlass ? glassIdx : (p.mat == MM_LENS ? lensIdx : carIdx));
       u32 overstrained = 0;
       for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++) {
         const u32 a = M.tris[t * 3], b = M.tris[t * 3 + 1], c = M.tris[t * 3 + 2];
@@ -1492,7 +1539,7 @@ struct Renderer::Impl {
           if (l1 > kShatter * rest[0] + 1e-5f || l2 > kShatter * rest[1] + 1e-5f || l3 > kShatter * rest[2] + 1e-5f) {
             if (++overstrained > std::max(4u, p.triCount / 25)) {
               partHidden[pi] = 1;
-              spawnGlass(V3{A.x, A.y, A.z}, s.carVel);
+              spawnGlass(V3{A.x, A.y, A.z}, parked ? V3{} : s.carVel);
               break;
             }
           }
@@ -1512,24 +1559,46 @@ struct Renderer::Impl {
         list.push_back(c);
       }
     }
-    for (size_t v = 0; v < nv; v++) {
-      const float nx = nrmAccum[v * 3], ny = nrmAccum[v * 3 + 1], nz = nrmAccum[v * 3 + 2];
-      const float l = std::sqrt(nx * nx + ny * ny + nz * nz) + 1e-12f;
-      carVerts[v].nx = nx / l;
-      carVerts[v].ny = ny / l;
-      carVerts[v].nz = nz / l;
-    }
+    const auto finishNormals = [&](size_t from, size_t to) {
+      for (size_t v = from; v < to; v++) {
+        const float nx = nrmAccum[v * 3], ny = nrmAccum[v * 3 + 1], nz = nrmAccum[v * 3 + 2];
+        const float l = std::sqrt(nx * nx + ny * ny + nz * nz) + 1e-12f;
+        carVerts[v].nx = nx / l;
+        carVerts[v].ny = ny / l;
+        carVerts[v].nz = nz / l;
+      }
+    };
+    finishNormals(0, drivenVerts);
+    for (size_t k = 0; k < parkedCount; k++)
+      if (parkedDirty[k]) finishNormals(parkedRange[k].first, parkedRange[k].second);
+
+    // Only what changed goes to the card: the parked vehicles at the front of each index list, the driven
+    // one behind them, and of the vertices the driven one and whichever parked vehicle moved.
     glBindBuffer(GL_ARRAY_BUFFER, carVbo);
-    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(carVerts.size() * sizeof(Vtx)), carVerts.data(), GL_STREAM_DRAW);
-    glBindVertexArray(carVao);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, carIbo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(carIdx.size() * sizeof(u32)), carIdx.data(), GL_STREAM_DRAW);
-    glBindVertexArray(carGlassVao);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, carGlassIbo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(glassIdx.size() * sizeof(u32)), glassIdx.data(), GL_STREAM_DRAW);
-    glBindVertexArray(lensVao);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lensIbo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(lensIdx.size() * sizeof(u32)), lensIdx.data(), GL_STREAM_DRAW);
+    const bool firstUpload = !carBuffersMade;
+    if (firstUpload) {
+      glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(carVerts.size() * sizeof(Vtx)), carVerts.data(), GL_DYNAMIC_DRAW);
+    } else {
+      glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(drivenVerts * sizeof(Vtx)), carVerts.data());
+      for (size_t k = 0; k < parkedCount; k++)
+        if (parkedDirty[k]) glBufferSubData(GL_ARRAY_BUFFER, GLsizeiptr(parkedRange[k].first * sizeof(Vtx)), GLsizeiptr((parkedRange[k].second - parkedRange[k].first) * sizeof(Vtx)), carVerts.data() + parkedRange[k].first);
+    }
+    const GLuint vaos[3] = {carVao, carGlassVao, lensVao};
+    const GLuint ibos[3] = {carIbo, carGlassIbo, lensIbo};
+    const std::vector<u32>* driven[3] = {&carIdx, &glassIdx, &lensIdx};
+    for (int i = 0; i < 3; i++) {
+      glBindVertexArray(vaos[i]);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibos[i]);
+      if (firstUpload) glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(M.tris.size() * sizeof(u32)), nullptr, GL_DYNAMIC_DRAW);
+      if (firstUpload || anyParkedDirty) {
+        parkedIdx.clear();
+        for (const auto& lists : parkedLists) parkedIdx.insert(parkedIdx.end(), lists[size_t(i)].begin(), lists[size_t(i)].end());
+        parkedIdxCount[i] = parkedIdx.size();
+        if (!parkedIdx.empty()) glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(parkedIdx.size() * sizeof(u32)), parkedIdx.data());
+      }
+      if (!driven[i]->empty()) glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(parkedIdxCount[i] * sizeof(u32)), GLsizeiptr(driven[i]->size() * sizeof(u32)), driven[i]->data());
+    }
+    carBuffersMade = true;
   }
 
   void buildWheelParts() {
@@ -1628,7 +1697,7 @@ struct Renderer::Impl {
   void updateProps(const Snapshot& s, const V3& camPos) {
     propVerts.clear();
     constexpr double kDraw2 = 1000.0 * 1000.0;
-    const u32 firstProp = sim->objs[0].nodeCount;
+    const u32 firstProp = std::max(sim->firstSceneryNode, sim->objs[0].nodeCount);
     for (const Tri& t : sim->tris) {
       if ((t.flags & TF_NOVIS) || t.a < firstProp) continue;
       const V3& a = s.pos[t.a];
@@ -1732,6 +1801,37 @@ struct Renderer::Impl {
         case EV_GLASS:
           spawnGlass(e.p, e.v);
           break;
+        case EV_ROCK: {
+          // Rubble and stone dust.
+          const float size = std::max(e.strength, 0.25f);
+          const int rubble = 18 + int(size * 30.f);
+          for (int i = 0; i < rubble; i++) {
+            Particle q;
+            const V3 d = norm(V3{rnd(-1, 1), rnd(-1, 1), rnd(.1f, 1.4f)});
+            q.p = e.p + d * rnd(0.f, size);
+            q.v = d * rnd(2.f, 14.f);
+            q.maxLife = q.life = rnd(.8f, 2.2f);
+            q.size = rnd(.03f, .10f + size * .08f);
+            const float g = rnd(.25f, .48f);
+            q.r = g; q.g = g * .97f; q.b = g * .92f; q.a = 1.f;
+            q.gravity = 9.81f;
+            q.drag = .2f;
+            particles.push_back(q);
+          }
+          for (int i = 0; i < 10 + int(size * 8.f); i++) {
+            Particle q;
+            q.p = e.p + V3{rnd(-size, size), rnd(-size, size), rnd(0.f, size)};
+            q.v = V3{rnd(-2, 2), rnd(-2, 2), rnd(.5f, 3.f)};
+            q.maxLife = q.life = rnd(1.2f, 3.5f);
+            q.size = rnd(.3f, .7f) * (.6f + size * .5f);
+            const float g = rnd(.5f, .62f);
+            q.r = g; q.g = g * .96f; q.b = g * .9f; q.a = .28f;
+            q.gravity = -.25f;
+            q.drag = 1.8f;
+            particles.push_back(q);
+          }
+          break;
+        }
         case EV_WOOD:
         case EV_BRANCH: {
           // Splinters off a trunk, a puff of needles off a branch.
@@ -2151,8 +2251,9 @@ struct Renderer::Impl {
         row(IC_TURRET, "Rohr", float((s.gunPitch * 57.3 + 9.0) / 29.0), teal, buf);
         snprintf(buf, sizeof buf, "%.0f L", s.fuel);
         row(IC_FUEL, "Tank", float(s.fuel / 1160.0), green, buf);
-        snprintf(buf, sizeof buf, "%.0f %%", s.engineLoad * 100.0);
-        row(IC_ENGINE, "Last", float(s.engineLoad), amber, buf);
+        if (s.tankDead) snprintf(buf, sizeof buf, "zerstört");
+        else snprintf(buf, sizeof buf, "%.0f %%", s.tankArmour * 100.0);
+        row(IC_ENGINE, "Zustand", float(s.tankArmour), s.tankDead || s.tankArmour < 0.34 ? red : (s.tankArmour < 0.67 ? amber : green), buf);
         ry += 28 * u;
       }
       // Pedals, as two bars side by side at the end of the card.
@@ -2582,7 +2683,9 @@ void Renderer::clearSkidMarks() {
 }
 
 void Renderer::resetDamage() {
-  std::fill(d->partHidden.begin(), d->partHidden.end(), u8(0));
+  // Parked vehicles stay as broken as they are.
+  for (size_t i = 0; i < d->partHidden.size(); i++)
+    if (d->mesh->parts[i].instance < 0) d->partHidden[i] = 0;
   std::fill(d->scratchPx.begin(), d->scratchPx.end(), u8(0));
   d->uploadScratches(true);
   d->particles.clear();
@@ -2614,6 +2717,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     D.seenSplit = s.splitGeneration;
   }
   auto tp1 = std::chrono::steady_clock::now();
+  if (D.world->boxGeneration() != D.builtBoxGeneration) D.buildStatic();  // a boulder has gone
   D.updateCar(s);
   auto tp2 = std::chrono::steady_clock::now();
   D.updateProps(s, cam.eye);
@@ -2663,17 +2767,33 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     D.setMat(prog, "uModel", I);
     D.setMat(prog, "uPrevWorld", D.carPrevWorld);
     glBindVertexArray(D.carVao);
-    glDrawElements(GL_TRIANGLES, GLsizei(D.carIdx.size()), GL_UNSIGNED_INT, nullptr);
+    glDrawElements(GL_TRIANGLES, GLsizei(D.carIdx.size()), GL_UNSIGNED_INT, (void*)(D.parkedIdxCount[0] * sizeof(u32)));
     D.setMat(prog, "uPrevWorld", I);
     const GLint uScorchLoc = glGetUniformLocation(prog, "uScorch");
     if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
+    // What stands about stands still in the world, and did not burn along with the driven car.
+    {
+      size_t first = 0;
+      for (size_t k = 0; k < D.parkedLists.size(); k++) {
+        const size_t count = D.parkedLists[k][0].size();
+        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 4 ? s.parkedScorch[k] : 0.f);
+        if (count) glDrawElements(GL_TRIANGLES, GLsizei(count), GL_UNSIGNED_INT, (void*)(first * sizeof(u32)));
+        first += count;
+      }
+      if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
+    }
     glBindVertexArray(D.propVao);
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.propVerts.size()));
     if (uScorchLoc >= 0) glUniform1f(uScorchLoc, float(s.scorch));
     D.setMat(prog, "uPrevWorld", D.carPrevWorld);
     // Running gear: arms, shafts and struts between their real nodes.
     glBindVertexArray(D.rodVao);
-    for (const VisLink& l : D.rig->links) {
+    for (size_t li = 0; li < D.rig->links.size(); li++) {
+      const VisLink& l = D.rig->links[li];
+      if (li == D.rig->playerLinks) {
+        D.setMat(prog, "uPrevWorld", I);
+        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
+      }
       const V3 a = s.pos[l.a], b = s.pos[l.b];
       const double restL = len(D.sim->rest[l.b] - D.sim->rest[l.a]);
       if (len(b - a) > restL * 1.6) continue;  // torn off
@@ -2692,10 +2812,14 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
       glDrawArrays(GL_TRIANGLES, l.mat * D.rodCount, D.rodCount);
     }
     D.setMat(prog, "uModel", I);
-    if (s.tank && !D.trackVerts.empty()) {
+    if (!D.trackVerts.empty()) {
       glBindVertexArray(D.trackVao);
-      glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.trackVerts.size()));
+      D.setMat(prog, "uPrevWorld", D.carPrevWorld);
+      glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.trackDriven));
+      D.setMat(prog, "uPrevWorld", I);
+      glDrawArrays(GL_TRIANGLES, GLint(D.trackDriven), GLsizei(D.trackVerts.size() - D.trackDriven));
     }
+    if (uScorchLoc >= 0) glUniform1f(uScorchLoc, float(s.scorch));
   };
 
   glEnable(GL_DEPTH_TEST);
@@ -2877,10 +3001,10 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   D.setMat(D.progMesh, "uModel", I);
   glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), 0.30f);
   glBindVertexArray(D.lensVao);
-  glDrawElements(GL_TRIANGLES, GLsizei(D.lensIdx.size()), GL_UNSIGNED_INT, nullptr);
+  glDrawElements(GL_TRIANGLES, GLsizei(D.parkedIdxCount[2] + D.lensIdx.size()), GL_UNSIGNED_INT, nullptr);
   glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), cam.inside ? 0.14f : 0.80f);
   glBindVertexArray(D.carGlassVao);
-  glDrawElements(GL_TRIANGLES, GLsizei(D.glassIdx.size()), GL_UNSIGNED_INT, nullptr);
+  glDrawElements(GL_TRIANGLES, GLsizei(D.parkedIdxCount[1] + D.glassIdx.size()), GL_UNSIGNED_INT, nullptr);
 
   glUseProgram(D.progPart);
   D.setMat(D.progPart, "uVP", vp);
