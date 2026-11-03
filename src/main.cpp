@@ -18,6 +18,45 @@
 #include "tank.h"
 #include "vehicle.h"
 
+// The game's own settings: they outlast a change of vehicle and are kept on disk between runs.
+struct GameSettings {
+  bool motionBlur = true, shake = true, damageView = true, stats = true, muted = false;
+  bool fullscreen = false, vsync = true, farShadows = true;
+  double volume = 0.8, fov = 0, mouse = 1;
+};
+static GameSettings gSet;
+static constexpr const char* kSettingsFile = "settings.cfg";
+
+static void loadSettings() {
+  FILE* f = fopen(kSettingsFile, "r");
+  if (!f) return;
+  char key[64];
+  double v;
+  while (fscanf(f, "%63s %lf", key, &v) == 2) {
+    const std::string k = key;
+    if (k == "motion_blur") gSet.motionBlur = v != 0;
+    else if (k == "camera_shake") gSet.shake = v != 0;
+    else if (k == "damage_view") gSet.damageView = v != 0;
+    else if (k == "stats") gSet.stats = v != 0;
+    else if (k == "muted") gSet.muted = v != 0;
+    else if (k == "fullscreen") gSet.fullscreen = v != 0;
+    else if (k == "vsync") gSet.vsync = v != 0;
+    else if (k == "far_shadows") gSet.farShadows = v != 0;
+    else if (k == "volume") gSet.volume = clampd(v, 0, 1.5);
+    else if (k == "fov") gSet.fov = clampd(v, -15, 25);
+    else if (k == "mouse") gSet.mouse = clampd(v, 0.2, 3);
+  }
+  fclose(f);
+}
+
+static void saveSettings() {
+  FILE* f = fopen(kSettingsFile, "w");
+  if (!f) return;
+  fprintf(f, "motion_blur %d\ncamera_shake %d\ndamage_view %d\nstats %d\nmuted %d\nfullscreen %d\nvsync %d\nfar_shadows %d\nvolume %.2f\nfov %.0f\nmouse %.2f\n",
+          gSet.motionBlur, gSet.shake, gSet.damageView, gSet.stats, gSet.muted, gSet.fullscreen, gSet.vsync, gSet.farShadows, gSet.volume, gSet.fov, gSet.mouse);
+  fclose(f);
+}
+
 namespace {
 constexpr double kPhysDt = 1.0 / 2000.0;
 constexpr int kMaxStepsPerSlice = 80;  // never spiral: if we fall behind, time simply slows down
@@ -621,8 +660,6 @@ struct CameraRig {
 // Turns the frame's simulation state into what the synth needs.
 struct SoundDriver {
   AudioSynth synth;
-  double volume = 0.8;
-  bool muted = false;
   double metalClock = 0, glassClock = 0, thumpClock = 0, crackClock = 0;
   int lastGear = 1;
   double scrapeLP = 0;
@@ -653,7 +690,7 @@ struct SoundDriver {
     const double camDist = len(cam.eye - s.carCog);
     f.listener = float(1.0 / (1.0 + std::max(camDist - 8.0, 0.0) / 14.0));
     f.interior = mode == CAM_DRIVER ? 1.f : 0.f;
-    f.master = (muted || s.paused) ? 0.f : float(volume);
+    f.master = (gSet.muted || s.paused) ? 0.f : float(gSet.volume);
     synth.setFeed(f);
 
     // Where a sound is heard from.
@@ -868,7 +905,7 @@ static int playSession(int kind, bool openMenu) {
   G.mesh.bind(G.simStart.rest, G.rig.groups, kSpawn);
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());
 
-  SDL_GL_SetSwapInterval(1);
+  SDL_GL_SetSwapInterval(gSet.vsync ? 1 : 0);
   printf("OpenGL %s auf %s\n", glGetString(GL_VERSION), glGetString(GL_RENDERER));
   glEnable(GL_MULTISAMPLE);
 
@@ -912,8 +949,11 @@ static int playSession(int kind, bool openMenu) {
   hud.crosshair = rig.tank;
   int nextVehicle = -1;
   // Panels: 0 none, 1 vehicle menu, 2 settings.
-  int panelKind = openMenu ? 1 : 0;
-  int panelSel = kind;
+  enum { PANEL_NONE, PANEL_VEHICLE, PANEL_CAR, PANEL_GAME, PANEL_MAIN, PANEL_KEYS };
+  int panelKind = openMenu ? PANEL_MAIN : PANEL_NONE;
+  int panelSel = 0;
+  bool fromMain = false;      // a page opened from the main menu goes back to it
+  bool menuSpin = openMenu;   // the first time, the vehicle slowly turns behind the menu
   Tuning tuning;
   double tankPower = 1, tankGrip = 1, tankReload = 4;
   struct Item {
@@ -926,7 +966,6 @@ static int playSession(int kind, bool openMenu) {
   bool panelRepair = false;
   bool relativeMouse = false;
   DriveFeel feel;
-  bool shakeOn = true;
   {
     // Short name for the HUD: "NVIDIA RTX 3500 Ada Generation Laptop GPU/PCIe/SSE2" -> "RTX 3500".
     std::string r = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
@@ -940,8 +979,6 @@ static int playSession(int kind, bool openMenu) {
   }
   double fpsClock = 0;
   int fpsFrames = 0;
-  hud.help = !openMenu;
-  double helpTimer = 8.0;
   bool rmb = false, lmb = false;
   bool mouseSteer = false;
   double mouseSteerX = 0;
@@ -986,10 +1023,25 @@ static int playSession(int kind, bool openMenu) {
       snprintf(b, sizeof b, "%3.0f%%", val * 100.0);
       items.push_back({name, b, float((val - lo) / (hi - lo)), [&val, lo, hi, step](int d) { val = clampd(val + d * step, lo, hi); }});
     };
-    if (panelKind == 1) {
+    auto page = [&](const char* name, std::function<void()> act) {
+      items.push_back({name, "", -1.f, [act](int) { act(); }});
+    };
+    auto openPage = [&](int which) {
+      fromMain = panelKind == PANEL_MAIN;
+      panelKind = which;
+      panelSel = which == PANEL_VEHICLE ? kind : 0;
+    };
+    if (panelKind == PANEL_MAIN) {
+      page(menuSpin ? "Losfahren" : "Weiterfahren", [&] { panelKind = PANEL_NONE; menuSpin = false; if (rig.tank) rig.yaw = PI; else rig.yaw = 0; });
+      page("Fahrzeug wählen", [&] { openPage(PANEL_VEHICLE); });
+      page("Fahrzeug-Einstellungen", [&] { openPage(PANEL_CAR); });
+      page("Spiel-Einstellungen", [&] { openPage(PANEL_GAME); });
+      page("Steuerung", [&] { openPage(PANEL_KEYS); });
+      page("Beenden", [&] { quit = true; });
+    } else if (panelKind == PANEL_VEHICLE) {
       items.push_back({"Citroën Xantia Activa", "V6  ·  190 PS  ·  1,5 t", -1.f, [&](int) {}});
       items.push_back({"Leopard 1", "V10  ·  830 PS  ·  42 t", -1.f, [&](int) {}});
-    } else if (panelKind == 2) {
+    } else if (panelKind == PANEL_CAR) {
       if (kind == VK_XANTIA) {
         toggle("ABS", tuning.abs, [&] { tuning.abs = !tuning.abs; });
         toggle("ESP", tuning.esp, [&] { tuning.esp = !tuning.esp; });
@@ -1013,41 +1065,81 @@ static int playSession(int kind, bool openMenu) {
         percent("Kettenhaftung", tankGrip, 0.4, 1.6, 0.05);
         {
           char b[32];
-          snprintf(b, sizeof b, "%.1f S", tankReload);
+          snprintf(b, sizeof b, "%.1f s", tankReload);
           items.push_back({"Nachladezeit", b, float(tankReload / 8.0), [&](int d) { tankReload = clampd(tankReload + d * 0.5, 0.5, 8.0); }});
         }
       }
-      toggle("Bewegungsunschärfe", hud.motionBlur, [&] { hud.motionBlur = !hud.motionBlur; });
-      toggle("Kamera-Wackeln", shakeOn, [&] { shakeOn = !shakeOn; });
-      toggle("Schadensanzeige", hud.damageView, [&] { hud.damageView = !hud.damageView; });
+      page("Fahrzeug reparieren", [&] { panelRepair = true; });
+    } else if (panelKind == PANEL_GAME) {
+      toggle("Vollbild", gSet.fullscreen, [&] {
+        gSet.fullscreen = !gSet.fullscreen;
+        SDL_SetWindowFullscreen(window, gSet.fullscreen);
+      });
+      toggle("VSync", gSet.vsync, [&] {
+        gSet.vsync = !gSet.vsync;
+        SDL_GL_SetSwapInterval(gSet.vsync ? 1 : 0);
+      });
+      toggle("Bewegungsunschärfe", gSet.motionBlur, [&] { gSet.motionBlur = !gSet.motionBlur; });
+      toggle("Kamera-Wackeln", gSet.shake, [&] { gSet.shake = !gSet.shake; });
+      toggle("Ferne Schatten", gSet.farShadows, [&] { gSet.farShadows = !gSet.farShadows; });
       {
         char b[32];
-        snprintf(b, sizeof b, "%3.0f%%", sound->volume * 100.0);
-        items.push_back({"Lautstärke", b, float(sound->volume / 1.5), [&](int d) { sound->volume = clampd(sound->volume + d * 0.1, 0.0, 1.5); }});
+        snprintf(b, sizeof b, "%+.0f°", gSet.fov);
+        items.push_back({"Sichtfeld", b, float((gSet.fov + 15.0) / 40.0), [&](int d) { gSet.fov = clampd(gSet.fov + d * 2.5, -15, 25); }});
       }
-      items.push_back({"Fahrzeug reparieren", "", -1.f, [&](int) { panelRepair = true; }});
+      percent("Mausempfindlichkeit", gSet.mouse, 0.2, 3.0, 0.1);
+      toggle("Ton", !gSet.muted, [&] { gSet.muted = !gSet.muted; });
+      percent("Lautstärke", gSet.volume, 0.0, 1.5, 0.1);
+      toggle("Schadensanzeige", gSet.damageView, [&] { gSet.damageView = !gSet.damageView; });
+      toggle("Leistungsanzeige", gSet.stats, [&] { gSet.stats = !gSet.stats; });
+    } else if (panelKind == PANEL_KEYS) {
+      auto key = [&](const char* what, const char* k) { items.push_back({what, k, -1.f, [&](int) {}}); };
+      key("Gas und Bremse, im Stand rückwärts", "W S");
+      key("Lenken", "A D");
+      key("Handbremse", "Leertaste");
+      key("Schalten / Automatik", "Q E / T");
+      key("Autobombe, Kanone", "F");
+      key("Kamera", "C");
+      key("Mauslenkung", "M");
+      key("Zeitlupe / Pause", "[ ] / P");
+      key("Fahrzeug-Einstellungen", "O");
+      key("Fahrzeug wählen", "TAB");
+      key("Zum Start / Reparieren", "R / F5");
+      key("Beams / Röntgen / Screenshot", "F2 F3 F12");
+      key("Hauptmenü", "ESC");
+      key("Controller: Bombe / Handbremse / Gang", "X / A / LB RB");
     }
     auto choosePanel = [&] {
-      if (panelKind == 1) {
+      if (panelKind == PANEL_VEHICLE) {
         if (panelSel != kind) {
           nextVehicle = panelSel;
           quit = true;
         }
-        panelKind = 0;
+        panelKind = PANEL_NONE;
+        menuSpin = false;
         rig.yaw = rig.tank ? PI : 0;
-      } else if (panelKind == 2 && panelSel < int(items.size())) {
+      } else if (panelKind != PANEL_KEYS && panelSel < int(items.size())) {
         items[size_t(panelSel)].change(1);
       }
     };
     auto closePanel = [&] {
-      if (panelKind == 1) rig.yaw = rig.tank ? PI : 0;
-      panelKind = 0;
+      saveSettings();
+      if (panelKind != PANEL_MAIN && fromMain) {
+        panelSel = panelKind == PANEL_VEHICLE ? 1 : (panelKind == PANEL_CAR ? 2 : (panelKind == PANEL_GAME ? 3 : 4));
+        panelKind = PANEL_MAIN;
+        fromMain = false;
+        return;
+      }
+      panelKind = PANEL_NONE;
+      menuSpin = false;
+      if (rig.tank) rig.yaw = PI;
+      else if (rig.yaw != 0 && rig.mode == CAM_CHASE) rig.yaw = 0;
     };
     auto panelMove = [&](int d) {
       if (!items.empty()) panelSel = (panelSel + d + int(items.size())) % int(items.size());
     };
     auto panelAdjust = [&](int d) {
-      if (panelKind == 2 && panelSel < int(items.size())) items[size_t(panelSel)].change(d);
+      if ((panelKind == PANEL_CAR || panelKind == PANEL_GAME) && panelSel < int(items.size())) items[size_t(panelSel)].change(d);
     };
 
     SDL_Event e;
@@ -1087,7 +1179,7 @@ static int playSession(int kind, bool openMenu) {
           if (inside) panelSel = row;
           if (inside && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
             // In a value row: left half of the value down, right half up.
-            if (panelKind == 2) panelAdjust(mxp < px + pwid * 0.65f ? -1 : 1);
+            if (panelKind == PANEL_CAR || panelKind == PANEL_GAME) panelAdjust(mxp < px + pwid * 0.65f ? -1 : 1);
             else choosePanel();
           }
         } else {
@@ -1121,8 +1213,8 @@ static int playSession(int kind, bool openMenu) {
             case SDL_GAMEPAD_BUTTON_NORTH: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.yaw = 0; break;
             case SDL_GAMEPAD_BUTTON_WEST: edges.fire = true; break;
             case SDL_GAMEPAD_BUTTON_RIGHT_STICK: edges.toggleSport = true; break;
-            case SDL_GAMEPAD_BUTTON_LEFT_STICK: panelKind = 2; panelSel = 0; hud.help = false; break;
-            case SDL_GAMEPAD_BUTTON_GUIDE: panelKind = 1; panelSel = kind; hud.help = false; break;
+            case SDL_GAMEPAD_BUTTON_LEFT_STICK: panelKind = PANEL_CAR; panelSel = 0; fromMain = false; break;
+            case SDL_GAMEPAD_BUTTON_GUIDE: panelKind = PANEL_MAIN; panelSel = 0; fromMain = false; break;
             case SDL_GAMEPAD_BUTTON_EAST: doRepair = true; break;
             case SDL_GAMEPAD_BUTTON_BACK: doReset = true; break;
             case SDL_GAMEPAD_BUTTON_START: paused = !paused; break;
@@ -1136,7 +1228,7 @@ static int playSession(int kind, bool openMenu) {
         case SDL_EVENT_KEY_DOWN:
           if (e.key.repeat) break;
           switch (e.key.key) {
-            case SDLK_ESCAPE: quit = true; break;
+            case SDLK_ESCAPE: panelKind = PANEL_MAIN; panelSel = 0; fromMain = false; break;
             case SDLK_Q: edges.shiftDown = true; break;
             case SDLK_E: edges.shiftUp = true; break;
             case SDLK_T: edges.toggleAuto = true; break;
@@ -1155,17 +1247,8 @@ static int playSession(int kind, bool openMenu) {
             case SDLK_LEFTBRACKET: timeScale = std::max(0.05, timeScale * 0.5); break;
             case SDLK_RIGHTBRACKET: timeScale = std::min(1.0, timeScale * 2.0); break;
             case SDLK_F: edges.fire = true; break;
-            case SDLK_O: panelKind = 2; panelSel = 0; hud.help = false; break;
-            case SDLK_TAB: panelKind = 1; panelSel = kind; hud.help = false; break;
-            case SDLK_B: hud.motionBlur = !hud.motionBlur; break;
-            case SDLK_J: shakeOn = !shakeOn; break;
-            case SDLK_N: sound->muted = !sound->muted; break;
-            case SDLK_PLUS:
-            case SDLK_EQUALS:
-            case SDLK_KP_PLUS: sound->volume = std::min(1.5, sound->volume + 0.1); break;
-            case SDLK_MINUS:
-            case SDLK_KP_MINUS: sound->volume = std::max(0.0, sound->volume - 0.1); break;
-            case SDLK_F1: hud.help = !hud.help; helpTimer = 0; break;
+            case SDLK_O: panelKind = PANEL_CAR; panelSel = 0; fromMain = false; break;
+            case SDLK_TAB: panelKind = PANEL_VEHICLE; panelSel = kind; fromMain = false; break;
             case SDLK_F2: hud.debugBeams = !hud.debugBeams; break;
             case SDLK_F3: hud.xray = !hud.xray; break;
             case SDLK_F12: wantShot = true; break;
@@ -1198,12 +1281,12 @@ static int playSession(int kind, bool openMenu) {
           mx = e.motion.x;
           my = e.motion.y;
           if (rig.tank) {
-            const double sens = rig.mode == CAM_HOOD ? 0.0009 : 0.0028;
+            const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse;
             rig.yaw -= e.motion.xrel * sens;
             rig.pitch = clampd(rig.pitch + e.motion.yrel * sens, -0.30, 1.2);
           } else if (rmb) {
-            rig.yaw -= e.motion.xrel * 0.005;
-            rig.pitch = clampd(rig.pitch + e.motion.yrel * 0.004, -0.25, 1.45);
+            rig.yaw -= e.motion.xrel * 0.005 * gSet.mouse;
+            rig.pitch = clampd(rig.pitch + e.motion.yrel * 0.004 * gSet.mouse, -0.25, 1.45);
           }
           if (mouseSteer && !rmb) {
             int w, h;
@@ -1285,7 +1368,8 @@ static int playSession(int kind, bool openMenu) {
     panelEdges = Controls{};
     doRepair |= panelRepair;
     panelRepair = false;
-    if (panelKind == 1) rig.yaw += dt * 0.3;
+    if (menuSpin) rig.yaw += dt * 0.25;
+    const bool menuPause = panelKind == PANEL_MAIN || (fromMain && panelKind != PANEL_NONE);
 
     // Scripted runs for automated screenshots.
     bool scripted = false;
@@ -1294,7 +1378,6 @@ static int playSession(int kind, bool openMenu) {
     double scriptGas = 0, scriptSteer = 0;
     if (scriptMode > 0) {
       scripted = true;
-      hud.help = false;
       switch (scriptMode) {
         case 1:  // static beauty shot, then drive into the gauntlet
           scriptGas = tNow < 3.0 ? 0.0 : (view.speedKmh < 65 ? 0.9 : 0.0);
@@ -1385,7 +1468,7 @@ static int playSession(int kind, bool openMenu) {
           }
           break;
         case 21:  // the vehicle menu, then the settings
-          panelKind = shotCount < 2 ? 1 : 2;
+          panelKind = shotCount < 1 ? PANEL_MAIN : (shotCount < 2 ? PANEL_VEHICLE : (shotCount < 3 ? PANEL_CAR : (shotCount < 4 ? PANEL_GAME : PANEL_KEYS)));
           break;
         case 19:
           rig.mode = CAM_ORBIT;
@@ -1463,7 +1546,7 @@ static int playSession(int kind, bool openMenu) {
       c.requestGear = sendC.requestGear;
       G.input.reset |= doReset;
       G.input.repair |= doRepair;
-      G.input.paused = paused;
+      G.input.paused = paused || (menuPause && !menuSpin);
       G.input.timeScale = timeScale;
       G.input.grabNode = grabNode;
       G.input.grabTarget = grabTarget;
@@ -1585,14 +1668,11 @@ static int playSession(int kind, bool openMenu) {
       grabTarget = renderer.unprojectOnPlane(cam, w, h, mx, my, grabPlane);
     }
 
-    if (helpTimer > 0) {
-      helpTimer -= dt;
-      if (helpTimer <= 0) hud.help = false;
-    }
     hud.panel.open = panelKind != 0;
     if (hud.panel.open) {
-      hud.panel.title = panelKind == 1 ? "Fahrzeug wählen" : "Einstellungen";
-      hud.panel.foot = panelKind == 1 ? "Pfeile wählen  ·  ENTER fahren  ·  ESC zurück" : "Pfeile wählen und ändern  ·  ESC schließen";
+      static const char* titles[6] = {"", "Fahrzeug wählen", "Fahrzeug-Einstellungen", "Spiel-Einstellungen", "BeanNG", "Steuerung"};
+      hud.panel.title = titles[panelKind];
+      hud.panel.foot = panelKind == PANEL_MAIN || panelKind == PANEL_VEHICLE ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
       hud.panel.sel = panelSel;
       hud.panel.rows.clear();
       hud.panel.values.clear();
@@ -1607,7 +1687,12 @@ static int playSession(int kind, bool openMenu) {
     hud.cameraName = kCamNames[rig.mode];
     feel.update(view, paused ? 0.0 : dt);
     if (doReset || doRepair) feel.lastPlastic = 0, feel.valid = false;
-    rig.update(view, dt, cam, G.world, feel, shakeOn);
+    rig.update(view, dt, cam, G.world, feel, gSet.shake);
+    cam.fovY += gSet.fov * PI / 180.0;
+    hud.motionBlur = gSet.motionBlur;
+    hud.damageView = gSet.damageView;
+    hud.stats = gSet.stats;
+    hud.farShadows = gSet.farShadows;
     if (scriptMode == 10) {  // close-up of the front left wheel
       cam.target = view.wheels[0].hub + V3{0, 0, -0.05};
       cam.eye = cam.target + V3{0.55, 1.15, 0.12};
@@ -1708,6 +1793,7 @@ static int playSession(int kind, bool openMenu) {
 
 int main(int argc, char** argv) {
   preferDiscreteGpu();
+  loadSettings();
   int vehicle = VK_XANTIA;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--shots") && i + 1 < argc) shotDir = argv[++i];
@@ -1765,12 +1851,14 @@ int main(int argc, char** argv) {
     else printf("Ton: %s\n", SDL_GetAudioDeviceName(SDL_GetAudioStreamDevice(audioStream)));
   }
 
+  if (gSet.fullscreen && scriptMode == 0) SDL_SetWindowFullscreen(window, true);
   bool first = scriptMode == 0;
   int next = vehicle;
   while (next >= 0) {
     next = playSession(next, first);
     first = false;
   }
+  if (scriptMode == 0) saveSettings();
   if (!wavPath.empty()) writeWav(wavPath, wavSamples);
   if (audioStream) SDL_DestroyAudioStream(audioStream);
   SDL_DestroyWindow(window);

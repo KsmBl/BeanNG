@@ -5,14 +5,15 @@ Fahrzeug: Citroën Xantia Activa (3.0 V6).
 
 ## Fahrzeuge
 
-Beim Start und jederzeit mit **TAB** wählst du das Fahrzeug: den Citroën Xantia Activa oder den
-Leopard 1. Mit **F** zündest du beim Xantia die Autobombe und feuerst beim Leopard die Kanone (auch
-linke Maustaste). Beim Leopard zielt die Maus: der Turm folgt dem Fadenkreuz, der Ring zeigt, wohin das
-Rohr gerade wirklich zeigt und wie weit das Nachladen ist.
+Das Spiel startet im Hauptmenü, **ESC** öffnet es jederzeit wieder. Dort findest du Fahrzeugwahl,
+Fahrzeug-Einstellungen, Spiel-Einstellungen und die Tastenbelegung. Direkt erreichst du die Fahrzeugwahl
+mit **TAB** und die Fahrzeug-Einstellungen mit **O**.
 
-**O** öffnet die Einstellungen: ABS, ESP, ASR, Activa, Fahrwerk, Motorleistung, Reifen und mehr.
+Mit **F** zündest du beim Xantia die Autobombe und feuerst beim Leopard die Kanone (auch linke
+Maustaste). Beim Leopard zielt die Maus: der Turm folgt dem Fadenkreuz, der Ring zeigt, wohin das Rohr
+gerade wirklich zeigt und wie weit das Nachladen ist.
 
-Weitere Tasten: **B** Bewegungsunschärfe, **J** Kamera-Wackeln, **N** Ton an/aus, **+ / -** Lautstärke.
+Spiel-Einstellungen bleiben in `settings.cfg` gespeichert.
 
 `tools/gen_xantia.py`, `tools/gen_leopard.py` und `tools/gen_ui.py` erzeugen die Modelle und die
 Schrift unter `assets/`. Das macht `./run.sh` von selbst (braucht numpy, scipy, shapely und Pillow).

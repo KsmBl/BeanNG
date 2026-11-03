@@ -98,8 +98,8 @@ struct HudOptions {
   UiPanel panel;
   bool crosshair = false;
   bool damageView = true;
-  bool help = false, xray = false, debugBeams = false, mouseSteer = false, gamepad = false;
-  bool motionBlur = true;
+  bool xray = false, debugBeams = false, mouseSteer = false, gamepad = false;
+  bool motionBlur = true, stats = true, farShadows = true;
   std::string gamepadName, cameraName, gpuName;
   double fps = 0;
 };

@@ -2091,13 +2091,20 @@ struct Renderer::Impl {
     {
       float ry = 26 * u;
       const float rx = W - 22 * u;
-      snprintf(buf, sizeof buf, "%.0f FPS  ·  %s", o.fps, o.gpuName.c_str());
-      labelRight(rx, ry, buf, 14 * u, dim);
-      ry += 22 * u;
       const bool behind = s.realtime < s.timeScale * 0.9;
-      snprintf(buf, sizeof buf, "Physik %.0f %%  ·  Echtzeit %.0f %%  ·  wach %d/%d", s.physLoad * 100.0, s.realtime * 100.0, s.awake, s.objectCount);
-      labelRight(rx, ry, buf, 14 * u, behind ? red : dim);
-      ry += 26 * u;
+      if (o.stats) {
+        snprintf(buf, sizeof buf, "%.0f FPS  ·  %s", o.fps, o.gpuName.c_str());
+        labelRight(rx, ry, buf, 14 * u, dim);
+        ry += 22 * u;
+        snprintf(buf, sizeof buf, "Physik %.0f %%  ·  Echtzeit %.0f %%  ·  wach %d/%d", s.physLoad * 100.0, s.realtime * 100.0, s.awake, s.objectCount);
+        labelRight(rx, ry, buf, 14 * u, behind ? red : dim);
+        ry += 26 * u;
+      } else if (behind) {
+        // Whatever the setting: the driver must know when the simulation cannot keep up.
+        snprintf(buf, sizeof buf, "Echtzeit %.0f %%", s.realtime * 100.0);
+        labelRight(rx, ry, buf, 14 * u, red);
+        ry += 26 * u;
+      }
       {
         const float tw = textWidth(o.cameraName.c_str(), 13 * u);
         label(rx - tw, ry, o.cameraName.c_str(), 13 * u, dim);
@@ -2200,32 +2207,6 @@ struct Renderer::Impl {
         }
       }
       label(x + 22 * sc, y + (float(P.rows.size()) + .75f) * rowH, P.foot.c_str(), 13 * sc, faint);
-    } else if (o.help) {
-      static const char* lines[] = {
-          "W S  oder  Pfeile   Gas und Bremse, im Stand rückwärts",
-          "A D   lenken     Leertaste   Handbremse",
-          "Q E   schalten     T   Automatik/Manuell",
-          "F   Autobombe zünden, beim Leopard schießen",
-          "O   Einstellungen     TAB   Fahrzeug wählen",
-          "C   Kamera     M   Mauslenkung     P   Pause     [ ]   Zeitlupe",
-          "R   zum Start     F5   reparieren",
-          "F1 Hilfe   F2 Beams   F3 Röntgen   F12 Screenshot   ESC Ende",
-          "Maus: rechts ziehen dreht die Kamera, links zieht am Auto",
-          "",
-          "Controller: L-Stick lenkt, RT Gas, LT Bremse, R-Stick Kamera",
-          "A Handbremse   X Bombe/Feuer   LB/RB Gang   Y Kamera   L3 Einstellungen",
-      };
-      const float lh = 26 * u, hw = 700 * u, hh = float(sizeof(lines) / sizeof(lines[0])) * lh + 76 * u;
-      const float hx = (W - hw) * .5f, hy = (H - hh) * .5f;
-      rrect(hx, hy, hw, hh, 18 * u, {.04f, .045f, .055f, .86f});
-      label(hx + 24 * u, hy + 32 * u, "Steuerung", 23 * u, white);
-      float yy = hy + 66 * u;
-      for (const char* l : lines) {
-        label(hx + 24 * u, yy, l, 15 * u, {1, 1, 1, .85f});
-        yy += lh;
-      }
-    } else {
-      labelRight(W - 22 * u, H - 2 * 130 * u - 26 * u + 8 * u, "F1 Hilfe  ·  O Einstellungen  ·  TAB Fahrzeug", 12 * u, faint);
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, hudVbo);
@@ -2562,11 +2543,13 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glViewport(0, 0, Impl::kShadowFar, Impl::kShadowFar);
   glClear(GL_DEPTH_BUFFER_BIT);
   glUseProgram(D.progDepth);
-  D.setMat(D.progDepth, "uVP", lightFarVP);
-  drawDyn(D.progDepth);
-  D.setMat(D.progDepth, "uModel", I);
-  glBindVertexArray(D.staticVao);
-  glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
+  if (hud.farShadows) {
+    D.setMat(D.progDepth, "uVP", lightFarVP);
+    drawDyn(D.progDepth);
+    D.setMat(D.progDepth, "uModel", I);
+    glBindVertexArray(D.staticVao);
+    glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
+  }
   glDisable(GL_POLYGON_OFFSET_FILL);
   glBindFramebuffer(GL_FRAMEBUFFER, D.sceneFbo);
   glViewport(0, 0, w, h);

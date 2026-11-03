@@ -2,3 +2,4 @@ build/
 *.png
 assets/*.mesh
 __pycache__/
+settings.cfg
