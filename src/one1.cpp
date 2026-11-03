@@ -47,7 +47,8 @@ const Mat mSkin{0.8e6, 130, 4.5e3, 7e3, 2e4, 0.18, 11e3};
 const Mat mDoor{0.9e6, 150, 9e3, 14e3, 3e4, 0.25, 26e3};
 const Mat mHinge{1.2e6, 220, 0, 0, 0, 0, 17e3};
 const Mat mLatch{0.8e6, 160, 0, 0, 0, 0, 9e3};
-const Mat mPylon{0.8e6, 120, 0, 0, 0, 0, 12e3};
+const Mat mPylon{0.5e6, 80, 0, 0, 0, 0, 12e3};
+const Mat mWing{0.4e6, 60, 4e3, 6e3, 1e4, 0.20, 14e3};
 
 const Mat mAnchor{3.0e6, 440, 65e3, 85e3, 2e5, 0.20, 0};
 const Mat mSubframe{3.0e6, 440, 70e3, 90e3, 2e5, 0.22, 0};
@@ -416,21 +417,28 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
     int k = 0;
     for (double x : {4.12, 4.46})
       for (double y : {-0.90, 0.0, 0.90}) wn[k++] = sim.addNode(world({x, y, 1.06 + (x > 4.3 ? 0.03 : 0.0)}, 0), 1.6, NF_COLLIDE, 0.4f);
-    // The feet of the two pylons, down on the deck. They belong to the wing, and they also give it depth:
-    // the visible wing follows these nodes, and points all in one plane say nothing about up and down.
-    u32 foot[2];
-    for (int side = 0; side < 2; side++) foot[side] = sim.addNode(world({4.24, 0.42, 0.87}, side), 1.4, 0, 0.4f);
-    for (u32 a : wn) {
-      for (u32 b : wn) beam(a, b, mSkin);
-      for (u32 f : foot) beam(a, f, mSkin);
+    // Each pylon stands on a foot at its front and one at its rear, down on the deck. Four feet, not two:
+    // anything held by only two points is on a hinge, and turns about the line between them however
+    // stiff every part of it is. They also give the visible wing depth to follow.
+    u32 foot[4];
+    {
+      int f = 0;
+      for (int side = 0; side < 2; side++)
+        for (double x : {4.15, 4.33}) foot[f++] = sim.addNode(world({x, 0.42, 0.87}, side), 2.0, 0, 0.4f);
     }
-    beam(foot[0], foot[1], mSkin);
+    for (u32 a : wn) {
+      for (u32 b : wn) beam(a, b, mWing);
+      for (u32 f : foot) beam(a, f, mWing);
+    }
+    for (u32 a : foot)
+      for (u32 b : foot) beam(a, b, mWing);
     for (u32 n : wn) wing.push_back(n);
-    wing.push_back(foot[0]);
-    wing.push_back(foot[1]);
-    for (int side = 0; side < 2; side++)
+    for (int i = 0; i < 4; i++) {
+      wing.push_back(foot[i]);
+      const int side = i < 2 ? 0 : 1;
       for (int s : {15, 16, 17})
-        for (int r : {5, 6}) beam(foot[side], u32(body[s][r][side]), mPylon, &veh.wingMountBeams);
+        for (int r : {4, 5}) beam(foot[i], u32(body[s][r][side]), mPylon, &veh.wingMountBeams);
+    }
   }
 
   // ---- Outer collision surface.

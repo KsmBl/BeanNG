@@ -1852,6 +1852,118 @@ int main(int argc, char** argv) {
     printf("zwei weitere Runden und Resets: sane %d, guard %llu, Objekte %zu, wach %zu, Umgebung gerissen %d\n", b.sane(), (unsigned long long)b.sim.clampedSteps, b.sim.objs.size(), b.sim.active.size(), brokenProps());
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "wingtrack")) {
+    // Where is the wing against the tail, in the physics and in the mesh the player sees?
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    s->world = w;
+    const V3 spawn{-90, 0, 0};
+    Vehicle c0 = buildOne1(*s, spawn, &r);
+    populateWorld(*s, *w);
+    s->finalize();
+    settleVehicle(*s, c0, 3.0);
+    auto* mesh = new CarMesh();
+    if (!mesh->load("assets/one1.mesh")) return 1;
+    mesh->noseX = r.noseX;
+    mesh->bind(s->rest, r.groups, spawn);
+    const NodeGroup* wg = nullptr;
+    for (const NodeGroup& g : r.groups)
+      if (g.name == "wing") wg = &g;
+    std::vector<u32> verts;
+    for (const MeshPart& p : mesh->parts)
+      if (p.group == "wing")
+        for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v += 3) verts.push_back(v);
+    printf("Fluegel: %zu Knoten, %zu Modellpunkte geprueft\n", wg->nodes.size(), verts.size());
+    // A frame made of three points of the tail.
+    const u32 A = c0.refRearL, B = c0.refRearR, C = c0.refFrontL;
+    auto frame = [&](const std::vector<V3>& P, V3& o, V3& e1, V3& e2, V3& e3) {
+      o = (P[A] + P[B]) * 0.5;
+      e1 = norm(P[B] - P[A]);
+      e2 = norm(P[C] - P[A]);
+      e2 = norm(e2 - e1 * dot(e2, e1));
+      e3 = cross(e1, e2);
+    };
+    V3 ro, r1, r2, r3;
+    frame(s->rest, ro, r1, r2, r3);
+    auto predict = [&](V3 restP, V3 o, V3 e1, V3 e2, V3 e3) {
+      const V3 d = restP - ro;
+      return o + e1 * dot(d, r1) + e2 * dot(d, r2) + e3 * dot(d, r3);
+    };
+    u32 seenSplit = s->splitGeneration;
+    auto report = [&](const char* name) {
+      if (s->splitGeneration != seenSplit) {
+        const size_t n = mesh->rebindAfterTear(s->rest, r.groups, spawn, s->nodeObj);
+        printf("  [Modell neu gebunden: %zu Punkte]\n", n);
+        seenSplit = s->splitGeneration;
+      }
+      V3 o, e1, e2, e3;
+      frame(s->pos, o, e1, e2, e3);
+      double phys = 0, vis = 0;
+      for (u32 n : wg->nodes) phys = std::max(phys, len(s->pos[n] - predict(s->rest[n], o, e1, e2, e3)));
+      // The same measure on the tail of the body, right under the wing: what the frame itself reads.
+      double tail = 0, relative = 0;
+      {
+        const std::set<u32> in(wg->nodes.begin(), wg->nodes.end());
+        u32 near = 0;
+        double bd = 1e9;
+        const V3 foot = s->rest[wg->nodes.back()];
+        for (u32 k = 0; k < s->objs[0].nodeCount; k++)
+          if (!in.count(k) && (s->flags[k] & NF_COLLIDE) && !(s->flags[k] & NF_WHEEL) && len2(s->rest[k] - foot) < bd) {
+            bd = len2(s->rest[k] - foot);
+            near = k;
+          }
+        const V3 dt0 = s->pos[near] - predict(s->rest[near], o, e1, e2, e3);
+        tail = len(dt0);
+        for (u32 n : wg->nodes) relative = std::max(relative, len(s->pos[n] - predict(s->rest[n], o, e1, e2, e3) - dt0));
+      }
+      printf("  [Heck selbst %.3f m, Fluegel gegen das Heck %.3f m]\n", tail, relative);
+      for (u32 v : verts) {
+        V3 q{};
+        V3 rp = spawn + V3{r.noseX - mesh->restPos[v * 3], mesh->restPos[v * 3 + 1], mesh->restPos[v * 3 + 2]};
+        for (int k = 0; k < CarMesh::kK; k++) q += s->pos[mesh->bindNode[size_t(v) * CarMesh::kK + k]] * double(mesh->bindWeight[size_t(v) * CarMesh::kK + k]);
+        vis = std::max(vis, len(q - predict(rp, o, e1, e2, e3)));
+      }
+      int obj = s->nodeObj[wg->nodes[0]], root = s->objs[size_t(obj)].root;
+      printf("  %-22s Kurs %+5.0f  %4.0f km/h  Physik-Abw. %.3f m  Modell-Abw. %.3f m  Objekt %d (root %d) halt %zu  Reifen %s  %s\n", name, std::atan2(c0.fwd.y, c0.fwd.x) * 57.3, c0.speed * 3.6, phys, vis, obj, root, c0.wingMountBeams.size(), c0.wheels[0].deflate > 0 ? "platt" : "ok", c0.lastDamage.c_str());
+    };
+    auto drive = [&](double sec, std::function<void(double, Controls&)> fn) {
+      Controls c;
+      for (int k = 0, n = int(sec / kDt); k < n; k++) {
+        fn(k * kDt, c);
+        s->forces(kDt);
+        c0.update(*s, c, kDt);
+        s->finish(kDt);
+        c.fire = false;
+      }
+      s->events.clear();
+    };
+    report("Start");
+    drive(3, [&](double, Controls& c) { c.throttle = 0.6; c.steer = 0; });
+    report("geradeaus");
+    for (int i = 0; i < 6; i++) {
+      drive(2, [&](double, Controls& c) { c.throttle = clampd((50 / 3.6 - c0.speed) * 0.5, 0, 1); c.steer = 0.6; });
+      report("Kreis links");
+    }
+    for (int i = 0; i < 3; i++) {
+      drive(2, [&](double, Controls& c) { c.throttle = 1; c.steer = -0.8; });
+      report("Vollgas Kreis rechts");
+    }
+    drive(2, [&](double, Controls& c) { c.throttle = 0; c.steer = 0; c.brake = 1; });
+    report("Bremsen");
+    drive(10, [&](double, Controls& c) {
+      c.brake = 0;
+      const double head = std::atan2(c0.fwd.y, c0.fwd.x);
+      double err = std::atan2(0.0 - c0.cog.y, 60.0) - head;
+      while (err > PI) err -= 2 * PI;
+      while (err < -PI) err += 2 * PI;
+      c.steer = clampd(err * 1.5, -0.4, 0.4);
+      c.throttle = c0.speed < 22 ? 0.8 : 0.2;
+    });
+    report("durch die Hindernisse");
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "one1grip")) {
     // Pulling away on every surface, full throttle, with all the aids on.
     for (int surface = 0; surface < 3; surface++) {

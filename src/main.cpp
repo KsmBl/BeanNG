@@ -1540,6 +1540,10 @@ static int playSession(int kind, bool openMenu) {
           rig.pitch = 0.35;
           rig.yaw = PI + 0.3;
           break;
+        case 30:
+          scriptGas = view.speedKmh < 55.0 ? 0.8 : 0.1;
+          scriptSteer = tNow > 3.0 ? 0.5 : 0.0;
+          break;
         case 23:  // switches vehicle in mid-game, as the menu does, and back out
           if (tNow > 4.0) {
             nextVehicle = kind == VK_XANTIA ? VK_LEOPARD : -1;
@@ -1819,6 +1823,12 @@ static int playSession(int kind, bool openMenu) {
       cam.eye = at + V3{-13, 10, 8};
       cam.up = {0, 0, 1};
       cam.fovY = 55.0 * PI / 180.0;
+    }
+    if (scriptMode == 30) {  // circles at speed, watching the wing from behind and from the side in turn
+      cam.target = view.carCog + view.carFwd * -1.9 + view.carUp * 0.5;
+      cam.eye = cam.target + view.carFwd * -3.0 + view.carLeft * (shotCount % 2 ? 3.0 : 0.6) + view.carUp * 0.7;
+      cam.up = {0, 0, 1};
+      cam.fovY = 42.0 * PI / 180.0;
     }
     if (scriptMode == 25 || scriptMode == 26) {  // the car from outside: walk round it, close to the ground
       const double a = 0.55 + double(shotCount) * PI / 3.0;
