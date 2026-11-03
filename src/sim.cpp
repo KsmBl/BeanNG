@@ -386,7 +386,9 @@ void Sim::explode(V3 c, double impulse, double radius) {
   if (craterWorld) {
     // Only what goes off close to the ground digs into it.
     const double above = c.z - craterWorld->height(c.x, c.y);
-    if (above < 3.0) craterWorld->addCrater(c.x, c.y, radius * 0.18, radius * 0.05 * (1.0 - std::max(above, 0.0) / 3.0));
+    // The heavier the charge, the bigger the hole, beyond what its reach alone would say.
+    const double heavy = std::max(1.0, std::sqrt(impulse / 2200.0));
+    if (above < 3.0) craterWorld->addCrater(c.x, c.y, radius * 0.18 * heavy, radius * 0.05 * heavy * (1.0 - std::max(above, 0.0) / 3.0));
     // Boulders crack apart.
     // On a player's machine the server has already sent the dust.
     for (const auto& hit : craterWorld->breakRocks(c, radius * 0.42))

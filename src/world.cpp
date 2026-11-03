@@ -229,7 +229,7 @@ void World::addCrater(double x, double y, double r, double depth) {
       const double ring = (d - 1.02) / 0.34;
       dz += 0.16 * depth * std::exp(-ring * ring);
       // Repeated hits deepen it, but never dig through the bottom of the world.
-      h_[id] = std::max(float(h_[id] + dz), float(h0_[id] - 3.0));
+      h_[id] = std::max(float(h_[id] + dz), float(h0_[id] - 7.0));
       if (d < 1.1) surf_[id] = SURF_GRAVEL;
     }
 }

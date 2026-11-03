@@ -48,7 +48,7 @@ const TurretSpec& turretSpec(TurretKind k) {
       {"105-mm-Kanone", "assets/leopard.mesh", 1.00, 1.00, 5.45, 0.34, 200e3, 4.0, 8, 1100.0, 2200.0, 15.0, 8.0, -9, 20, 40, 22, 0},
       {"Leichte Kanone", "assets/leopard_light.mesh", 0.40, 1.00, 2.90, 0.06, 12e3, 0.3, 120, 1300.0, 170.0, 4.0, 6.0, -8, 35, 70, 45, 0},
       // Slow enough that the whole map lies inside the high arc: half a minute in the air from end to end.
-      {"Artillerie", "assets/leopard_arty.mesh", 1.80, 0.70, 6.40, 0.50, 260e3, 12.0, 8, 160.0, 5000.0, 26.0, 60.0, -3, 78, 14, 10, 0},
+      {"Artillerie", "assets/leopard_arty.mesh", 1.80, 0.70, 6.40, 0.50, 260e3, 12.0, 8, 160.0, 12000.0, 30.0, 60.0, -3, 78, 14, 10, 0},
       {"Lenkraketen", "assets/leopard_missile.mesh", 0.85, 0.95, 2.20, 0.05, 8e3, 3.0, 20, 700.0, 260.0, 5.0, 6.0, -6, 20, 40, 30, 8},
   };
   return table[k];
@@ -815,7 +815,9 @@ void Tank::checkDamage(Sim& sim, double dt) {
     for (u16 oi : {hullObj, turretObj})
       for (u32 n : sim.objs[oi].nodes) dmin = std::min(dmin, len(sim.pos[n] - c));
     if (sim.lastBlastRadius > 0 && dmin < sim.lastBlastRadius) {
-      const double reach = std::min(1.3 / std::max(dmin, 0.3), 1.0);
+      // A heavy shell does not need to touch: anywhere close enough, and that is the end of the tank.
+      const double core = sim.lastBlastImpulse >= 10000.0 ? 4.5 : 1.3;
+      const double reach = std::min(core / std::max(dmin, 0.3), 1.0);
       // The armour takes several: five direct hits from the 105 mm. What gets hit on the outside is another matter.
       const double hit = 0.20 * (sim.lastBlastImpulse / 2200.0) * reach * reach;
       if (reach > 0.2) damageModules(sim, c, sim.lastBlastImpulse);
