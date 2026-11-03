@@ -1659,6 +1659,7 @@ static void runGame() {
   // The big rifle's scope: right mouse button once it is set up.
   bool scoped = false;
   double scopeZoom = 6.0;
+  int scopeZero = 100;  // the range the sight is set for, in metres
   // The map, and the point on it the artillery lays on.
   bool mapOpen = false;
   bool hasMark = false;
@@ -1819,6 +1820,7 @@ static void runGame() {
       key("Bombencode auf den Punkt der Karte", "K, Klick, B");
       key("Beim Gegner anzapfen, dann Standort abfragen", "E am Computer, J");
       key("Scharfschützengewehr aufbauen, Zielfernrohr, Zoom", "X, rechte Maustaste, Mausrad");
+      key("Visier auf Entfernung einstellen", "Pfeil hoch, runter");
       key("Rennen, springen", "Umschalt, Leertaste");
       key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
       key("Karte, Ziel für die Artillerie", "K");
@@ -2024,6 +2026,8 @@ static void runGame() {
             case SDLK_F: edges.fire = true; break;
             case SDLK_E: edges.use = true; break;
             case SDLK_X: edges.setup = true; break;
+            case SDLK_UP: if (scoped) scopeZero = std::min(scopeZero + 50, 2000); break;
+            case SDLK_DOWN: if (scoped) scopeZero = std::max(scopeZero - 50, 100); break;
             case SDLK_B:
               // On the point marked on the map; without one, the map comes up to mark it on.
               if (hasMark && view.foot.codes > 0) {
@@ -2297,7 +2301,11 @@ static void runGame() {
         }
         c.aimPoint = p;
         // Through the scope it goes exactly where the scope points. Drop and wind are the shooter's business.
-        if (scoped) c.aimPoint = cam.eye + f * 3000.0;
+        // Except that it is set for a range: the barrel points up by what the bullet will fall on the way there.
+        if (scoped) {
+          const double lift = 0.5 * std::asin(std::min(9.81 * double(scopeZero) / (kWeapons[WP_SNIPER].speed * kWeapons[WP_SNIPER].speed), 1.0));
+          c.aimPoint = cam.eye + norm(f + V3{0, 0, 1} * lift) * 3000.0;
+        }
       }
     }
 
@@ -2547,6 +2555,7 @@ static void runGame() {
       }
     }
     hud.scope = scoped ? scopeZoom : 0.0;
+    hud.scopeZero = scopeZero;
     if (scoped) {
       const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
       Soldier eyeAt;

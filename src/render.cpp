@@ -2560,6 +2560,8 @@ struct Renderer::Impl {
       }
       snprintf(buf, sizeof buf, "%.0fx", o.scope);
       label(cx + r * .62f, cy + r * .62f, buf, 22 * u, white);
+      snprintf(buf, sizeof buf, "Visier %d m", o.scopeZero);
+      label(cx - r * .84f, cy + r * .62f, buf, 18 * u, white);
       const double speed = len(s.foot.wind);
       // Where it comes from, seen from where one looks: from the left means the bullet goes to the right.
       const V3 f = norm(camTarget - camEye);

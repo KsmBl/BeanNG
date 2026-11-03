@@ -79,6 +79,7 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 | Bombencode auf den markierten Kartenpunkt: vier Raketen, ungenau | K, Klick, B | – |
 | Scharfschützengewehr aufbauen, Zielfernrohr, Zoom 6x bis 24x | X, rechte Maustaste, Mausrad | – |
 | Beim Gegner anzapfen, dann Standort abfragen (alle 30 s) | E am Computer, J | – |
+| Visier auf Entfernung einstellen | Pfeil hoch, runter | – |
 | Chat | Enter | – |
 | Screenshot | F12 | – |
 

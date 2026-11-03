@@ -166,6 +166,7 @@ inline void mapLayout(int w, int h, float& x, float& y, float& size) {
 struct HudOptions {
   // Looking through the big rifle's scope, at this magnification; 0 when not.
   double scope = 0;
+  int scopeZero = 100;
   float hurt = 0;  // being hit: how red the picture goes
   float hitMark = 0;   // a hit landed
   float hurtDir = 0;   // a hit taken, seconds left to show from where
