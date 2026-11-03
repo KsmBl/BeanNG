@@ -25,6 +25,7 @@ struct Client {
   double lastHeard = 0;
   InputMsg in;
   bool haveInput = false;
+  char name[kNameBytes] = {};
   // One-shot controls, each seen once however many packets carry the same count.
   bool fire = false, launch = false, repair = false, use = false;
   // Scenery that has moved, as far as this player has been told, and where the slow sweep has got to.
@@ -105,6 +106,14 @@ int main(int argc, char** argv) {
           }
           clients[slot] = Client{};
           clients[slot].used = true;
+          for (int k = 0; k < kNameBytes; k++) {
+            char ch = 0;
+            r.get(ch);
+            // Nothing that could upset a terminal or the screen; UTF-8 may pass.
+            clients[slot].name[k] = (static_cast<unsigned char>(ch) < 32 && ch != 0) ? '?' : ch;
+          }
+          clients[slot].name[kNameBytes - 1] = 0;
+          if (!clients[slot].name[0]) snprintf(clients[slot].name, kNameBytes, "Spieler %d", slot + 1);
           clients[slot].addr = from;
           clients[slot].token = u32(entropy());
           clients[slot].told.assign(duel->sim.pos.size() * 3, 0.f);
@@ -113,7 +122,7 @@ int main(int argc, char** argv) {
             clients[slot].told[i * 3 + 1] = float(duel->simStart.pos[i].y);
             clients[slot].told[i * 3 + 2] = float(duel->simStart.pos[i].z);
           }
-          printf("Spieler %d verbunden: %s\n", slot + 1, toString(from).c_str());
+          printf("Spieler %d verbunden: %s, %s\n", slot + 1, clients[slot].name, toString(from).c_str());
           fflush(stdout);
         }
         clients[slot].lastHeard = now();
@@ -384,6 +393,14 @@ int main(int argc, char** argv) {
         Client& c = clients[i];
         if (!c.used) continue;
         sendMeta(c, i);
+        if (tick % 15 == 0) {
+          Writer w(P_NAMES);
+          w.put(tick);
+          w.put(duel->matchId);
+          for (const Client& who : clients)
+            for (int k = 0; k < kNameBytes; k++) w.put(who.used ? who.name[k] : char(0));
+          sock.send(w.data(), w.size(), c.addr);
+        }
         // The tanks in play every time, and now and then the others, should a packet have gone astray.
         for (int k = 0; k < Duel::kTanks; k++) {
           const Tank& t = duel->tanks[k];

@@ -449,6 +449,7 @@ static double wavDebt = 0;
 
 
 // Where the server is: asked for in the menu, and remembered between runs.
+static std::string gUserName = "Spieler";
 static std::string gServerHost = "127.0.0.1";
 static int gServerPort = net::kDefaultPort;
 static bool gConnectNow = false;
@@ -458,19 +459,25 @@ static constexpr const char* kServerFile = "server.cfg";
 static void loadServerAddress() {
   FILE* f = fopen(kServerFile, "r");
   if (!f) return;
-  char host[256];
+  char host[256], name[256];
   int port;
-  if (fscanf(f, "%255s %d", host, &port) == 2) {
+  const int got = fscanf(f, "%255s %d %255s", host, &port, name);
+  if (got >= 2) {
     gServerHost = host;
     gServerPort = port;
   }
+  if (got == 3) gUserName = name;
   fclose(f);
 }
 
 static void saveServerAddress() {
   FILE* f = fopen(kServerFile, "w");
   if (!f) return;
-  fprintf(f, "%s %d\n", gServerHost.c_str(), gServerPort);
+  // On one line without spaces; a name with a space in it comes back with underscores.
+  std::string name = gUserName;
+  for (char& ch : name)
+    if (ch == ' ') ch = '_';
+  fprintf(f, "%s %d %s\n", gServerHost.c_str(), gServerPort, name.c_str());
   fclose(f);
 }
 
@@ -508,6 +515,7 @@ struct Game {
   enum NetState { NET_OFF, NET_CONNECTING, NET_IN };
   int netState = NET_OFF;
   std::string netError;
+  std::string names[2];
   int phase = Duel::WAITING;
   double phaseClock = 0;
   int slot = 0;
@@ -738,6 +746,10 @@ struct Game {
           nextHello = now + 0.25;
           net::Writer w(net::P_HELLO);
           w.put(net::kProtocol);
+          {
+            std::lock_guard<std::mutex> lock(inputMutex);
+            for (int i = 0; i < net::kNameBytes; i++) w.put(i + 1 < net::kNameBytes && i < int(gUserName.size()) ? gUserName[size_t(i)] : char(0));
+          }
           while (w.size() < 64) w.put(u8(0));
           sock->send(w.data(), w.size(), server);
         }
@@ -888,6 +900,14 @@ struct Game {
             r.get(evKind);
             if (!r.ok() || evKind > EV_ROCK) break;
             sim.event(EventKind(evKind), p, v, strength);
+          }
+        } else if (kind == net::P_NAMES) {
+          std::lock_guard<std::mutex> lock(snapMutex);
+          for (int i = 0; i < 2; i++) {
+            char name[net::kNameBytes];
+            for (char& ch : name) r.get(ch);
+            name[net::kNameBytes - 1] = 0;
+            if (r.ok()) names[i] = name;
           }
         } else if (kind == net::P_CAR) {
           u8 k = 0;
@@ -1053,7 +1073,10 @@ struct Game {
         const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
         if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf den zweiten Spieler");
         else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
-        else if (phaseNow == Duel::FINISHED) snprintf(msg, sizeof msg, "%s  ·  Stand %u : %u", winner < 0 ? "Unentschieden" : (winner == mySlot ? "Sieg!" : "Niederlage"), wins[mySlot], wins[1 - mySlot]);
+        else if (phaseNow == Duel::FINISHED) {
+          std::lock_guard<std::mutex> lock(snapMutex);
+          snprintf(msg, sizeof msg, "%s  ·  %s %u : %u %s", winner < 0 ? "Unentschieden" : (winner == mySlot ? "Sieg!" : "Niederlage"), names[mySlot].c_str(), wins[mySlot], wins[1 - mySlot], names[1 - mySlot].c_str());
+        }
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
         else if (vehicleNow >= 0) snprintf(msg, sizeof msg, "E: aussteigen");
@@ -1296,8 +1319,9 @@ static void runGame() {
       panelSel = 0;
     };
     if (panelKind == PANEL_ONLINE) {
-      items.push_back({"Server-Adresse", gServerHost + (panelSel == 0 ? "_" : ""), -1.f, [&](int) {}});
-      items.push_back({"Port", std::to_string(gServerPort) + (panelSel == 1 ? "_" : ""), -1.f, [&](int) {}});
+      items.push_back({"Benutzername", gUserName + (panelSel == 0 ? "_" : ""), -1.f, [&](int) {}});
+      items.push_back({"Server-Adresse", gServerHost + (panelSel == 1 ? "_" : ""), -1.f, [&](int) {}});
+      items.push_back({"Port", std::to_string(gServerPort) + (panelSel == 2 ? "_" : ""), -1.f, [&](int) {}});
       page(netState == Game::NET_CONNECTING ? "Verbinde..." : "Verbinden", [&] {
         saveServerAddress();
         G.command = Game::CMD_CONNECT;
@@ -1377,7 +1401,7 @@ static void runGame() {
     panelSel = items.empty() ? 0 : std::clamp(panelSel, 0, int(items.size()) - 1);
 
     auto choosePanel = [&] {
-      if (panelKind == PANEL_ONLINE && panelSel < 2) panelSel = 2;  // from an address, ENTER goes on to the button
+      if (panelKind == PANEL_ONLINE && panelSel < 3) panelSel = 3;  // from a field, ENTER goes on to the button
       else if (panelKind != PANEL_KEYS && panelSel < int(items.size())) items[size_t(panelSel)].change(1);
     };
     auto closePanel = [&] {
@@ -1405,7 +1429,7 @@ static void runGame() {
     };
 
     // Typing goes to the address fields, and nowhere else.
-    const bool wantText = panelKind == PANEL_ONLINE && panelSel < 2;
+    const bool wantText = panelKind == PANEL_ONLINE && panelSel < 3;
     if (wantText != textEntry) {
       textEntry = wantText;
       if (wantText) SDL_StartTextInput(window);
@@ -1418,8 +1442,9 @@ static void runGame() {
         std::lock_guard<std::mutex> lock(G.inputMutex);
         for (const char* t = e.text.text; *t; t++) {
           const unsigned char ch = static_cast<unsigned char>(*t);
-          if (panelSel == 0 && gServerHost.size() < 63 && (std::isalnum(ch) || ch == '.' || ch == '-')) gServerHost += char(ch);
-          if (panelSel == 1 && std::isdigit(ch) && gServerPort < 6553) gServerPort = gServerPort * 10 + (ch - '0');
+          if (panelSel == 0 && gUserName.size() + 1 < size_t(net::kNameBytes) && (ch >= 128 || std::isgraph(ch) || ch == ' ')) gUserName += char(ch);
+          if (panelSel == 1 && gServerHost.size() < 63 && (std::isalnum(ch) || ch == '.' || ch == '-')) gServerHost += char(ch);
+          if (panelSel == 2 && std::isdigit(ch) && gServerPort < 6553) gServerPort = gServerPort * 10 + (ch - '0');
         }
         continue;
       }
@@ -1427,8 +1452,13 @@ static void runGame() {
         const SDL_Keycode k = e.key.key;
         if (k == SDLK_BACKSPACE) {
           std::lock_guard<std::mutex> lock(G.inputMutex);
-          if (panelSel == 0 && !gServerHost.empty()) gServerHost.pop_back();
-          if (panelSel == 1) gServerPort /= 10;
+          if (panelSel == 0 && !gUserName.empty()) {
+            // A whole letter at a time, however many bytes it is.
+            while (gUserName.size() > 1 && (static_cast<unsigned char>(gUserName.back()) & 0xC0) == 0x80) gUserName.pop_back();
+            gUserName.pop_back();
+          }
+          if (panelSel == 1 && !gServerHost.empty()) gServerHost.pop_back();
+          if (panelSel == 2) gServerPort /= 10;
           continue;
         }
         // These are letters here, not menu keys.
