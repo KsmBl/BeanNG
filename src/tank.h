@@ -93,6 +93,7 @@ class Tank {
   bool bulletHit(Sim& sim, V3 a, V3 b, double force);
 
   // A guided missile is flown by hand towards aimPoint, one at a time. Firing again sets it off early.
+  int smokeCharges = 3;  // the launcher on the turret
   int missiles = 0;
   bool missileLive = false;
   V3 missileP, missileV;
@@ -115,7 +116,7 @@ class Tank {
     int gear = 1, ammo = -1;
     bool destroyed = false, trackOff[2] = {};
     float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
-    int missiles = 0;
+    int missiles = 0, smokeCharges = 0;
     bool missileLive = false;
     V3 missileP, missileV;
   };

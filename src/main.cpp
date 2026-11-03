@@ -828,7 +828,7 @@ struct Game {
         in = input;
         input.chatOut.clear();
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = input.c.smoke = false;
       }
       if (!in.chatOut.empty() && state == NET_IN) {
         saying = in.chatOut;
@@ -852,6 +852,7 @@ struct Game {
       if (in.c.placeFoot) out.mineFootCount++;
       if (in.c.placeTank) out.mineTankCount++;
       if (in.c.query) out.queryCount++;
+      if (in.c.smoke) out.smokeCount++;
       if (in.c.strike) {
         out.strikeCount++;
         out.strikeX = float(in.c.strikeAt.x);
@@ -1075,7 +1076,7 @@ struct Game {
             u8 evKind = 0;
             r.get(strength);
             r.get(evKind);
-            if (!r.ok() || evKind > EV_BLOOD) break;
+            if (!r.ok() || evKind > EV_SMOKE) break;
             sim.event(EventKind(evKind), p, v, strength);
           }
         } else if (kind == net::P_CHATLOG) {
@@ -1832,6 +1833,7 @@ static void runGame() {
       key("Rakete starten, fliegt mit der Maus", "G");
       key("Einsteigen und aussteigen", "E");
       key("Waffe wählen", "1 2 3 4 5");
+      key("Nebel: Granate zu Fuß, Werfer im Panzer", "H");
       key("Anvisieren, in jedem Panzer und mit jedem Gewehr", "Rechte Maustaste halten");
       key("Tretmine, Panzermine legen", "M, N");
       key("Bombencode auf den Punkt der Karte", "K, Klick, B");
@@ -2056,6 +2058,7 @@ static void runGame() {
               }
               break;
             case SDLK_J: edges.query = true; break;
+            case SDLK_H: edges.smoke = true; break;
             case SDLK_M: edges.placeFoot = true; break;
             case SDLK_N: edges.placeTank = true; break;
             case SDLK_F12: wantShot = true; break;
@@ -2224,6 +2227,23 @@ static void runGame() {
         }
       }
     }
+    if (scriptMode == 55 && netState == Game::NET_IN) {
+      // Smoke, thrown and from a tank.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickItems[IT_SMOKE] = 4;
+        pickReady = true;
+      }
+      panelKind = PANEL_NONE;
+      if (inMatch) {
+        rig.yaw = G.world.base(slot).facing + PI;
+        rig.pitch = 0.1;
+        static double last = -100;
+        if (tNow - last > 3.0 && view.foot.items[IT_SMOKE] > 0) {
+          sendC.smoke = true;
+          last = tNow;
+        }
+      }
+    }
     if (scriptMode == 51 && netState == Game::NET_IN) {
       if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
       panelKind = PANEL_NONE;
@@ -2290,6 +2310,7 @@ static void runGame() {
       c.placeFoot |= sendC.placeFoot;
       c.placeTank |= sendC.placeTank;
       c.query |= sendC.query;
+      c.smoke |= sendC.smoke;
       if (sendC.strike) {
         c.strike = true;
         c.strikeAt = sendC.strikeAt;
@@ -2471,6 +2492,7 @@ static void runGame() {
             "Reparaturset: bringt ein Fahrzeug wieder zum Laufen. Dauert 6 Sekunden zu Fuß daneben, und es muss stillstehen. Taste R.",
             "Sturmgewehr: Dauerfeuer auf mittlere Entfernung. Schießt mit der Kleinmunition. Gegen Panzer fast wirkungslos. Taste 3.",
             "Kleinmunition: 60 Schuss für Pistole und Sturmgewehr, zusätzlich zu den 24, die du immer hast.",
+            "Nebelgranate: eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen. Werfen mit H. Jeder Panzer hat außerdem 3 Ladungen im Werfer.",
         };
         if (panelSel >= 1 && panelSel <= IT_COUNT) hud.panel.detail = kAbout[panelSel - 1];
         else if (panelSel == 0) hud.panel.detail = "Das hast du immer dabei: Pistole mit 24 Schuss und Kampfmesser. Alles andere findest du in Kisten in Häusern und bei Wracks: Scharfschützengewehr, Raketenwerfer, Granaten und Bombencodes.";

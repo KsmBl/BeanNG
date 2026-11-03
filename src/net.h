@@ -13,7 +13,7 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 21;
+constexpr u16 kProtocol = 22;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1200;  // safely under any path's MTU
 constexpr int kNameBytes = 24;
@@ -111,7 +111,7 @@ struct InputMsg {
   u32 seq = 0;
   float steer = 0, throttle = 0, brake = 0, handbrake = 0;
   V3 aim;
-  u16 fireCount = 0, launchCount = 0, repairCount = 0, useCount = 0, setupCount = 0, mineFootCount = 0, mineTankCount = 0, strikeCount = 0, queryCount = 0;
+  u16 fireCount = 0, launchCount = 0, repairCount = 0, useCount = 0, setupCount = 0, mineFootCount = 0, mineTankCount = 0, strikeCount = 0, queryCount = 0, smokeCount = 0;
   float strikeX = 0, strikeY = 0;
   float yaw = 0, pitch = 0;  // the camera: where one walks and looks on foot
   bool sprint = false;

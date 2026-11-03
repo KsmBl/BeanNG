@@ -669,7 +669,7 @@ void Duel::rollLoot() {
   static const Roll kTable[] = {
       {"kleinmunition", 26, 60}, {"granaten", 13, 4}, {"lenkraketen", 7, 2}, {"raketen", 8, 2}, {"raketenwerfer", 7, 1},
       {"scharfschuetzengewehr", 6, 1}, {"scharfschuetzenmunition", 8, 5}, {"reparaturset", 8, 1}, {"tretmine", 6, 2},
-      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"leben", 6, 50},
+      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"leben", 6, 50}, {"nebelgranate", 7, 2},
   };
   int total = 0;
   for (const Roll& r : kTable) total += r.weight;
@@ -712,14 +712,14 @@ int Duel::nearCrate(V3 p) const {
 }
 
 const char* Duel::crateLabel(const Crate& c, char* buf, size_t n) {
-  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Verbandskasten"};
+  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Verbandskasten", "Nebelgranaten"};
   snprintf(buf, n, c.count > 1 ? "%s  x%d" : "%s", kLabels[c.what], c.count);
   return buf;
 }
 
 const char* const Duel::kGiveNames[kGiveKinds] = {
     "tretmine", "panzermine", "reparaturset", "sturmgewehr", "kleinmunition", "scharfschuetzengewehr", "scharfschuetzenmunition",
-    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "leben",
+    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "leben", "nebelgranate",
 };
 
 bool Duel::give(int player, const char* name, int count) {
@@ -727,7 +727,8 @@ bool Duel::give(int player, const char* name, int count) {
   Player& p = players[player];
   const std::string n = name;
   const auto addItem = [&](ItemKind k) { p.items[k] = u8(std::min(int(p.items[k]) + count, 99)); };
-  if (n == "tretmine") addItem(IT_FOOT_MINE);
+  if (n == "nebelgranate") addItem(IT_SMOKE);
+  else if (n == "tretmine") addItem(IT_FOOT_MINE);
   else if (n == "panzermine") addItem(IT_AT_MINE);
   else if (n == "reparaturset") addItem(IT_REPAIR);
   else if (n == "sturmgewehr") p.hasWeapon[WP_AR] = true;
@@ -887,6 +888,18 @@ void Duel::stepBullets(double dt) {
     b.age += dt;
     if (b.kind == kKindStrike) {
       // Straight down the last of the way.
+    } else if (b.kind == kKindSmoke) {
+      b.v.z -= 9.81 * dt;
+      Contact c;
+      if (world.contact(b.p + b.v * dt, c)) {
+        startSmoke(b.p);
+        bullets[i] = bullets.back();
+        bullets.pop_back();
+        continue;
+      }
+      b.p += b.v * dt;
+      i++;
+      continue;
     } else if (b.kind == WP_RPG) {
       // A rocket wanders, more the longer it flies.
       const double wander = 0.25 * std::min(b.age, 3.0);
@@ -1043,6 +1056,44 @@ void Duel::noteHit(int victim, int attacker, V3 from) {
   if (attacker >= 0 && attacker != victim) players[attacker].hitsLanded++;
 }
 
+void Duel::startSmoke(V3 at) {
+  if (smoke.size() >= 12) smoke.erase(smoke.begin());
+  SmokeCloud c;
+  c.p = at;
+  c.left = kSmokeTime;
+  smoke.push_back(c);
+}
+
+void Duel::useSmoke(int p) {
+  Player& pl = players[p];
+  if (pl.vehicle >= 0 && pl.vehicle < kTanks) {
+    // Four clouds in a fan around the front of the turret, a stone's throw off, between the tank and whoever it faces.
+    Tank& t = tanks[pl.vehicle];
+    if (t.smokeCharges <= 0) return;
+    t.smokeCharges--;
+    const double cy = std::cos(t.turretYaw), sy = std::sin(t.turretYaw);
+    const V3 eF = t.fwd * cy + t.left * sy, eL = t.left * cy - t.fwd * sy;
+    for (double a : {-1.0, -0.33, 0.33, 1.0}) {
+      V3 at = frames[pl.vehicle].cog + eF * (18.0 * std::cos(a)) + eL * (18.0 * std::sin(a));
+      at.z = world.height(at.x, at.y) + 0.5;
+      startSmoke(at);
+    }
+    sim.event(EV_MUZZLE, frames[pl.vehicle].cog + t.up * 1.5, t.up, 0.15f);
+    return;
+  }
+  if (pl.vehicle >= 0 || pl.items[IT_SMOKE] == 0) return;
+  // A throw: as far as an arm goes, in the air for a moment.
+  pl.items[IT_SMOKE]--;
+  const Soldier& s = pl.soldier;
+  const V3 ahead{-std::cos(s.yaw) * std::cos(s.pitch), -std::sin(s.yaw) * std::cos(s.pitch), -std::sin(s.pitch)};
+  Bullet b;
+  b.p = eyeOf(s) + ahead * 0.5;
+  b.v = (ahead + V3{0, 0, 0.35}) * 19.0 + s.v;
+  b.kind = kKindSmoke;
+  b.owner = p;
+  bullets.push_back(b);
+}
+
 void Duel::placeMine(int p, int kind) {
   Player& pl = players[p];
   u8& have = pl.items[kind == 0 ? IT_FOOT_MINE : IT_AT_MINE];
@@ -1166,6 +1217,21 @@ void Duel::stepPlayers(const Intent in[2]) {
     bulletDebt -= 0.005;
     stepBullets(0.005);
     stepMines(0.005);
+    for (size_t k = 0; k < smoke.size();) {
+      SmokeCloud& c = smoke[k];
+      c.left -= 0.005;
+      c.nextPuff -= 0.005;
+      if (c.nextPuff <= 0) {
+        c.nextPuff = 0.5;
+        sim.event(EV_SMOKE, c.p, V3{}, float(clampd(c.left / 6.0, 0.15, 1.0)));
+      }
+      if (c.left <= 0) {
+        smoke[k] = smoke.back();
+        smoke.pop_back();
+      } else {
+        k++;
+      }
+    }
     for (size_t k = 0; k < incoming.size();) {
       incoming[k].in -= 0.005;
       if (incoming[k].in > 0) {
@@ -1194,6 +1260,7 @@ void Duel::stepPlayers(const Intent in[2]) {
     if (pl.weapon != WP_SNIPER || pl.vehicle >= 0) pl.wantProne = false;
     s.prone = clampd(s.prone + (pl.wantProne ? 1.0 : -1.5) * kDt / kSetupTime * (pl.wantProne ? 1.0 : 3.0), 0.0, 1.0);
     if (in[i].strike && phase == PLAYING) callStrike(i, in[i].strikeAt);
+    if (in[i].smoke && phase == PLAYING) useSmoke(i);
     if (pl.vehicle < 0 && phase == PLAYING) {
       fireWeapon(i, in[i]);
       if (in[i].placeFoot) placeMine(i, 0);
@@ -1325,6 +1392,7 @@ void Duel::restart() {
   phaseClock = 0;
   bullets.clear();
   incoming.clear();
+  smoke.clear();
   for (auto& row : mines)
     for (Mine& m : row) m.live = false;
   {

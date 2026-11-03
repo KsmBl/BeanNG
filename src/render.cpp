@@ -1983,6 +1983,22 @@ struct Renderer::Impl {
           }
           break;
         }
+        case EV_SMOKE: {
+          // Thick white smoke that rises and spreads: you cannot see through it, from either side.
+          for (int i = 0; i < 7; i++) {
+            Particle q;
+            q.p = e.p + V3{rnd(-3.f, 3.f), rnd(-3.f, 3.f), rnd(0.f, 1.5f)};
+            q.v = V3{rnd(-1.2f, 1.2f), rnd(-1.2f, 1.2f), rnd(.5f, 1.8f)};
+            q.maxLife = q.life = rnd(4.f, 7.f) * (0.4f + 0.6f * e.strength);
+            q.size = rnd(3.5f, 6.5f);
+            const float g = rnd(.78f, .9f);
+            q.r = g; q.g = g; q.b = g * .98f; q.a = .75f;
+            q.gravity = -.05f;
+            q.drag = .4f;
+            particles.push_back(q);
+          }
+          break;
+        }
         case EV_BLOOD: {
           // A spray from where it went in, more for a heavier hit, and it falls.
           const int count = 14 + int(60.f * e.strength);
@@ -2466,7 +2482,7 @@ struct Renderer::Impl {
       // And what else is carried.
       snprintf(buf, sizeof buf, "Tretminen %d  ·  Panzerminen %d  ·  Reparatursets %d", s.foot.items[0], s.foot.items[1], s.foot.items[2]);
       label(wx, wy - 12 * u, buf, 13 * u, dim);
-      snprintf(buf, sizeof buf, "Granaten %d  ·  Lenkraketen %d  ·  Bombencodes %d", s.foot.shells, s.foot.missiles, s.foot.codes);
+      snprintf(buf, sizeof buf, "Granaten %d  ·  Lenkraketen %d  ·  Bombencodes %d  ·  Nebel %d", s.foot.shells, s.foot.missiles, s.foot.codes, s.foot.items[5]);
       label(wx, wy - 30 * u, buf, 13 * u, dim);
       float kx = wx + 16 * u;
       for (int i = 0; i < 5; i++) {

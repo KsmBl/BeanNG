@@ -92,7 +92,7 @@ struct Obj {
 // Beam tags of trees: their breaking is heard and seen differently from steel.
 constexpr u8 kTagWood = 200, kTagBranch = 201;
 
-enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH, EV_ROCK, EV_IMPACT, EV_BLOOD };
+enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH, EV_ROCK, EV_IMPACT, EV_BLOOD, EV_SMOKE };
 struct SimEvent {
   V3 p, v;
   float strength;

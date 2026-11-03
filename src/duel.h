@@ -8,13 +8,13 @@
 #include "vehicle.h"
 #include "world.h"
 
-enum ItemKind : u8 { IT_FOOT_MINE, IT_AT_MINE, IT_REPAIR, IT_AR, IT_SMALL_AMMO, IT_COUNT };
+enum ItemKind : u8 { IT_FOOT_MINE, IT_AT_MINE, IT_REPAIR, IT_AR, IT_SMALL_AMMO, IT_SMOKE, IT_COUNT };
 struct ItemInfo {
   const char* name;
   int slots;
 };
 inline constexpr ItemInfo kItems[IT_COUNT] = {
-    {"Tretmine", 2}, {"Panzermine", 5}, {"Reparaturset", 10}, {"Sturmgewehr", 2}, {"Kleinmunition (60 Schuss)", 1},
+    {"Tretmine", 2}, {"Panzermine", 5}, {"Reparaturset", 10}, {"Sturmgewehr", 2}, {"Kleinmunition (60 Schuss)", 1}, {"Nebelgranate", 1},
 };
 inline constexpr int kLoadoutSlots = 20;
 inline int slotsUsed(const u8 items[IT_COUNT]) {
@@ -124,6 +124,7 @@ class Duel {
     bool placeFoot = false, placeTank = false;
     bool strike = false;    // a code used on the point marked on the map
     bool query = false;     // asks a tapped computer where the enemy is
+    bool smoke = false;     // a grenade on foot, the launcher in a tank
     V3 strikeAt;
     bool setup = false;     // lies down behind the big rifle, or gets up again
     int weapon = WP_PISTOL;
@@ -169,7 +170,16 @@ class Duel {
   };
   std::vector<Incoming> incoming;
   static constexpr double kStrikeDelay = 6.0, kStrikeSpread = 38.0, kStrikeGap = 1.4;
-  static constexpr int kKindStrike = WP_COUNT;
+  static constexpr int kKindStrike = WP_COUNT, kKindSmoke = WP_COUNT + 1;
+  // Clouds of smoke: where they are, and how long they go on rising.
+  struct SmokeCloud {
+    V3 p;
+    double left = 0, nextPuff = 0;
+  };
+  std::vector<SmokeCloud> smoke;
+  static constexpr double kSmokeTime = 26.0;
+  void startSmoke(V3 at);
+  void useSmoke(int p);
   struct Past {
     V3 soldier[2];
     V3 tank[kTanks];  // the middle of each: how far it has gone on since the shooter saw it
@@ -210,7 +220,7 @@ class Duel {
   u32 mineFirst[2][kMinesEach] = {};
   bool giveAll = false;  // for trying things out: every weapon from the start
   // What can be handed out by name: from the server's shell, and what loot is made of.
-  static constexpr int kGiveKinds = 13;
+  static constexpr int kGiveKinds = 14;
   static const char* const kGiveNames[kGiveKinds];
   bool give(int player, const char* name, int count);
   static V3 eyeOf(const Soldier& s);
