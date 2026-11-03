@@ -23,11 +23,11 @@ void Duel::build() {
   int at = 0;
   for (int side = 0; side < 2; side++) {
     const World::Base& base = world.base(side);
-    for (int k = 0; k < TK_COUNT; k++, at++) {
+    for (int k = 0; k < HK_COUNT * TK_COUNT; k++, at++) {
       const V3 p = base.slot(k);
       spawn[at] = p;
       yaw[at] = base.facing;
-      tanks[at] = buildLeopard(sim, p, &rigs[at], TurretKind(k));
+      tanks[at] = buildLeopard(sim, p, &rigs[at], TurretKind(k % TK_COUNT), HullKind(k / TK_COUNT));
       tanks[at].ammo = tanks[at].spec().ammo;
       const u32 first = sim.objs[tanks[at].hullObj].nodeStart;
       tankFirst[at] = first;
@@ -39,7 +39,7 @@ void Duel::build() {
   for (int side = 0; side < 2; side++) {
     const World::Base& base = world.base(side);
     for (int k = 0; k < kCarKinds; k++, at++) {
-      const V3 p = base.slot(TK_COUNT + k);
+      const V3 p = base.slot(HK_COUNT * TK_COUNT + k);
       spawn[at] = p;
       yaw[at] = base.facing;
       const u32 first = u32(sim.pos.size());
@@ -1555,7 +1555,7 @@ void Duel::placePlayers() {
     const World::Base& base = world.base(i);
     const double cx = std::cos(base.facing), sx = std::sin(base.facing);
     p.soldier = Soldier{};
-    p.soldier.p = base.centre + V3{cx, sx, 0} * 4.0;
+    p.soldier.p = base.centre + V3{cx, sx, 0} * -7.0;
     p.soldier.yaw = base.facing + PI;
   }
 }

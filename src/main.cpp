@@ -1498,7 +1498,9 @@ struct Game {
           snprintf(msg, sizeof msg, "E: nehmen  ·  %s", Duel::crateLabel(duel.crates[size_t(duel.nearCrate(me.p + V3{0, 0, 0.3}))], what, sizeof what));
         } else if (phaseNow == Duel::PLAYING) {
           const int v = duel.nearestVehicle(me.p, 2.5);
-          const char* name = v < 0 ? "" : (v < Duel::kTanks ? duel.tanks[v].spec().name : (v - Duel::kTanks) % Duel::kCarKinds == 0 ? "Xantia" : ((v - Duel::kTanks) % Duel::kCarKinds == 1 ? "One:1" : "Hummer"));
+          char tankName[64] = "";
+          if (v >= 0 && v < Duel::kTanks) snprintf(tankName, sizeof tankName, "%s, %s", duel.tanks[v].hullSpec().name, duel.tanks[v].spec().name);
+          const char* name = v < 0 ? "" : (v < Duel::kTanks ? tankName : (v - Duel::kTanks) % Duel::kCarKinds == 0 ? "Xantia" : ((v - Duel::kTanks) % Duel::kCarKinds == 1 ? "One:1" : "Hummer"));
           if (v >= 0) snprintf(msg, sizeof msg, carrying[IT_REPAIR] > 0 ? "E: einsteigen  ·  R: reparieren  ·  %s" : "E: einsteigen  ·  %s", name);
         }
       }
@@ -1579,7 +1581,9 @@ static void runGame() {
   static const char* carFiles[Duel::kCarKinds] = {"assets/xantia.mesh", "assets/one1.mesh", "assets/hummer.mesh"};
   for (int k = 0; k < Duel::kVehicles; k++) {
     const bool isTank = k < Duel::kTanks;
-    const char* file = isTank ? turretSpec(TurretKind(k % TK_COUNT)).mesh : carFiles[(k - Duel::kTanks) % Duel::kCarKinds];
+    const int ofSide = k % (HK_COUNT * TK_COUNT);
+    const std::string fileName = isTank ? tankMeshFile(HullKind(ofSide / TK_COUNT), TurretKind(ofSide % TK_COUNT)) : carFiles[(k - Duel::kTanks) % Duel::kCarKinds];
+    const char* file = fileName.c_str();
     CarMesh other;
     if (!other.load(file)) {
       fprintf(stderr, "%s fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n", file);
@@ -2596,7 +2600,7 @@ static void runGame() {
       view.repairKits = G.snap.repairKits;
       view.trackLeft[0] = G.snap.trackLeft[0];
       view.trackLeft[1] = G.snap.trackLeft[1];
-      for (int i = 0; i < 16; i++) view.parkedScorch[i] = G.snap.parkedScorch[i];
+      for (int i = 0; i < 64; i++) view.parkedScorch[i] = G.snap.parkedScorch[i];
       view.tankArmour = G.snap.tankArmour;
       view.tankAmmo = G.snap.tankAmmo;
       view.enemyCog = G.snap.enemyCog;

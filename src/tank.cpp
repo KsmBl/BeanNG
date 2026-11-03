@@ -54,9 +54,29 @@ const TurretSpec& turretSpec(TurretKind k) {
   return table[k];
 }
 
-Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind) {
+const HullSpec& hullSpec(HullKind k) {
+  // A heavy one that takes twice the hits and is in no hurry, a light one that outruns everything and does not last.
+  static const HullSpec table[HK_COUNT] = {
+      {"Mittlerer Panzer", "", 1.0, 1.0, 1.0},
+      {"Schwerer Panzer", "_heavy", 1.45, 1.05, 0.5},
+      {"Schneller Panzer", "_fast", 0.62, 0.95, 1.7},
+  };
+  return table[k];
+}
+
+std::string tankMeshFile(HullKind hull, TurretKind turret) {
+  static const char* kTurret[TK_COUNT] = {"", "_light", "_arty", "_missile"};
+  return std::string("assets/leopard") + hullSpec(hull).meshPart + kTurret[turret] + ".mesh";
+}
+
+Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hullKind) {
   Tank T;
   T.kind = kind;
+  T.hull = hullKind;
+  const double heft = hullSpec(hullKind).massScale;
+  // Lighter means softer to go with it, for the same reason as the turret's, and the springs carry what there is.
+  const Mat mArmourH{mArmour.k * std::min(heft, 1.0), mArmour.c * std::min(heft, 1.0), mArmour.yC, mArmour.yT, mArmour.hard, mArmour.maxStrain, 0};
+  const double totalScale = (heft * 33.5 + 9.0) / 42.5;
   const TurretSpec& spec = turretSpec(kind);
   T.reloadTime = spec.reload;
   T.missiles = spec.missiles;
@@ -86,18 +106,18 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind) {
     for (int r = 0; r < 3; r++)
       for (int d = 0; d < 2; d++) {
         const double y = (d == 0 ? 1.0 : -1.0) * ys[r];
-        ids[s][r * 2 + d] = sim.addNode(toWorld(spawn, st[s].x, y, zs[r]), st[s].mass, NF_COLLIDE, 0.5f);
+        ids[s][r * 2 + d] = sim.addNode(toWorld(spawn, st[s].x, y, zs[r]), st[s].mass * heft, NF_COLLIDE, 0.5f);
         hull.push_back(ids[s][r * 2 + d]);
       }
   }
   for (int s = 0; s < 6; s++) {
     for (int a = 0; a < 6; a++)
-      for (int b = a + 1; b < 6; b++) sim.addBeam(ids[s][a], ids[s][b], mArmour);
+      for (int b = a + 1; b < 6; b++) sim.addBeam(ids[s][a], ids[s][b], mArmourH);
     if (s < 5)
       for (int a = 0; a < 6; a++)
-        for (int b = 0; b < 6; b++) sim.addBeam(ids[s][a], ids[s + 1][b], mArmour);
+        for (int b = 0; b < 6; b++) sim.addBeam(ids[s][a], ids[s + 1][b], mArmourH);
     if (s < 4)
-      for (int a = 0; a < 6; a++) sim.addBeam(ids[s][a], ids[s + 2][a], mArmour);
+      for (int a = 0; a < 6; a++) sim.addBeam(ids[s][a], ids[s + 2][a], mArmourH);
   }
   // Skin, for what runs into it. All facing outward.
   const V3 hullCentre = toWorld(spawn, 3.5, 0, 0.9);
@@ -156,7 +176,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind) {
       sim.addBeam(w.out, p0, mBrace);
       sim.addBeam(w.out, p1, mBrace);
       const bool end = i == 0 || i == 6;  // real dampers sit on the first and last stations
-      const Mat spring{2.0e5, end ? 9000.0 : 3000.0, 0, 0, 0, 0, 0};
+      const Mat spring{2.0e5 * totalScale, (end ? 9000.0 : 3000.0) * totalScale, 0, 0, 0, 0, 0};
       constexpr double kPreload = 12.9e3 / 2.0e5;
       for (u32 hub : {w.in, w.out}) {
         const u32 id = sim.addBeam(hub, top, spring);
@@ -179,7 +199,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind) {
   sim.objs[T.hullObj].armoured = true;
   T.rigidNodes_ = hull;
   for (u32 i = sim.objs[T.hullObj].nodeStart; i < sim.objs[T.hullObj].nodeStart + sim.objs[T.hullObj].nodeCount; i++)
-    if (sim.mass[i] < 200.0 && sim.mass[i] > 60.0) T.rigidNodes_.push_back(i);
+    if (sim.mass[i] < 200.0 && sim.mass[i] > 60.0 && std::find(hull.begin(), hull.end(), i) == hull.end()) T.rigidNodes_.push_back(i);
   std::sort(T.rigidNodes_.begin(), T.rigidNodes_.end());
   T.rigidNodes_.erase(std::unique(T.rigidNodes_.begin(), T.rigidNodes_.end()), T.rigidNodes_.end());
 
@@ -247,7 +267,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind) {
     const Obj& o = sim.objs[oi];
     for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) total += sim.mass[i];
   }
-  printf("Leopard 1, %s: %.1f t\n", spec.name, total / 1000.0);
+  printf("%s, %s: %.1f t\n", hullSpec(hullKind).name, spec.name, total / 1000.0);
 
   if (rig) {
     rig->noseX = kNoseX;
@@ -486,7 +506,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   // A holed radiator lets it run hot in a minute or so; a cut fuel line empties the tanks in a few.
   radiatorHeat = std::min(radiatorHeat + (1.0 - mod[TM_RADIATOR]) * dt / 45.0, 1.0);
   fuel = std::max(0.0, fuel - (1.0 - mod[TM_FUEL]) * 7.0 * dt);
-  const double power = (fuel <= 0 ? 0.0 : 1.0) * clampd(1.0 - radiatorHeat * 0.75, 0.25, 1.0) * spec().powerScale * (mod[TM_ENGINE] <= 0 ? 0.0 : lerpd(0.35, 1.0, mod[TM_ENGINE]));
+  const double power = (fuel <= 0 ? 0.0 : 1.0) * clampd(1.0 - radiatorHeat * 0.75, 0.25, 1.0) * spec().powerScale * hullSpec().powerScale * (mod[TM_ENGINE] <= 0 ? 0.0 : lerpd(0.35, 1.0, mod[TM_ENGINE]));
   const double Te = loadNow * engineTorque(rpmNow) * power - 80.0 - engineOmega * 0.8;
   engineOmega += (Te - Tconv) * dt / 7.0;
   engineOmega = clampd(engineOmega, 0.0, 270.0);
@@ -819,8 +839,8 @@ void Tank::checkDamage(Sim& sim, double dt) {
       const double core = sim.lastBlastImpulse >= 10000.0 ? 4.5 : 1.3;
       const double reach = std::min(core / std::max(dmin, 0.3), 1.0);
       // The armour takes several: five direct hits from the 105 mm. What gets hit on the outside is another matter.
-      const double hit = 0.20 * (sim.lastBlastImpulse / 2200.0) * reach * reach;
-      if (reach > 0.2) damageModules(sim, c, sim.lastBlastImpulse);
+      const double hit = 0.20 * hullSpec().armour * (sim.lastBlastImpulse / 2200.0) * reach * reach;
+      if (reach > 0.2) damageModules(sim, c, sim.lastBlastImpulse * hullSpec().armour);
       if (destroyed) return;
       if (hit > 0.003) takeHit(sim, hit, c);
     }

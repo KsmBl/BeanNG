@@ -56,7 +56,7 @@ struct Snapshot {
   int selfInstance = -1;
   int selfTrack = -1;
   V3 trackLeft[2];
-  float parkedScorch[32] = {};
+  float parkedScorch[64] = {};
   std::vector<std::string> chat;  // the last lines, oldest first
   std::string chatInput;
   bool chatOpen = false;

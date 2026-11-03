@@ -784,7 +784,7 @@ int main(int argc, char** argv) {
         // The tanks in play every time, and now and then the others, should a packet have gone astray.
         for (int k = 0; k < Duel::kTanks; k++) {
           const Tank& t = duel->tanks[k];
-          if (duel->occupied(k) || duel->sim.objs[t.hullObj].awake || duel->sim.objs[t.turretObj].awake || int(tick % 15) == k) sendTank(c.addr, k);
+          if (duel->occupied(k) || duel->sim.objs[t.hullObj].awake || duel->sim.objs[t.turretObj].awake || int(tick % u32(Duel::kTanks)) == k) sendTank(c.addr, k);
         }
         // Cars, in as many pieces as it takes, while they move and now and then otherwise.
         for (int k = 0; k < Duel::kCars; k++) {

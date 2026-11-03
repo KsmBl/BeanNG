@@ -661,10 +661,19 @@ void World::build() {
 }
 
 V3 World::Base::slot(int i) const {
-  // Across the yard in a row, the guns towards the enemy, wide enough apart to drive out between them.
-  const double along = (double(i) - double(kBaseSlots - 1) * 0.5) * 13.0;
+  // Rows across the yard, a row for each kind of hull, the guns towards the enemy, wide enough apart to drive out
+  // between them. The cars at the end of the middle row.
+  double ahead, along;
+  if (i < 12) {
+    ahead = 8.0 + double(i / 4) * 13.0;
+    // Staggered, so that there is a way out through the rows in front.
+    along = (double(i % 4) - 1.5) * 16.0 + (i / 4 == 1 ? 8.0 : 0.0);
+  } else {
+    ahead = 21.0;
+    along = 42.0 + double(i - 12) * 7.0;
+  }
   const double cx = std::cos(facing), sx = std::sin(facing);
-  return centre + V3{cx * 14.0 - sx * along, sx * 14.0 + cx * along, 0};
+  return centre + V3{cx * ahead - sx * along, sx * ahead + cx * along, 0};
 }
 
 void World::addCommandCentre(Base& b) {

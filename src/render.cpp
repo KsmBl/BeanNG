@@ -3331,7 +3331,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
       size_t first = 0;
       for (size_t k = 0; k < D.parkedLists.size(); k++) {
         const size_t count = D.parkedLists[k][0].size();
-        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 32 ? s.parkedScorch[k] : 0.f);
+        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 64 ? s.parkedScorch[k] : 0.f);
         // What the camera follows moves with it. Blurred as if standing still, it would smear while the world stayed sharp.
         const bool self = int(k) == s.selfInstance;
         if (self) D.setMat(prog, "uPrevWorld", D.carPrevWorld);

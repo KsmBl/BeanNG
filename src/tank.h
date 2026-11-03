@@ -4,6 +4,7 @@
 // each turret node is held to its place by a stiff spring whose anchor moves with the turret angle;
 // the reaction goes back into the hull, so recoil and slewing rock the tank as they should.
 #pragma once
+#include <string>
 #include <vector>
 #include "vehicle.h"
 
@@ -26,6 +27,17 @@ const TurretSpec& turretSpec(TurretKind k);
 
 // The first six suffer from blasts. The rest, and the track pins and turret ring too, are the small places a
 // heavy bullet can reach: weak spots at logical places, each taking something particular from the tank.
+// What is under the turret: the same soft body, but it weighs and takes hits differently.
+enum HullKind : u8 { HK_MEDIUM, HK_HEAVY, HK_FAST, HK_COUNT };
+struct HullSpec {
+  const char* name;
+  const char* meshPart;  // what the mesh's file name has for it
+  double massScale, powerScale;
+  double armour;  // what a hit does to it: below 1 it takes more of them
+};
+const HullSpec& hullSpec(HullKind k);
+std::string tankMeshFile(HullKind hull, TurretKind turret);
+
 enum TankModule { TM_ENGINE, TM_RING, TM_GUN, TM_AMMO, TM_TRACK_L, TM_TRACK_R, TM_SIGHT, TM_RANGE, TM_PERISCOPE, TM_RADIATOR, TM_FUEL, TM_ELEVATION, TM_ANTENNA, TM_COUNT };
 
 class Tank {
@@ -66,6 +78,8 @@ class Tank {
   int ammo = -1;  // rounds left; -1 never runs out, as in free driving
 
   TurretKind kind = TK_STANDARD;
+  HullKind hull = HK_MEDIUM;
+  const HullSpec& hullSpec() const { return ::hullSpec(hull); }
   const TurretSpec& spec() const { return turretSpec(kind); }
 
   struct Shell {
@@ -158,4 +172,4 @@ class Tank {
   V3 ring_;
 };
 
-Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind = TK_STANDARD);
+Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind = TK_STANDARD, HullKind hull = HK_MEDIUM);

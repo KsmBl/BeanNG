@@ -62,7 +62,7 @@ class World {
     V3 door;
     V3 slot(int i) const;  // where vehicle i of the row stands
   };
-  static constexpr int kBaseSlots = 7;
+  static constexpr int kBaseSlots = 15;  // three rows of four tanks, three cars
   bool isArena() const { return arena_; }
   bool isWater(double x, double y) const;
   static V3 fordPoint(int i);  // the middle of a ford, without its height

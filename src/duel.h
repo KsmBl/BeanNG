@@ -76,7 +76,7 @@ class Duel {
   static constexpr double kDt = 1.0 / 2000.0;
   static constexpr double kEndPause = 8.0;    // seconds to look at the wreck before the next match
   static constexpr double kChooseTime = 60.0;  // whoever has not decided by then goes with what is selected
-  static constexpr int kTanks = 2 * TK_COUNT;
+  static constexpr int kTanks = 2 * HK_COUNT * TK_COUNT;
   static constexpr int kCarKinds = 3;
   static constexpr int kCars = 2 * kCarKinds;
   static constexpr int kVehicles = kTanks + kCars;
@@ -284,7 +284,7 @@ class Duel {
   void restart();
   void placePlayers();
   bool choose(int player, const u8 items[IT_COUNT], bool ready);  // false if it does not fit
-  static int tankIndex(int side, int turret) { return side * TK_COUNT + turret; }
+  static int tankIndex(int side, int turret, int hull = HK_MEDIUM) { return side * HK_COUNT * TK_COUNT + hull * TK_COUNT + turret; }
   void drainEvents(std::vector<SimEvent>& out);
 
  private:

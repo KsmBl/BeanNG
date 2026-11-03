@@ -15,18 +15,20 @@ if [[ ! -f assets/xantia.mesh || tools/gen_xantia.py -nt assets/xantia.mesh ]]; 
   python3 tools/gen_xantia.py assets/xantia.mesh
 fi
 
-if [[ ! -f assets/leopard.mesh || tools/gen_leopard.py -nt assets/leopard.mesh ]]; then
-  python3 tools/gen_leopard.py assets/leopard.mesh
-fi
+for hull in medium heavy fast; do
+  for v in std light arty missile; do
+    name=leopard
+    [[ $hull != medium ]] && name=${name}_$hull
+    [[ $v != std ]] && name=${name}_$v
+    if [[ ! -f assets/$name.mesh || tools/gen_leopard.py -nt assets/$name.mesh ]]; then
+      python3 tools/gen_leopard.py assets/$name.mesh $v $hull
+    fi
+  done
+done
 if [[ ! -f assets/soldier.mesh || tools/gen_soldier.py -nt assets/soldier.mesh ]]; then
   python3 tools/gen_soldier.py assets/soldier.mesh olive olive2
   python3 tools/gen_soldier.py assets/soldier2.mesh sand rust
 fi
-for v in light arty missile; do
-  if [[ ! -f assets/leopard_$v.mesh || tools/gen_leopard.py -nt assets/leopard_$v.mesh ]]; then
-    python3 tools/gen_leopard.py assets/leopard_$v.mesh $v
-  fi
-done
 
 if [[ ! -f assets/one1.mesh || tools/gen_one1.py -nt assets/one1.mesh ]]; then
   python3 tools/gen_one1.py assets/one1.mesh

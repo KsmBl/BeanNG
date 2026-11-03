@@ -130,6 +130,8 @@ def loft(g, mat, sections, seg=64):
     g.add(mat, v, n, f)
 
 
+HULL = sys.argv[3] if len(sys.argv) > 3 else "medium"  # medium, heavy or fast
+
 # ---- Hull.
 H = Group("hull")
 Ytop, Yspon, Ybot = 1.56, 1.60, 1.00
@@ -175,9 +177,22 @@ for k in (-1, 0, 1):
 # Spare track links on the glacis, a small touch from the real thing.
 for k in range(4):
     box(H, "track", (0.34, -0.55 + k * 0.30, 0.97), (0.34, 0.26, 0.02))
+if HULL == "heavy":
+    # Plates bolted on: a thick glacis, full side skirts and more over the engine.
+    solid(H, "olive", [(x, y, z) for x, z in ((-0.08, 0.72), (0.5, 1.26), (-0.08, 0.92), (0.5, 1.40)) for y in (-1.5, 1.5)])
+    solid(H, "olive2", [(x, y, z) for x, z in ((0.6, 1.26), (2.1, 1.48), (0.6, 1.36), (2.1, 1.58)) for y in (-1.45, 1.45)])
+    for sg in (-1, 1):
+        for x0 in np.arange(0.3, 6.6, 1.05):
+            box(H, "olive", (x0 + 0.5, sg * 1.72, 0.74), (0.98, 0.09, 0.62))
+    box(H, "olive2", (6.6, 0, 1.4), (0.5, 2.3, 0.14))
+elif HULL == "fast":
+    # Stripped down: no plates at all, cut-away guards, and open air where the skirts were. Spare fuel on the back.
+    for sg in (-1, 1):
+        cyl(H, "dark", (6.72, sg * 0.75, 1.27), (7.16, sg * 0.75, 1.27), 0.17, 16)
+    box(H, "dark", (0.25, 0, 1.08), (0.04, 2.5, 0.05))
 H.finish("hull")
 
-VARIANT = sys.argv[2] if len(sys.argv) > 2 else "std"  # std, light, arty or missile: the hull stays the same
+VARIANT = sys.argv[2] if len(sys.argv) > 2 else "std"  # std, light, arty or missile
 
 # ---- Turret. Local frame of the hull at yaw zero: ring centre at design (2.90, 0, 1.34).
 T = Group("turret")
