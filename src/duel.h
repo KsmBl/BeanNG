@@ -84,6 +84,8 @@ class Duel {
     bool hasWeapon[WP_COUNT] = {true, true, false, false, false};
     int smallAmmo = 24;  // pistol and assault rifle: what one starts with, and what the loadout adds
     int sniperAmmo = 0, rpgAmmo = 0;
+    int tankShells = 0, tankMissiles = 0;  // carried, and loaded when getting into a tank that takes them
+    int strikeCodes = 0;                   // each calls down four rockets on a point of the map
     bool wantProne = false;
     double shotClock = 0;
     double repairClock = 0;  // working on a vehicle from outside, which takes a kit and being there
@@ -141,6 +143,10 @@ class Duel {
   // The wind of this match: at ground level, the same everywhere, and it carries what flies far enough.
   V3 wind;
   bool giveAll = false;  // for trying things out: every weapon from the start
+  // What can be handed out by name: from the server's shell, and what loot is made of.
+  static constexpr int kGiveKinds = 13;
+  static const char* const kGiveNames[kGiveKinds];
+  bool give(int player, const char* name, int count);
   static V3 eyeOf(const Soldier& s);
 
   Player players[2];

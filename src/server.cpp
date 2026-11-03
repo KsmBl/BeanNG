@@ -5,13 +5,151 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <termios.h>
 #include <thread>
+#include <unistd.h>
+#include <functional>
+#include <string>
+#include <vector>
 #include "duel.h"
 #include "duelnet.h"
 
 using namespace net;
 
 namespace {
+
+// The console: a prompt that stays at the bottom, with history and tab completion. What the game reports is written
+// above it. When the input is not a terminal, say under a service manager, there is simply no prompt.
+class Shell {
+ public:
+  void start() {
+    interactive_ = isatty(STDIN_FILENO);
+    if (!interactive_) return;
+    tcgetattr(STDIN_FILENO, &saved_);
+    termios raw = saved_;
+    raw.c_lflag &= tcflag_t(~(ICANON | ECHO));  // Ctrl-C keeps working: it ends the server properly
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    active_ = true;
+    redraw();
+  }
+  void stop() {
+    if (!active_) return;
+    active_ = false;
+    tcsetattr(STDIN_FILENO, TCSANOW, &saved_);
+    fputs("\r\033[K", stdout);
+    fflush(stdout);
+  }
+  // A line of output above the prompt.
+  void print(const std::string& text) {
+    if (active_) fputs("\r\033[K", stdout);
+    puts(text.c_str());
+    redraw();
+  }
+  std::function<std::vector<std::string>(const std::vector<std::string>& words)> complete;
+  // Returns true and fills the line when one has been entered.
+  bool poll(std::string& out) {
+    if (!active_) return false;
+    char c;
+    while (read(STDIN_FILENO, &c, 1) == 1) {
+      if (escape_ == 1) {
+        escape_ = c == '[' ? 2 : 0;
+        continue;
+      }
+      if (escape_ == 2) {
+        escape_ = 0;
+        if (c == 'A' && history_ > 0) setLine(past_[size_t(--history_)]);
+        if (c == 'B' && history_ < int(past_.size())) {
+          history_++;
+          setLine(history_ == int(past_.size()) ? "" : past_[size_t(history_)]);
+        }
+        continue;
+      }
+      if (c == 27) {
+        escape_ = 1;
+      } else if (c == '\n' || c == '\r') {
+        out = line_;
+        line_.clear();
+        if (!out.empty()) past_.push_back(out);
+        history_ = int(past_.size());
+        fputs("\r\033[K", stdout);
+        printf("> %s\n", out.c_str());
+        redraw();
+        return true;
+      } else if (c == 127 || c == 8) {
+        // A whole letter at a time, however many bytes it is.
+        while (line_.size() > 1 && (static_cast<unsigned char>(line_.back()) & 0xC0) == 0x80) line_.pop_back();
+        if (!line_.empty()) line_.pop_back();
+        redraw();
+      } else if (c == '\t') {
+        tab();
+      } else if (c == 21) {  // Ctrl-U clears the line
+        line_.clear();
+        redraw();
+      } else if (static_cast<unsigned char>(c) >= 32) {
+        line_ += c;
+        redraw();
+      }
+    }
+    return false;
+  }
+
+ private:
+  void redraw() {
+    if (!active_) {
+      fflush(stdout);
+      return;
+    }
+    printf("\r\033[K> %s", line_.c_str());
+    fflush(stdout);
+  }
+  void setLine(const std::string& s) {
+    line_ = s;
+    redraw();
+  }
+  void tab() {
+    if (!complete) return;
+    std::vector<std::string> words;
+    std::string word;
+    for (char ch : line_) {
+      if (ch == ' ') {
+        words.push_back(word);
+        word.clear();
+      } else {
+        word += ch;
+      }
+    }
+    words.push_back(word);  // the one being typed, perhaps still empty
+    const std::string& typed = words.back();
+    std::vector<std::string> hits;
+    for (const std::string& c : complete(words))
+      if (c.compare(0, typed.size(), typed) == 0) hits.push_back(c);
+    if (hits.empty()) return;
+    std::string common = hits[0];
+    for (const std::string& h : hits) {
+      size_t k = 0;
+      while (k < common.size() && k < h.size() && common[k] == h[k]) k++;
+      common.resize(k);
+    }
+    line_.resize(line_.size() - typed.size());
+    line_ += common;
+    if (hits.size() == 1) {
+      line_ += ' ';
+    } else {
+      std::string all;
+      for (const std::string& h : hits) all += h + "  ";
+      print(all);
+    }
+    redraw();
+  }
+  bool interactive_ = false, active_ = false;
+  termios saved_{};
+  std::string line_;
+  std::vector<std::string> past_;
+  int history_ = 0;
+  int escape_ = 0;
+};
 
 volatile std::sig_atomic_t gStop = 0;
 void onSignal(int) { gStop = 1; }
@@ -60,8 +198,14 @@ int main(int argc, char** argv) {
     return 1;
   }
   printf("%zu Knoten, %zu Balken.\n", duel->sim.pos.size(), duel->sim.beams.size());
-  printf("Der Server wartet auf UDP-Port %d.\n", port);
+  printf("Der Server wartet auf UDP-Port %d. /help zeigt die Befehle, TAB ergaenzt sie.\n", port);
   fflush(stdout);
+  Shell shell;
+  const auto say = [&](const char* fmt, auto... args) {
+    char text[512];
+    snprintf(text, sizeof text, fmt, args...);
+    shell.print(text);
+  };
 
   Client clients[2];
   struct ChatLine {
@@ -133,8 +277,7 @@ int main(int argc, char** argv) {
             clients[slot].told[i * 3 + 1] = float(duel->simStart.pos[i].y);
             clients[slot].told[i * 3 + 2] = float(duel->simStart.pos[i].z);
           }
-          printf("Spieler %d verbunden: %s, %s\n", slot + 1, clients[slot].name, toString(from).c_str());
-          fflush(stdout);
+          say("Spieler %d verbunden: %s, %s", slot + 1, clients[slot].name, toString(from).c_str());
         }
         clients[slot].lastHeard = now();
         sendWelcome(slot);
@@ -177,14 +320,12 @@ int main(int argc, char** argv) {
         if (!r.ok()) continue;
         c.chatSeq = seq;
         chat.push_back({slot, text});
-        printf("<%s> %s\n", c.name, text.c_str());
-        fflush(stdout);
+        say("<%s> %s", c.name, text.c_str());
       } else if (slot >= 0 && kind == P_BYE) {
         u32 token = 0;
         r.get(token);
         if (r.ok() && token == clients[slot].token) {
-          printf("Spieler %d hat das Spiel verlassen\n", slot + 1);
-          fflush(stdout);
+          say("Spieler %d hat das Spiel verlassen", slot + 1);
           clients[slot].used = false;
         }
       }
@@ -347,17 +488,112 @@ int main(int argc, char** argv) {
     }
   };
 
+  // ---- The commands of the console.
+  const auto playerByName = [&](const std::string& n) {
+    if (n == "player1" || n == "1") return 0;
+    if (n == "player2" || n == "2") return 1;
+    for (int i = 0; i < 2; i++)
+      if (clients[i].used && n == clients[i].name) return i;
+    return -1;
+  };
+  shell.complete = [&](const std::vector<std::string>& words) {
+    std::vector<std::string> out;
+    if (words.size() == 1) {
+      for (const char* c : {"/give", "/kick", "/players", "/restart", "/wind", "/help", "/quit"}) out.push_back(c);
+    } else if (words[0] == "/give" || words[0] == "/kick") {
+      if (words.size() == 2) {
+        out.push_back("player1");
+        out.push_back("player2");
+        for (const Client& c : clients)
+          if (c.used) out.push_back(c.name);
+      } else if (words[0] == "/give" && words.size() == 3) {
+        for (const char* n : Duel::kGiveNames) out.push_back(n);
+      }
+    }
+    return out;
+  };
+  const auto command = [&](const std::string& line) {
+    if (line.empty()) return;
+    if (line[0] != '/') {
+      // Anything else is said to everybody.
+      chat.push_back({2, line.substr(0, kChatBytes)});
+      return;
+    }
+    std::vector<std::string> words;
+    {
+      std::string word;
+      for (char ch : line + " ") {
+        if (ch == ' ') {
+          if (!word.empty()) words.push_back(word);
+          word.clear();
+        } else {
+          word += ch;
+        }
+      }
+    }
+    const std::string& cmd = words[0];
+    if (cmd == "/help") {
+      shell.print("Text ohne / geht in den Chat. /give <spieler> <sache> [anzahl]  /kick <spieler>  /players  /restart  /wind <m/s>  /quit");
+      std::string all = "Sachen:";
+      for (const char* n : Duel::kGiveNames) all += std::string(" ") + n;
+      shell.print(all);
+    } else if (cmd == "/give") {
+      if (words.size() < 3) {
+        shell.print("/give <spieler> <sache> [anzahl]");
+        return;
+      }
+      const int who = playerByName(words[1]);
+      const int count = words.size() > 3 ? atoi(words[3].c_str()) : 1;
+      if (who < 0) say("Spieler %s gibt es nicht", words[1].c_str());
+      else if (!duel->give(who, words[2].c_str(), count)) say("Das geht nicht: %s %d", words[2].c_str(), count);
+      else say("%s bekommt %d x %s", clients[who].used ? clients[who].name : words[1].c_str(), count, words[2].c_str());
+    } else if (cmd == "/kick") {
+      const int who = words.size() > 1 ? playerByName(words[1]) : -1;
+      if (who < 0 || !clients[who].used) {
+        shell.print("Den Spieler gibt es nicht");
+      } else {
+        // The client notices by itself when nothing comes any more.
+        clients[who].used = false;
+        say("Spieler %d entfernt", who + 1);
+      }
+    } else if (cmd == "/players") {
+      for (int i = 0; i < 2; i++) {
+        if (!clients[i].used) {
+          say("player%d: frei", i + 1);
+          continue;
+        }
+        const Duel::Player& pl = duel->players[i];
+        say("player%d: %s, %s, Leben %.0f, Fahrzeug %d, Position %.0f %.0f", i + 1, clients[i].name, toString(clients[i].addr).c_str(), pl.soldier.hp, pl.vehicle, pl.soldier.p.x, pl.soldier.p.y);
+      }
+    } else if (cmd == "/restart") {
+      duel->restart();
+      duel->phase = duel->players[0].present && duel->players[1].present ? Duel::CHOOSING : Duel::WAITING;
+      shell.print("Neues Match");
+    } else if (cmd == "/wind") {
+      if (words.size() > 1) duel->wind = norm(duel->wind) * atof(words[1].c_str());
+      say("Wind %.1f m/s", len(duel->wind));
+    } else if (cmd == "/quit") {
+      gStop = 1;
+    } else {
+      say("Unbekannt: %s. /help zeigt die Befehle.", cmd.c_str());
+    }
+  };
+  shell.start();
+
   double simTime = 0;
   double nextSend = 0;
   double busy = 0, lastReport = now();
   double wall0 = now();
   while (!gStop) {
     receive();
+    {
+      std::string line;
+      while (shell.poll(line)) command(line);
+    }
     const double t = now();
     for (int i = 0; i < 2; i++) {
       if (clients[i].used && t - clients[i].lastHeard > kTimeout) {
-        printf("Spieler %d: keine Verbindung mehr\n", i + 1);
-        fflush(stdout);
+        say("Spieler %d: keine Verbindung mehr", i + 1);
         clients[i].used = false;
       }
     }
@@ -408,8 +644,7 @@ int main(int argc, char** argv) {
     busy += std::chrono::duration<double>(Clock::now() - q0).count();
     if (duel->matchId != seenMatch) {
       seenMatch = duel->matchId;
-      printf("Match %u: Stand %u : %u\n", duel->matchId, duel->wins[0], duel->wins[1]);
-      fflush(stdout);
+      say("Match %u: Stand %u : %u", duel->matchId, duel->wins[0], duel->wins[1]);
       pending.clear();
       for (Client& c : clients)
         if (c.used) {
@@ -481,13 +716,13 @@ int main(int argc, char** argv) {
       }
     }
     if (t - lastReport > 30.0) {
-      printf("Physik-Last %.0f %%, wach %zu, Spieler %d\n", busy / (t - lastReport) * 100.0, duel->sim.active.size(), int(clients[0].used) + int(clients[1].used));
-      fflush(stdout);
+      if (getenv("BEANNG_LOAD")) say("Physik-Last %.0f %%, wach %zu, Spieler %d", busy / (t - lastReport) * 100.0, duel->sim.active.size(), int(clients[0].used) + int(clients[1].used));
       busy = 0;
       lastReport = t;
     }
     std::this_thread::sleep_for(std::chrono::microseconds(500));
   }
+  shell.stop();
   printf("Server beendet\n");
   delete duel;
   return 0;

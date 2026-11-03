@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include "props.h"
 
 namespace {
@@ -374,6 +375,37 @@ int Duel::nearestToRepair(V3 p) const {
   return best;
 }
 
+const char* const Duel::kGiveNames[kGiveKinds] = {
+    "tretmine", "panzermine", "reparaturset", "sturmgewehr", "kleinmunition", "scharfschuetzengewehr", "scharfschuetzenmunition",
+    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "leben",
+};
+
+bool Duel::give(int player, const char* name, int count) {
+  if (player < 0 || player > 1 || count < 1) return false;
+  Player& p = players[player];
+  const std::string n = name;
+  const auto addItem = [&](ItemKind k) { p.items[k] = u8(std::min(int(p.items[k]) + count, 99)); };
+  if (n == "tretmine") addItem(IT_FOOT_MINE);
+  else if (n == "panzermine") addItem(IT_AT_MINE);
+  else if (n == "reparaturset") addItem(IT_REPAIR);
+  else if (n == "sturmgewehr") p.hasWeapon[WP_AR] = true;
+  else if (n == "kleinmunition") p.smallAmmo += count;
+  else if (n == "scharfschuetzengewehr") {
+    p.hasWeapon[WP_SNIPER] = true;
+    p.sniperAmmo += 10 * count;
+  } else if (n == "scharfschuetzenmunition") p.sniperAmmo += count;
+  else if (n == "raketenwerfer") {
+    p.hasWeapon[WP_RPG] = true;
+    p.rpgAmmo += 2 * count;
+  } else if (n == "raketen") p.rpgAmmo += count;
+  else if (n == "granaten") p.tankShells += count;
+  else if (n == "lenkraketen") p.tankMissiles += count;
+  else if (n == "bombencode") p.strikeCodes += count;
+  else if (n == "leben") p.soldier.hp = std::min(p.soldier.hp + count, 100.0);
+  else return false;
+  return true;
+}
+
 V3 Duel::eyeOf(const Soldier& s) {
   // Standing, or stretched out on the ground with the head towards the enemy.
   const double cy = std::cos(s.yaw), sy = std::sin(s.yaw);
@@ -512,6 +544,17 @@ void Duel::boardVehicle(int p, int v) {
   sim.wake(a);
   sim.wake(b);
   if (v >= kTanks) cars[size_t(v - kTanks)].engineRunning = true;
+  // What one has been carrying for it goes into the tank.
+  if (v < kTanks) {
+    Player& pl = players[p];
+    Tank& t = tanks[v];
+    if (t.ammo >= 0) t.ammo += pl.tankShells;
+    pl.tankShells = 0;
+    if (t.spec().missiles > 0) {
+      t.missiles += pl.tankMissiles;
+      pl.tankMissiles = 0;
+    }
+  }
 }
 
 void Duel::leaveVehicle(int p) {
@@ -659,6 +702,7 @@ void Duel::placePlayers() {
     p.weapon = WP_PISTOL;
     p.smallAmmo = 24;
     p.sniperAmmo = p.rpgAmmo = 0;
+    p.tankShells = p.tankMissiles = p.strikeCodes = 0;
     p.shotClock = 0;
     p.wantProne = false;
     for (int k = 0; k < WP_COUNT; k++) p.hasWeapon[k] = k <= WP_PISTOL;

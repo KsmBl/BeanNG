@@ -965,7 +965,7 @@ struct Game {
               r.get(ch);
               text += ch;
             }
-            if (!r.ok() || who > 1) break;
+            if (!r.ok() || who > 2) break;
             const u32 have = chatLogFirst + u32(chatLog.size());
             if (chatLog.empty()) chatLogFirst = from;
             if (i == chatLogFirst + u32(chatLog.size()) || (have <= i && chatLog.empty())) chatLog.push_back({who, text});
@@ -979,7 +979,7 @@ struct Game {
           std::lock_guard<std::mutex> lock(snapMutex);
           snap.chat.clear();
           const size_t show = std::min<size_t>(chatLog.size(), 8);
-          for (size_t i = chatLog.size() - show; i < chatLog.size(); i++) snap.chat.push_back(names[chatLog[i].first] + ": " + chatLog[i].second);
+          for (size_t i = chatLog.size() - show; i < chatLog.size(); i++) snap.chat.push_back((chatLog[i].first == 2 ? std::string("Server") : names[chatLog[i].first]) + ": " + chatLog[i].second);
         } else if (kind == net::P_NAMES) {
           std::lock_guard<std::mutex> lock(snapMutex);
           for (int i = 0; i < 2; i++) {
