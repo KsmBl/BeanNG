@@ -378,6 +378,13 @@ int main(int argc, char** argv) {
       w.putV3(f.up);
       w.put(float(f.speed));
       w.put(float(v.rpm()));
+      w.put(float(v.throttleAct));
+      w.put(float(v.brakeAct));
+      w.put(float(v.steerAct));
+      w.put(float(v.fuelLitres));
+      w.put(float(v.dmg.coolantTemp));
+      w.put(float(v.latAcc));
+      w.put(float(v.lonAcc));
       w.put(i8(v.gear));
       w.put(u8(v.exploded ? 1 : 0));
       w.put(at - first);

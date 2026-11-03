@@ -2242,6 +2242,10 @@ struct Renderer::Impl {
       if (s.foot.inCar) {
         snprintf(buf, sizeof buf, "%.0f %%", s.foot.hp);
         row(IC_ENGINE, "Gesundheit", float(s.foot.hp / 100.0), s.foot.hp < 34 ? red : green, buf);
+        snprintf(buf, sizeof buf, "%.0f L", s.fuel);
+        row(IC_FUEL, "Tank", float(s.foot.fuelShare), s.foot.fuelShare < 0.1 ? red : green, buf);
+        snprintf(buf, sizeof buf, "%.0f °C", s.coolant);
+        row(IC_WATER, "Wasser", float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? red : teal, buf);
       } else if (!s.tank) {
         snprintf(buf, sizeof buf, "%.0f °C", s.coolant);
         row(IC_WATER, "Wasser", float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? red : teal, buf);
@@ -2286,7 +2290,7 @@ struct Renderer::Impl {
       };
       pedal(px, s.throttle, green);
       pedal(px + 12 * u, s.brake, red);
-      if (!s.tank) {
+      if (!s.tank || s.foot.inCar) {
         // The tyres' friction circle: where the car is using its grip right now.
         circle(gx, gy, gr, {1, 1, 1, .06f});
         arc(gx, gy, gr, 1.2f * u, 0, kPi2, {1, 1, 1, .25f});

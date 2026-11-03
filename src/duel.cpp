@@ -174,7 +174,6 @@ const V3 Duel::kSoldierRest{0, 0, -400};
 
 namespace {
 enum SoldierPart { SP_PELVIS, SP_TORSO, SP_HEAD, SP_THIGH_L, SP_THIGH_R, SP_SHIN_L, SP_SHIN_R, SP_UPPER_L, SP_UPPER_R, SP_FORE_L, SP_FORE_R, SP_GUN0 };
-constexpr double kProneAngle = 1.5;
 constexpr double kHip = 0.93, kKnee = 0.50, kShoulder = 1.42, kElbow = 1.13, kWrist = 0.87, kHipY = 0.10, kShoulderY = 0.215;
 // The middle of each part, in the bind pose: x forward, y left, z up from the ground.
 const V3 kPartMid[Duel::kSoldierParts] = {
@@ -207,7 +206,7 @@ const char* Duel::soldierPartName(int part) {
 
 void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon) {
   const double moving = std::min(std::hypot(s.v.x, s.v.y) / 2.0, 1.0);
-  const double run = std::min(std::hypot(s.v.x, s.v.y) / 7.0, 1.0);
+  const double run = std::min(std::hypot(s.v.x, s.v.y) / 8.5, 1.0);
   const double phase = s.stride * 2.1;
   const double swingAmp = (0.45 + 0.35 * run) * moving;
   const double aL = std::sin(phase) * swingAmp, aR = -std::sin(phase) * swingAmp;
@@ -217,37 +216,58 @@ void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int w
   // Where it looks: positive upward. The body follows a little, the head and the weapon all the way.
   const double look = clampd(-s.pitch, -0.9, 0.9);
   const bool longGun = weapon >= 2;
-  const double lean = look * 0.25 + 0.06 * run + (longGun ? 0.05 : 0.0);
-  const V3 pelvisJoint{0, 0, kHip};
-  const Limb torso{pelvisJoint, pelvisJoint, lean};
-  const Limb head{V3{0, 0, 1.5}, torso.at(V3{0, 0, 1.5}), look + s.prone * 1.3};
-  const Limb thighL{V3{0, kHipY, kHip}, V3{0, kHipY, kHip}, aL}, thighR{V3{0, -kHipY, kHip}, V3{0, -kHipY, kHip}, aR};
-  const Limb shinL{V3{0, kHipY, kKnee}, thighL.at(V3{0, kHipY, kKnee}), aL - kneeL}, shinR{V3{0, -kHipY, kKnee}, thighR.at(V3{0, -kHipY, kKnee}), aR - kneeR};
-  // The arms hold what is carried up in front: a long gun with both hands, a short one further out, nothing swings them.
-  const double raiseR = weapon == 0 ? 0.25 + aL * 0.5 : (longGun ? 0.55 : 1.15);
+  const double lean = look * 0.25 - 0.08 * run - (longGun ? 0.05 : 0.0);
+  // The arms hold what is carried up in front: a long gun with both hands, a short one further out.
+  const double raiseR = weapon == 0 ? 0.25 + aL * 0.5 : (longGun ? 0.55 : 1.15) + look;
   const double bendR = weapon == 0 ? 0.5 : (longGun ? 1.15 : 0.35);
-  const double raiseL = weapon == 0 ? aR * 0.8 : (longGun ? 1.0 : 1.0);
+  const double raiseL = weapon == 0 ? aR * 0.8 : 1.0 + look;
   const double bendL = weapon == 0 ? 0.3 : (longGun ? 0.55 : 0.6);
+
+  // Getting down goes in stages: down on the knees, forward onto the hands, then stretched out flat on the belly,
+  // up on the elbows behind the bipod. Every joint goes from one of these poses to the next; getting up is the reverse.
+  struct Pose {
+    double hipX, hipZ, torso, thigh, knee, upperR, foreR, upperL, foreL;
+  };
+  const Pose stand{0, kHip, lean, 0, 0, raiseR, raiseR + bendR, raiseL, raiseL + bendL};
+  static constexpr Pose kKneel{0.05, 0.44, -0.45, 1.25, 2.35, 0.70, 1.80, 0.90, 1.70};
+  static constexpr Pose kHands{0.45, 0.34, -1.05, 0.20, 1.10, 1.00, 1.15, 0.60, 1.15};
+  static constexpr Pose kFlat{0.88, 0.20, -1.30, -1.50, 0.12, 1.05, 1.50, 0.95, 1.45};
+  const auto between = [&](double from, double kneel, double hands, double flat) {
+    const double p = s.prone;
+    if (p <= 0) return from;
+    if (p < 0.35) return lerpd(from, kneel, smooth01(p / 0.35));
+    if (p < 0.7) return lerpd(kneel, hands, smooth01((p - 0.35) / 0.35));
+    return lerpd(hands, flat, smooth01((p - 0.7) / 0.3));
+  };
+#define POSE(field, from) between(from, kKneel.field, kHands.field, kFlat.field)
+  const V3 hipAt{POSE(hipX, stand.hipX), 0, POSE(hipZ, stand.hipZ)};
+  const double torsoAngle = POSE(torso, stand.torso);
+  const double lookFlat = s.prone * look;  // lying, the arms still follow the rifle up and down
+  const double aThighL = POSE(thigh, aL), aThighR = POSE(thigh, aR);
+  const double aShinL = aThighL - POSE(knee, kneeL), aShinR = aThighR - POSE(knee, kneeR);
+  const double aUpperR = POSE(upperR, stand.upperR) + lookFlat, aForeR = POSE(foreR, stand.foreR) + lookFlat;
+  const double aUpperL = POSE(upperL, stand.upperL) + lookFlat, aForeL = POSE(foreL, stand.foreL) + lookFlat;
+#undef POSE
+  const V3 pelvisJoint{0, 0, kHip};
+  const Limb pelvis{pelvisJoint, hipAt, torsoAngle * 0.8};
+  const Limb torso{pelvisJoint, hipAt, torsoAngle};
+  const Limb head{V3{0, 0, 1.5}, torso.at(V3{0, 0, 1.5}), look};
+  const V3 hipL{0, kHipY, kHip}, hipR{0, -kHipY, kHip}, kneeJL{0, kHipY, kKnee}, kneeJR{0, -kHipY, kKnee};
+  const Limb thighL{hipL, pelvis.at(hipL), aThighL}, thighR{hipR, pelvis.at(hipR), aThighR};
+  const Limb shinL{kneeJL, thighL.at(kneeJL), aShinL}, shinR{kneeJR, thighR.at(kneeJR), aShinR};
   const V3 shoulderL{0, kShoulderY, kShoulder}, shoulderR{0, -kShoulderY, kShoulder};
   const double acrossL = weapon == 0 ? 0.0 : (longGun ? 0.9 : 0.75), acrossR = weapon == 0 ? 0.0 : 0.35;
-  const Limb upperL{shoulderL, torso.at(shoulderL), raiseL + (weapon ? look : 0.0), acrossL}, upperR{shoulderR, torso.at(shoulderR), raiseR + (weapon ? look : 0.0), acrossR};
+  const Limb upperL{shoulderL, torso.at(shoulderL), aUpperL, acrossL}, upperR{shoulderR, torso.at(shoulderR), aUpperR, acrossR};
   const V3 elbowL{0, kShoulderY, kElbow}, elbowR{0, -kShoulderY, kElbow};
-  const Limb foreL{elbowL, upperL.at(elbowL), upperL.angle + bendL, acrossL}, foreR{elbowR, upperR.at(elbowR), upperR.angle + bendR, acrossR};
+  const Limb foreL{elbowL, upperL.at(elbowL), aForeL, acrossL}, foreR{elbowR, upperR.at(elbowR), aForeR, acrossR};
   const V3 grip{0, -kShoulderY, kWrist - 0.04};
-  // Lying down turns the figure forward, and what it looks along has to come back up by as much.
-  const double liftBack = s.prone * kProneAngle;
-  const Limb gun{grip, foreR.at(grip), weapon == 0 ? foreR.angle - 1.2 : look + liftBack};
+  const Limb gun{grip, foreR.at(grip), weapon == 0 ? foreR.angle - 1.2 : look};
 
-  // Then the whole figure: turned to where it faces, and laid down when it is lying.
+  // Then the whole figure, turned to where it faces.
   const double cy = std::cos(s.yaw), sy = std::sin(s.yaw);
   const V3 ahead{-cy, -sy, 0};
   const V3 left = V3{-ahead.y, ahead.x, 0};
   const auto world = [&](V3 q) {
-    if (s.prone > 0) {
-      // About the feet, flat onto the belly with the head towards where it looks.
-      q = swingF(q, -s.prone * kProneAngle);
-      q.z += s.prone * 0.18;
-    }
     q.z -= dropByStride;
     return s.p + ahead * q.x + left * q.y + V3{0, 0, q.z};
   };
@@ -260,8 +280,7 @@ void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int w
       sim.pos[n] = hidden || !limb ? kSoldierRest + corner(part, k) : world(limb->at(corner(part, k)));
     }
   };
-  const Limb still{V3{}, V3{}, 0.0};
-  place(SP_PELVIS, &still);
+  place(SP_PELVIS, &pelvis);
   place(SP_TORSO, &torso);
   place(SP_HEAD, &head);
   place(SP_THIGH_L, &thighL);
@@ -285,7 +304,7 @@ void Duel::walk(Soldier& s, const WalkInput& in, double dt) const {
   V3 want = ahead * in.forward + side * in.strafe;
   const double wl = len(want);
   if (wl > 1.0) want = want / wl;
-  const double top = in.sprint ? 7.0 : 4.2;
+  const double top = in.sprint ? 8.5 : 5.0;
   const double rate = s.grounded ? 40.0 : 6.0;
   const V3 flat{s.v.x, s.v.y, 0};
   V3 dv = want * top - flat;
@@ -512,7 +531,7 @@ bool Duel::give(int player, const char* name, int count) {
 V3 Duel::eyeOf(const Soldier& s) {
   // Standing, or stretched out on the ground with the head towards the enemy.
   const double cy = std::cos(s.yaw), sy = std::sin(s.yaw);
-  return s.p + V3{-cy, -sy, 0} * (1.32 * s.prone) + V3{0, 0, lerpd(1.45, 0.32, s.prone)};
+  return s.p + V3{-cy, -sy, 0} * (1.5 * s.prone) + V3{0, 0, lerpd(1.45, 0.42, s.prone)};
 }
 
 V3 Duel::soldierAt(int p, double lag) const {
@@ -587,8 +606,23 @@ void Duel::stepBullets(double dt) {
       if (players[q].vehicle < 0 && b.kind != kKindStrike) {
         const V3 foot = soldierAt(q, b.lag);
         const double t = clampd(dot(V3{foot.x - from.x, foot.y - from.y, 0}, V3{seg.x, seg.y, 0}) / std::max(seg.x * seg.x + seg.y * seg.y, 1e-9), 0, 1);
-        const V3 near = from + seg * t;
-        if (std::hypot(near.x - foot.x, near.y - foot.y) < 0.38 && near.z > foot.z && near.z < foot.z + Soldier::kHeight) {
+        V3 near = from + seg * t;
+        bool struck = std::hypot(near.x - foot.x, near.y - foot.y) < 0.38 && near.z > foot.z && near.z < foot.z + Soldier::kHeight;
+        const Soldier& target = players[q].soldier;
+        if (target.prone > 0.5) {
+          // Stretched out along the ground, from the feet to the head: low, and long.
+          struck = false;
+          const V3 along{-std::cos(target.yaw), -std::sin(target.yaw), 0};
+          for (double d = 0.15; d < 1.75 && !struck; d += 0.3) {
+            const V3 c = foot + along * d + V3{0, 0, 0.22};
+            const double ts = clampd(dot(c - from, seg) / std::max(len2(seg), 1e-9), 0, 1);
+            if (len2(from + seg * ts - c) < 0.3 * 0.3) {
+              struck = true;
+              near = from + seg * ts;
+            }
+          }
+        }
+        if (struck) {
           stop = true;
           at = near;
           if (b.kind < WP_RPG) {

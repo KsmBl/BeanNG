@@ -62,6 +62,7 @@ struct Snapshot {
     int weapon = 1;
     int ammo = 0;  // for what is in the hand, -1 if it needs none
     int has = 3;
+    double fuelShare = 1;
     int shells = 0, missiles = 0, codes = 0;
     bool tapped = false, hasFix = false;
     bool noSight = false, noRange = false, noPeriscope = false, noRadio = false;
