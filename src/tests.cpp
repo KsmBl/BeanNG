@@ -1814,6 +1814,44 @@ int main(int argc, char** argv) {
     printf("Eigenwert %.2f, guard %llu, v %.0f km/h\n", e, (unsigned long long)s->clampedSteps, c0.speed * 3.6);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "carreset")) {
+    // Smash the car and part of the scenery, put the car back: the scenery must stay smashed.
+    Bench b({-90, 0, 0}, 0, true);
+    auto brokenProps = [&] {
+      int n = 0;
+      const u32 first = b.sim.objs[0].beamCount;
+      for (u32 i = first; i < b.sim.beams.size(); i++) n += (b.sim.beams[i].flags & BF_BROKEN) != 0;
+      return n;
+    };
+    const Sim start = b.sim;
+    const Vehicle carStart = b.car;
+    b.launchAt(120 / 3.6, 3);
+    b.run(9.0, [&](double, Controls& c) { c.throttle = 0.5; });
+    int carBroken = 0;
+    for (u32 i = 0; i < b.sim.objs[0].beamCount; i++) carBroken += (b.sim.beams[i].flags & BF_BROKEN) != 0;
+    const size_t objsBefore = b.sim.objs.size();
+    int pieces = 0;
+    for (size_t i = 1; i < b.sim.objs.size(); i++) pieces += b.sim.objs[i].root == 0;
+    const V3 fence = b.sim.pos[b.sim.objs[10].nodeStart];
+    printf("nach der Fahrt: Auto-Balken gerissen %d, Teile vom Auto %d, Umgebung gerissen %d, Objekte %zu, x %.1f\n", carBroken, pieces, brokenProps(), objsBefore, b.car.cog.x);
+    const int envBefore = brokenProps();
+    b.sim.restoreObjects(start, 1);
+    b.car = carStart;
+    carBroken = 0;
+    for (u32 i = 0; i < b.sim.objs[0].beamCount; i++) carBroken += (b.sim.beams[i].flags & BF_BROKEN) != 0;
+    printf("nach dem Reset: Auto-Balken gerissen %d, Umgebung gerissen %d (war %d), Prop-Knoten bewegt %.3f m, Auto x %.1f\n", carBroken, brokenProps(), envBefore, len(b.sim.pos[b.sim.objs[10].nodeStart] - fence), b.car.cog.x);
+    b.run(4.0, [&](double, Controls& c) { c.throttle = 0.4; });
+    printf("danach 4 s Fahrt: %.0f km/h, x %.1f, Verformung %.1f kJ, guard %llu, sane %d, Umgebung gerissen %d, wach %zu\n", b.car.speed * 3.6, b.car.cog.x, b.sim.plasticEnergy / 1e3, (unsigned long long)b.sim.clampedSteps, b.sane(), brokenProps(), b.sim.active.size());
+    for (int k = 0; k < 2; k++) {
+      b.launchAt(150 / 3.6, 3);
+      b.run(5.0, [&](double, Controls& c) { c.throttle = 0.5; });
+      b.sim.restoreObjects(start, 1);
+      b.car = carStart;
+    }
+    b.run(2.0, [&](double, Controls&) {});
+    printf("zwei weitere Runden und Resets: sane %d, guard %llu, Objekte %zu, wach %zu, Umgebung gerissen %d\n", b.sane(), (unsigned long long)b.sim.clampedSteps, b.sim.objs.size(), b.sim.active.size(), brokenProps());
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "one1grip")) {
     // Pulling away on every surface, full throttle, with all the aids on.
     for (int surface = 0; surface < 3; surface++) {

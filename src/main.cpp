@@ -70,7 +70,7 @@ struct SharedInput {
   Tuning tuning;
   double tankReload = 4;
   Controls c;
-  bool reset = false, repair = false, paused = false;
+  bool reset = false, repair = false, resetWorld = false, paused = false;
   double timeScale = 1.0;
   int grabNode = -1;
   V3 grabTarget;
@@ -270,6 +270,7 @@ struct Game {
       const Beam& b = sim.beams[i];
       s.beamForce[i] = (b.flags & BF_BROKEN) ? 0.f : (b.force == 0.f ? 1e-3f : b.force);
     }
+    s.carResets = sim.carResets;
     s.events.insert(s.events.end(), sim.events.begin(), sim.events.end());
     if (s.events.size() > 2000) s.events.clear();
     sim.events.clear();
@@ -433,7 +434,7 @@ struct Game {
         input.c.cycleHeight = input.c.toggleIgnition = input.c.toggleActiva = false;
         input.c.requestGear = 99;
         input.c.fire = false;
-        input.reset = input.repair = false;
+        input.reset = input.repair = input.resetWorld = false;
         car.tune = input.tuning;
         tank.reloadTime = input.tankReload;
       }
@@ -444,19 +445,33 @@ struct Game {
         w.dent[3] = 0.02f; w.dent[4] = 0.04f; w.dent[5] = 0.045f; w.dent[6] = 0.03f; w.dent[7] = 0.012f;
         w.runoutX = 0.012f;
       }
-      if (in.reset || (kind == VK_LEOPARD && in.repair)) {
+      // The vehicle goes back; the world keeps every fence it knocked down and every hole it left.
+      const auto restoreVehicle = [&] {
+        sim.restoreObjects(simStart, kind == VK_LEOPARD ? 2 : 1);
+        car = carStart;
+        tank = tankStart;
+        // If the start itself has been blown into a crater, the car still has to come down on the ground.
+        const double dip = world.height(kSpawn.x, kSpawn.y) - kSpawn.z;
+        if (dip > 0.02) {
+          const Obj& o0 = sim.objs[0];
+          for (u32 i = o0.nodeStart; i < o0.nodeStart + o0.nodeCount; i++) sim.pos[i].z += dip;
+        }
+        resetVisuals = true;
+      };
+      if (in.resetWorld) {
         world.clearCraters();
         sim = simStart;
         car = carStart;
         tank = tankStart;
         resetVisuals = true;
+      } else if (in.reset || (kind == VK_LEOPARD && in.repair)) {
+        restoreVehicle();
       }
       // Pieces that have flown off cannot just be put back on: a torn-up car starts over.
-      if (in.repair && (car.exploded || sim.splitGeneration != simStart.splitGeneration)) {
-        world.clearCraters();
-        sim = simStart;
-        car = carStart;
-        resetVisuals = true;
+      if (in.resetWorld || in.reset) {
+        // Done above.
+      } else if (in.repair && (car.exploded || sim.splitGeneration != simStart.splitGeneration)) {
+        restoreVehicle();
       } else if (in.repair && kind != VK_LEOPARD) {
         applyRepair();
         resetVisuals = true;
@@ -1049,7 +1064,7 @@ static int playSession(int kind, bool openMenu) {
     }
 
     Controls edges;
-    bool doReset = false, doRepair = false;
+    bool doReset = false, doRepair = false, doResetWorld = false;
 
     // The list on screen, rebuilt from the live state each frame.
     items.clear();
@@ -1075,6 +1090,10 @@ static int playSession(int kind, bool openMenu) {
       page("Fahrzeug-Einstellungen", [&] { openPage(PANEL_CAR); });
       page("Spiel-Einstellungen", [&] { openPage(PANEL_GAME); });
       page("Steuerung", [&] { openPage(PANEL_KEYS); });
+      page("Welt zurücksetzen", [&] {
+        doResetWorld = true;
+        panelKind = PANEL_NONE;
+      });
       page("Beenden", [&] { quit = true; });
     } else if (panelKind == PANEL_VEHICLE) {
       items.push_back({"Citroën Xantia Activa", "V6  ·  190 PS  ·  1,5 t", -1.f, [&](int) {}});
@@ -1139,7 +1158,7 @@ static int playSession(int kind, bool openMenu) {
       key("Zeitlupe / Pause", "[ ] / P");
       key("Fahrzeug-Einstellungen", "O");
       key("Fahrzeug wählen", "TAB");
-      key("Zum Start / Reparieren", "R / F5");
+      key("Fahrzeug zum Start / Reparieren", "R / F5");
       key("Beams / Röntgen / Screenshot", "F2 F3 F12");
       key("Hauptmenü", "ESC");
       key("Controller: Bombe / Handbremse / Gang", "X / A / LB RB");
@@ -1509,6 +1528,18 @@ static int playSession(int kind, bool openMenu) {
             repairDone = true;
           }
           break;
+        case 29:  // through the fence and the wall, then back to the start: the wreckage must stay
+          scriptGas = tNow < 7.0 ? 0.9 : 0.0;
+          if (tNow > 8.0 && !repairDone) {
+            doReset = true;
+            repairDone = true;
+          }
+          scriptBrake = tNow > 8.0 ? 1.0 : 0.0;
+          rig.mode = CAM_ORBIT;
+          rig.dist = 9.0;
+          rig.pitch = 0.35;
+          rig.yaw = PI + 0.3;
+          break;
         case 23:  // switches vehicle in mid-game, as the menu does, and back out
           if (tNow > 4.0) {
             nextVehicle = kind == VK_XANTIA ? VK_LEOPARD : -1;
@@ -1600,6 +1631,7 @@ static int playSession(int kind, bool openMenu) {
       c.requestGear = sendC.requestGear;
       G.input.reset |= doReset;
       G.input.repair |= doRepair;
+      G.input.resetWorld |= doResetWorld;
       G.input.paused = paused || (menuPause && !menuSpin);
       G.input.timeScale = timeScale;
       G.input.grabNode = grabNode;
@@ -1619,7 +1651,10 @@ static int playSession(int kind, bool openMenu) {
       }
     }
     if (doReset || doRepair) renderer.resetDamage();
-    if (doReset) renderer.clearSkidMarks();
+    if (doResetWorld) {
+      renderer.resetDamage();
+      renderer.clearSkidMarks();
+    }
 
     {
       std::lock_guard<std::mutex> lock(G.snapMutex);
@@ -1707,6 +1742,7 @@ static int playSession(int kind, bool openMenu) {
       view.awake = G.snap.awake;
       view.objectCount = G.snap.objectCount;
       view.splitGeneration = G.snap.splitGeneration;
+      view.carResets = G.snap.carResets;
       view.nodeObj = G.snap.nodeObj;
       view.paused = G.snap.paused;
       view.timeScale = G.snap.timeScale;

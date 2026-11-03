@@ -37,6 +37,7 @@ struct Snapshot {
   V3 carCog, carFwd{1, 0, 0}, carUp{0, 0, 1}, carLeft{0, 1, 0}, carVel;
   u32 headNode = 0;
   u32 splitGeneration = 0;
+  u32 carResets = 0;
   std::vector<u16> nodeObj;
   int objectCount = 0;
 

@@ -192,6 +192,8 @@ void Sim::forces(double dt) {
         force[i] = gv * mass[i];
         const double v2 = len2(vel[i]);
         if (v2 < vSlow * vSlow) force[i] -= vel[i] * (mass[i] * drag * (1.0 - v2 / (vSlow * vSlow)));
+        // The air takes hold of anything flying: a panel torn off at speed does not keep up with the car.
+        else if (v2 > 100.0) force[i] -= vel[i] * (0.03 * std::sqrt(v2));
       }
     } else {
       for (u32 i : o.nodes) force[i] = gv * mass[i];
@@ -269,6 +271,36 @@ void Sim::forces(double dt) {
     force[n] += f;
     wake(nodeObj[n]);
   }
+}
+
+void Sim::restoreObjects(const Sim& start, u32 count) {
+  const Obj& last = start.objs[count - 1];
+  const u32 nodeEnd = last.nodeStart + last.nodeCount, beamEnd = last.beamStart + last.beamCount;
+  // Pieces that tore off are gone: their nodes go back to the objects they came from.
+  for (size_t i = count; i < objs.size(); i++)
+    if (objs[i].root < count) {
+      objs[i].nodes.clear();
+      objs[i].beamList.clear();
+      objs[i].awake = objs[i].alwaysAwake = objs[i].dirty = false;
+    }
+  active.erase(std::remove_if(active.begin(), active.end(), [&](u32 a) { return a < count || objs[a].root < count; }), active.end());
+  for (u32 i = 0; i < count; i++) {
+    objs[i] = start.objs[i];
+    if (objs[i].alwaysAwake) active.push_back(i);
+  }
+  std::copy(start.pos.begin(), start.pos.begin() + nodeEnd, pos.begin());
+  std::copy(start.vel.begin(), start.vel.begin() + nodeEnd, vel.begin());
+  std::copy(start.mass.begin(), start.mass.begin() + nodeEnd, mass.begin());
+  std::copy(start.invMass.begin(), start.invMass.begin() + nodeEnd, invMass.begin());
+  std::copy(start.flags.begin(), start.flags.begin() + nodeEnd, flags.begin());
+  std::copy(start.nodeObj.begin(), start.nodeObj.begin() + nodeEnd, nodeObj.begin());
+  std::copy(start.beams.begin(), start.beams.begin() + beamEnd, beams.begin());
+  for (size_t i = 0; i < tris.size(); i++)
+    if (tris[i].a < nodeEnd) tris[i] = start.tris[i];
+  blasts.clear();
+  plasticEnergy = 0;
+  grab.node = -1;
+  carResets++;
 }
 
 static constexpr double kBlastEnd = 450.0;

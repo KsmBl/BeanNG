@@ -1111,6 +1111,7 @@ struct Renderer::Impl {
     }
   }
   // New craters change the ground, and with it the piece of terrain they lie in.
+  u32 seenCarResets = 0;
   size_t cratersDrawn = 0;
   std::vector<World::Crater> cratersKnown;
   void rebuildAround(const World::Crater& c) {
@@ -2529,6 +2530,13 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   D.updateCraters(s);
   D.applyScrapes(s, dt);
   D.xrayNow = hud.xray;
+  if (s.carResets != D.seenCarResets) {
+    // The car alone went back to its start: it is whole again, whatever became of the rest.
+    D.mesh->bindNode = D.pristine.bindNode;
+    D.mesh->bindWeight = D.pristine.bindWeight;
+    D.seenCarResets = s.carResets;
+    D.seenSplit = s.splitGeneration;
+  }
   if (s.splitGeneration != D.seenSplit) {
     if (s.splitGeneration < D.seenSplit) {
       // The world was reset: back to the original binding.
