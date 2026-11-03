@@ -101,6 +101,40 @@ void AudioSynth::startVoice(const Pending& p) {
       v->noiseF = fc(800);
       break;
     }
+    case Sfx::Boom: {
+      // A detonation: the air itself thumps, then rumbles away over several seconds.
+      setMode(v->modes[0], 34, 1.1f, 1.5f * s);
+      setMode(v->modes[1], 47, 0.8f, 1.1f * s);
+      setMode(v->modes[2], 71, 0.5f, 0.8f * s);
+      setMode(v->modes[3], 118, 0.25f, 0.5f * s);
+      setMode(v->modes[4], 210, 0.14f, 0.3f * s);
+      v->noise = 1.6f * s;
+      v->noiseDecay = std::exp(-1.f / (0.32f * kRateF));
+      v->noiseF = fc(420);
+      break;
+    }
+    case Sfx::Gun: {
+      // The tank gun: a hard crack first, then the thump and a long echo.
+      setMode(v->modes[0], 42, 0.65f, 1.3f * s);
+      setMode(v->modes[1], 66, 0.4f, 0.9f * s);
+      setMode(v->modes[2], 130, 0.16f, 0.6f * s);
+      setMode(v->modes[3], 310, 0.05f, 0.5f * s);
+      v->noise = 1.8f * s;
+      v->noiseDecay = std::exp(-1.f / (0.09f * kRateF));
+      v->noiseF = fc(1500);
+      break;
+    }
+    case Sfx::Crack: {
+      // Wood splitting: a dry snap, with the hollow knock of the trunk beneath it.
+      setMode(v->modes[0], rnd(90, 150), 0.09f, 0.7f * s);
+      setMode(v->modes[1], rnd(320, 520), 0.04f, 0.5f * s);
+      setMode(v->modes[2], rnd(900, 1500), 0.018f, 0.4f * s);
+      setMode(v->modes[3], rnd(2100, 3400), 0.009f, 0.3f * s);
+      v->noise = 0.9f * s;
+      v->noiseDecay = std::exp(-1.f / (0.022f * kRateF));
+      v->noiseF = fc(rnd(2000, 3500));
+      break;
+    }
     case Sfx::Clunk: {
       setMode(v->modes[0], 95, 0.05f, 0.35f * s);
       setMode(v->modes[1], 410, 0.022f, 0.22f * s);
@@ -136,6 +170,10 @@ void AudioSynth::render(float* out, int frames) {
     now_.listener += (tgt.listener - now_.listener) * k * 0.2f;
     now_.interior += (tgt.interior - now_.interior) * k * 0.2f;
     now_.master += (tgt.master - now_.master) * k * 0.5f;
+    now_.fire += (tgt.fire - now_.fire) * k * 0.1f;
+    now_.tracks += (tgt.tracks - now_.tracks) * k * 0.3f;
+    now_.exhaustPitch = tgt.exhaustPitch;
+    now_.cylinders = tgt.cylinders;
     now_.engineOn = tgt.engineOn;
     now_.starter = tgt.starter;
 
@@ -150,11 +188,11 @@ void AudioSynth::render(float* out, int frames) {
       const float load = clamp01(now_.load);
       const double revPerSample = double(rpm) / 60.0 / double(kRateF);
       crank_ += revPerSample;
-      const double step = 2.0 / 6.0;
+      const double step = 2.0 / double(std::max(now_.cylinders, 1));
       static constexpr int kOrder[6] = {0, 3, 1, 4, 2, 5};  // alternating between the banks
       while (crank_ >= step) {
         crank_ -= step;
-        const int cyl = kOrder[nextCyl_];
+        const int cyl = kOrder[nextCyl_ % 6];
         nextCyl_ = (nextCyl_ + 1) % 6;
         const float frac = float(crank_ / revPerSample);
         const float firing = now_.engineOn ? 0.16f + 0.84f * load : 0.05f;
@@ -181,9 +219,10 @@ void AudioSynth::render(float* out, int frames) {
       pipePos_ = (pipePos_ + 1) % plen;
       // Silencer: the note sits low at part throttle and opens up with load.
       const float bright = 0.35f + 0.65f * load;
-      const float a0 = exhA_[0].bandpass(inL, fc(118), 0.55f), a1 = exhA_[1].bandpass(inR, fc(118), 0.55f);
-      const float b0 = exhB_[0].bandpass(inL, fc(265), 0.55f), b1 = exhB_[1].bandpass(inR, fc(265), 0.55f);
-      const float c0 = exhC_[0].bandpass(inL, fc(640), 0.75f), c1 = exhC_[1].bandpass(inR, fc(640), 0.75f);
+      const float ep = now_.exhaustPitch;
+      const float a0 = exhA_[0].bandpass(inL, fc(118 * ep), 0.55f), a1 = exhA_[1].bandpass(inR, fc(118 * ep), 0.55f);
+      const float b0 = exhB_[0].bandpass(inL, fc(265 * ep), 0.55f), b1 = exhB_[1].bandpass(inR, fc(265 * ep), 0.55f);
+      const float c0 = exhC_[0].bandpass(inL, fc(640 * ep), 0.75f), c1 = exhC_[1].bandpass(inR, fc(640 * ep), 0.75f);
       float eL = a0 * 2.4f + b0 * 1.5f + c0 * 0.9f * bright;
       float eR = a1 * 2.4f + b1 * 1.5f + c1 * 0.9f * bright;
 
@@ -268,6 +307,31 @@ void AudioSynth::render(float* out, int frames) {
       const float amp = now_.scrape * 0.42f;
       L += g * amp;
       R += g * amp;
+    }
+
+    // ---- Tank tracks: every link hitting the sprocket and the road wheels.
+    if (now_.tracks > 0.01f) {
+      trackPhase_ += double(v) / 0.20 / double(kRateF);
+      if (trackPhase_ >= 1.0) {
+        trackPhase_ -= 1.0;
+        trackClank_ = 0.8f + 0.2f * n1;
+      }
+      trackClank_ *= 0.9975f;
+      const float tk0 = trackF_[0].bandpass(n2 * trackClank_ + trackClank_ * 0.4f, fc(700), 0.5f), tk1 = trackF_[1].bandpass(trackClank_, fc(180), 0.4f);
+      const float tGain = now_.tracks * 0.42f;
+      L += (tk0 + tk1) * tGain;
+      R += (tk0 + tk1) * tGain;
+    }
+
+    // ---- The wreck burning: a low roar with crackles.
+    if (now_.fire > 0.005f) {
+      fireLow_[0] += (n1 - fireLow_[0]) * 0.012f;
+      fireLow_[1] += (n2 - fireLow_[1]) * 0.012f;
+      if ((n2 * 0.5f + 0.5f) < 0.0009f) fireEnv_ = 0.5f + 0.5f * std::fabs(n1);
+      fireEnv_ *= 0.996f;
+      const float cr = fireF_[0].bandpass(n1 * fireEnv_, fc(2300), 0.8f);
+      L += (fireLow_[0] * 1.7f + cr * 0.4f) * now_.fire * 0.55f;
+      R += (fireLow_[1] * 1.7f + cr * 0.4f) * now_.fire * 0.55f;
     }
 
     L *= now_.listener;

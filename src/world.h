@@ -32,7 +32,11 @@ struct StaticBox {
 
 struct RoadPoint {
   double x, y, z;
+  double bank = 0;  // road height gained per metre to the left of the direction of travel
 };
+
+// Scales how much bends are banked. 1 in the game, 0 lets the test bench compare against a flat road.
+inline double gBankScale = 1.0;
 struct Road {
   std::vector<RoadPoint> pts;
   double halfWidth = 4;

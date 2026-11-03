@@ -99,6 +99,29 @@ void Vehicle::updateRimDamage(Sim& sim, Wheel& w) {
   }
 }
 
+void Vehicle::detonate(Sim& sim) {
+  if (exploded) return;
+  exploded = true;
+  burnTime = 0;
+  // About 5 kg of explosive under the rear seat.
+  const V3 at = cog - fwd * 0.45 - up * 0.1;
+  sim.explode(at, 3000.0, 22.0);
+  for (Wheel& w : wheels) {
+    if (w.deflate == 0) w.deflate = 0.001;
+    w.attached = false;
+  }
+  // What is left is scrap: slow jiggling is damped away and the pieces may come to rest and sleep.
+  for (Obj& o : sim.objs)
+    if (o.root == obj) {
+      o.kind = OBJ_PROP;
+      o.alwaysAwake = false;
+    }
+  dmg.hydraulics = dmg.radiator = dmg.tank = dmg.oilLeak = dmg.seized = dmg.gearbox = true;
+  engineRunning = false;
+  fuelLitres = 0;
+  note("AUTOBOMBE GEZUENDET");
+}
+
 void Vehicle::note(const char* msg) {
   lastDamage = msg;
   lastDamageAge = 0;
@@ -1021,6 +1044,20 @@ void Vehicle::shapeDamping(Sim& sim, double dt) {
 }
 
 void Vehicle::update(Sim& sim, const Controls& in, double dt) {
+  if (in.fire) detonate(sim);
+  if (exploded) {
+    // The wreck burns for a good while, fiercely at first.
+    burnTime += dt;
+    if ((sim.stepCount & 31) == 0 && burnTime < 90.0) {
+      const double fierce = clampd(1.0 - burnTime / 70.0, 0.15, 1.0);
+      sim.event(EV_FIRE, cog + fwd * ((sim.stepCount % 7) * 0.25 - 0.75) + up * 0.25, V3{}, float(fierce));
+    }
+    // Nothing works any more: no suspension, drive or tyre model on a structure in pieces, whose
+    // geometry they could not make sense of anyway. What is left is steel hitting the ground.
+    updateBodyFrame(sim, dt);
+    speed = dot(vCog, fwd);
+    return;
+  }
   bodyTick_++;
   updateBodyFrame(sim, dt);
   shapeDamping(sim, dt);

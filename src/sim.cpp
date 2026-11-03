@@ -255,6 +255,7 @@ void Sim::forces(double dt) {
     if (isCar) plastic += objPlastic;
   }
   plasticEnergy += plastic;
+  applyBlasts(dt);
 
   if (grab.node >= 0) {
     // Critically damped spring towards the mouse target; capped so it cannot rip the car apart
@@ -268,11 +269,90 @@ void Sim::forces(double dt) {
   }
 }
 
+static constexpr double kBlastEnd = 450.0;
+
+void Sim::explode(V3 c, double impulse, double radius) {
+  blasts.push_back({c, impulse, radius, 0.0});
+  event(EV_BLAST, c, V3{}, float(radius));
+  const double r2 = radius * radius;
+  // Everything in reach wakes up, and the structure right at the blast is simply torn.
+  const double core = radius * 0.32;
+  auto chance = [&] { return double(blastRng() & 0xffff) / 65535.0; };
+  for (size_t oi = 0; oi < objs.size(); oi++) {
+    Obj& o = objs[oi];
+    bool near = false;
+    for (u32 n : o.nodes)
+      if (len2(pos[n] - c) < r2) {
+        near = true;
+        break;
+      }
+    if (!near) continue;
+    wake(u16(oi));
+    if (o.armoured) continue;
+    for (u32 bi : o.beamList) {
+      Beam& b = beams[bi];
+      if (b.flags & BF_BROKEN) continue;
+      // What was built never to give way, such as the inside of a stone block, stays whole.
+      if (b.yT <= 0 && b.fBreak <= 0) continue;
+      const double d = len((pos[b.a] + pos[b.b]) * 0.5 - c);
+      if (d > core * 2.2) continue;
+      // Shock-loaded steel gives way far earlier than under a slow load.
+      b.yC *= 0.55;
+      b.yT *= 0.55;
+      if (b.fBreak > 0) b.fBreak *= 0.5;
+      if (d < core && chance() < 0.55 * (1.0 - d / core) + 0.08) breakBeam(b, false, 0);
+    }
+  }
+}
+
+void Sim::applyBlasts(double dt) {
+  if (blasts.empty()) return;
+  constexpr double kFrontSpeed = 450.0;   // m/s, an average over the fast near field and sound far out
+  constexpr double kPush = 0.006;         // seconds the wave takes to pass a node
+  constexpr double kNodeArea = 0.05;      // m^2 of surface a node stands for
+  for (Blast& b : blasts) {
+    b.age += dt;
+    const double r2 = b.radius * b.radius;
+    for (u32 oi : active) {
+      for (u32 n : objs[oi].nodes) {
+        const V3 r = pos[n] - b.c;
+        const double d2 = len2(r);
+        if (d2 > r2) continue;
+        const double d = std::sqrt(d2);
+        const double since = b.age - d / kFrontSpeed;
+        if (since < 0 || since > kPush) continue;
+        // The ground throws the wave back up, which is why things fly upwards.
+        const double dist = std::max(d, 0.45);
+        const V3 dir = norm(r + V3{0, 0, 0.45 * dist});
+        const double fade = std::max(1.0 - d / b.radius, 0.0);
+        // A light panel can only be thrown so fast: air drag eats anything beyond that within metres.
+        constexpr double kThrowLimit = 26.0;
+        const double J = std::min(b.impulse * kNodeArea * fade / dist, mass[n] * kThrowLimit * (0.35 + 0.65 * fade));
+        force[n] += dir * (J / kPush);
+      }
+    }
+  }
+  blasts.erase(std::remove_if(blasts.begin(), blasts.end(), [](const Blast& b) { return b.age > b.radius / kBlastEnd + 0.01; }), blasts.end());
+}
+
 void Sim::breakBeam(Beam& b, bool notify, double f) {
   b.flags |= BF_BROKEN;
   brokenBeams++;
   objs[nodeObj[b.a]].dirty = true;
-  if (notify) event(EV_CRUNCH, pos[b.a], vel[b.a], float(f));
+  if (b.tag == kTagWood) {
+    // A crack runs: the fibres next to a failed one suddenly carry its load and go too, which is why
+    // wood snaps across the whole trunk instead of giving way strand by strand.
+    for (u32 bi : objs[nodeObj[b.a]].beamList) {
+      Beam& o = beams[bi];
+      if (o.tag != kTagWood || (o.flags & BF_BROKEN)) continue;
+      // Only across the trunk at this height, not along the grain.
+      if (std::fabs(rest[o.a].z + rest[o.b].z - rest[b.a].z - rest[b.b].z) > 0.5) continue;
+      o.fBreak *= 0.7;
+    }
+    event(EV_WOOD, pos[b.a], vel[b.a], float(f));
+  }
+  else if (b.tag == kTagBranch) event(EV_BRANCH, pos[b.a], vel[b.a], float(f));
+  else if (notify) event(EV_CRUNCH, pos[b.a], vel[b.a], float(f));
 }
 
 void Sim::finish(double dt) {

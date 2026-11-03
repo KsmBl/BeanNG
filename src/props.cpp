@@ -85,6 +85,102 @@ std::vector<u32> column(Sim& sim, const Frame& f, double x, double y, double z0,
 }
 }  // namespace
 
+void addTree(Sim& sim, const World& w, const V3& foot, u32 seed) {
+  auto rnd = [&](double a, double b) {
+    seed = seed * 1664525u + 1013904223u;
+    return a + (b - a) * double(seed >> 16) / 65535.0;
+  };
+  sim.beginObj(OBJ_PROP, false);
+  const double scale = rnd(0.8, 1.5);
+  const double H = 8.2 * scale;
+  // Green wood is brittle across the grain: a trunk takes a lot, then goes all at once with a crack.
+  // Thin young trees give way where a car hits them, and thick ones stop it. No two grow alike.
+  const double girth = rnd(0.75, 1.25) * scale;
+  const double bole = 50e3 * girth * girth;
+  constexpr int kLevels = 5, kSides = 5;
+  const double levelZ[kLevels] = {-0.05, 0.45, 1.25, 0.34 * H, 0.72 * H};
+  const double levelR[kLevels] = {0.135, 0.115, 0.10, 0.075, 0.04};
+  u32 ring[kLevels][kSides];
+  double nodeMass = 12.0 * girth;
+  for (int l = 0; l < kLevels; l++) {
+    const double r = levelR[l] * girth;
+    for (int k = 0; k < kSides; k++) {
+      const double a = 2.0 * PI * k / kSides + l * 0.4;
+      ring[l][k] = sim.addNode(foot + V3{r * std::cos(a), r * std::sin(a), levelZ[l]}, nodeMass, l == 0 ? u8(NF_FIXED) : u8(NF_COLLIDE), 0.5f);
+    }
+    nodeMass *= 0.72;
+  }
+  const u32 top = sim.addNode(foot + V3{0, 0, H}, 2.5, NF_COLLIDE, 0.5f);
+  for (int l = 0; l < kLevels; l++) {
+    // The wood weakens with height. Each level gets its own flaw.
+    Mat wood{4.5e6, 400, 0, 0, 0, 0, bole * (l == 0 ? 1.6 : 1.0) * std::pow(0.42, l - 1 < 0 ? 0 : l - 1) * rnd(0.8, 1.25)};
+    for (int k = 0; k < kSides; k++) {
+      const u32 a = ring[l][k], b = ring[l][(k + 1) % kSides];
+      if (l > 0) {
+        Mat cross = wood;
+        cross.k = 2.5e6;
+        sim.addBeam(a, b, cross, kTagWood);
+        sim.addBeam(a, ring[l][(k + 2) % kSides], cross, kTagWood);
+      }
+      if (l + 1 < kLevels) {
+        sim.addBeam(a, ring[l + 1][k], wood, kTagWood);
+        sim.addBeam(a, ring[l + 1][(k + 1) % kSides], wood, kTagWood);
+        sim.addBeam(b, ring[l + 1][k], wood, kTagWood);
+        quadTris(sim, a, b, ring[l + 1][(k + 1) % kSides], ring[l + 1][k], COL_BARK);
+      } else {
+        Mat tip{1.5e6, 150, 0, 0, 0, 0, 5e3};
+        sim.addBeam(a, top, tip, kTagWood);
+        sim.addTri(a, b, top, 0, COL_BARK, 0.5f);
+      }
+    }
+  }
+
+  // The crown is what bends: springy branches that give way plastically and snap, and needles on them.
+  // Nothing in it collides with the car as a surface, only the branch tips do, which weigh little.
+  const Mat branch{2.6e4, 26, 300, 520, 1400, 0.4, 0};
+  const Mat brace{0.9e4, 12, 120, 200, 500, 0.5, 0};
+  const u8 needle = u8(COL_NEEDLES + (seed >> 20) % 3);
+  auto nearestLevel = [&](double z) {
+    int best = 1;
+    for (int l = 1; l < kLevels; l++)
+      if (std::fabs(levelZ[l] - z) < std::fabs(levelZ[best] - z)) best = l;
+    return best;
+  };
+  constexpr int kBranches = 7;
+  for (int layer = 0; layer < 2; layer++) {
+    const double r0 = (layer == 0 ? 2.6 : 1.9) * scale;
+    const double zb = (layer == 0 ? 2.2 : 4.6) * scale;
+    const double zt = layer == 0 ? 6.4 * scale : H;
+    const double zm = lerpd(zb, zt, 0.42);
+    const u32 apex = layer == 0 ? ring[kLevels - 1][0] : top;
+    u32 mid[kBranches], tip[kBranches];
+    const double spin = rnd(0, 6.28);
+    for (int i = 0; i < kBranches; i++) {
+      const double a = 2.0 * PI * i / kBranches + spin;
+      const double wob = rnd(0.88, 1.12);
+      mid[i] = sim.addNode(foot + V3{std::cos(a) * r0 * 0.56, std::sin(a) * r0 * 0.56, zm}, 6.0, NF_COLLIDE, 0.7f);
+      tip[i] = sim.addNode(foot + V3{std::cos(a) * r0 * wob, std::sin(a) * r0 * wob, zb + rnd(-0.15, 0.15)}, 4.5, NF_COLLIDE, 0.7f);
+    }
+    const int lv = nearestLevel(zm);
+    for (int i = 0; i < kBranches; i++) {
+      const int j = (i + 1) % kBranches;
+      sim.addBeam(mid[i], ring[lv][i % kSides], branch, kTagBranch);
+      sim.addBeam(mid[i], ring[std::max(lv - 1, 1)][(i + 2) % kSides], branch, kTagBranch);
+      sim.addBeam(mid[i], apex, branch, kTagBranch);
+      sim.addBeam(mid[i], tip[i], branch, kTagBranch);
+      sim.addBeam(tip[i], ring[lv][(i + 3) % kSides], brace, kTagBranch);
+      sim.addBeam(mid[i], mid[j], brace, kTagBranch);
+      sim.addBeam(tip[i], tip[j], brace, kTagBranch);
+      sim.addBeam(tip[i], mid[j], brace, kTagBranch);
+      sim.addTri(apex, mid[i], mid[j], TF_VISUAL, needle, 0.5f);
+      sim.addTri(mid[i], tip[i], tip[j], TF_VISUAL, needle, 0.5f);
+      sim.addTri(mid[i], tip[j], mid[j], TF_VISUAL, needle, 0.5f);
+    }
+  }
+  sim.endObj();
+  (void)w;
+}
+
 void addSign(Sim& sim, const World& w, double x, double y, double yaw, u8 color) {
   sim.beginObj(OBJ_PROP, false);
   const Frame f = frameAt(w, x, y, yaw);
@@ -312,6 +408,15 @@ void addBarrier(Sim& sim, const World& w, double x, double y, double yaw) {
 
 void populateWorld(Sim& sim, const World& w) {
   constexpr double kHalfPi = PI * 0.5;
+
+  // The woods along the country road.
+  {
+    u32 seed = 31337;
+    for (const V3& t : w.trees()) {
+      seed = seed * 2654435761u + 17u;
+      addTree(sim, w, t, seed);
+    }
+  }
 
   // Gauntlet in the main lane along y = 0, from the spawn point towards the end wall.
   addSign(sim, w, -28, 0.5, 0, COL_SIGN_RED);

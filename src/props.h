@@ -5,9 +5,11 @@
 
 enum PropColor : u8 {
   COL_STEEL, COL_SIGN_RED, COL_SIGN_WHITE, COL_SIGN_BLUE, COL_WOOD, COL_WOOD_DARK, COL_STONE,
-  COL_STONE2, COL_CONCRETE, COL_GUARDRAIL, COL_CONE, COL_COUNT
+  COL_STONE2, COL_CONCRETE, COL_GUARDRAIL, COL_CONE, COL_BARK, COL_NEEDLES, COL_NEEDLES2, COL_NEEDLES3, COL_COUNT
 };
 
+// A conifer: a brittle trunk and a crown of soft branches. Rooted in the ground.
+void addTree(Sim& sim, const World& w, const V3& foot, u32 seed);
 void addSign(Sim& sim, const World& w, double x, double y, double yaw, u8 color);
 void addFence(Sim& sim, const World& w, double x, double y, double yaw, int bays);
 void addStoneWall(Sim& sim, const World& w, double x, double y, double yaw, int columns, int rows);

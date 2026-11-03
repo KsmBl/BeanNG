@@ -5,6 +5,7 @@
 // (with work hardening), and past the ductile limit they tear. Integrated explicitly
 // at a high fixed rate, so crashes emerge from the structure rather than from scripts.
 #pragma once
+#include <random>
 #include <vector>
 #include "mathx.h"
 
@@ -82,11 +83,15 @@ struct Obj {
   ObjKind kind = OBJ_PROP;
   bool awake = false;
   bool alwaysAwake = false;
+  bool armoured = false;  // a blast pushes it, but does not simply tear it apart
   float sleepTimer = 0;
   V3 bbMin, bbMax;
 };
 
-enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE };
+// Beam tags of trees: their breaking is heard and seen differently from steel.
+constexpr u8 kTagWood = 200, kTagBranch = 201;
+
+enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH };
 struct SimEvent {
   V3 p, v;
   float strength;
@@ -145,6 +150,10 @@ class Sim {
   void finish(double dt);
 
   void wake(u16 obj);
+  // A detonation: a pressure wave running out from c. impulse is in N s per square metre of surface
+  // at 1 m from the centre, radius is where it has faded out. Tears what is nearest, throws the rest.
+  void explode(V3 c, double impulse, double radius);
+  void event(EventKind k, V3 p, V3 v, float s);
   // Largest eigenvalue of M^-1 K for one object at its current shape, by power iteration. A
   // symplectic Euler step is stable only while this stays below (2/dt)^2.
   double maxEigenvalue(u32 obj, u32* worstNode = nullptr) const;
@@ -180,5 +189,11 @@ class Sim {
   bool triPairAllowed(u32 node, const Tri& t) const;
   void contactFriction(u32 n, V3 nrm, double fn, double muv, double dt, V3 relVel, double mEff,
                        V3* out);
-  void event(EventKind k, V3 p, V3 v, float s);
+  struct Blast {
+    V3 c;
+    double impulse, radius, age;
+  };
+  std::vector<Blast> blasts;
+  std::minstd_rand blastRng{2024};
+  void applyBlasts(double dt);
 };

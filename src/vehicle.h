@@ -21,6 +21,8 @@ struct Controls {
   bool toggleIgnition = false;
   bool toggleActiva = false;
   int requestGear = 99;  // 99 = no request; used by the automatic's drive/reverse selection
+  bool fire = false;     // edge-triggered: detonates the car bomb, or fires the tank's gun
+  V3 aimPoint;           // where the turret should point, world space
 };
 
 struct Wheel {
@@ -156,6 +158,10 @@ class Vehicle {
   double brakeAct = 0;
 
   void update(Sim& sim, const Controls& in, double dt);
+  // The bomb under the back seat.
+  void detonate(Sim& sim);
+  bool exploded = false;
+  double burnTime = 0;   // seconds since it went off
   void settleFluid(Sim& sim);
   // Sets all rotating parts to match rolling at this speed, for test bench starts.
   void presetRolling(double v, int gearIndex);

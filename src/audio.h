@@ -21,9 +21,13 @@ struct AudioFeed {
   float listener = 1;      // gain from the camera's distance to the car, 0..1
   float interior = 0;      // 1 with the camera inside the car
   float master = 1;        // volume, already including mute and pause
+  float fire = 0;          // wreck burning, 0..1
+  int cylinders = 6;       // firings per two revolutions of the crank
+  float exhaustPitch = 1;  // scales the exhaust's resonances: a big diesel sits far lower
+  float tracks = 0;        // tank tracks running, 0..1
 };
 
-enum class Sfx : uint8_t { Metal, Glass, Thump, Clunk };
+enum class Sfx : uint8_t { Metal, Glass, Thump, Clunk, Boom, Gun, Crack };
 
 class AudioSynth {
  public:
@@ -90,4 +94,10 @@ class AudioSynth {
   float roadLow_[2] = {};
   double squealLfo_ = 0, gustPhase_ = 0;
   float crackle_ = 0;
+  Svf fireF_[2];
+  float fireLow_[2] = {};
+  float fireEnv_ = 0;
+  float trackClank_ = 0;
+  double trackPhase_ = 0;
+  Svf trackF_[2];
 };

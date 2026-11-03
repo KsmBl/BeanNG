@@ -145,6 +145,7 @@ struct Game {
     s.damageMsg = car.lastDamage;
     s.damageAge = car.lastDamageAge;
     s.physLoad = load;
+    s.scorch = car.exploded ? clampd(car.burnTime / 3.0, 0.15, 1.0) : 0.0;
     s.engineLoad = clampd((car.manifold - 0.22) / 0.78, 0, 1);
     s.inputRpm = std::fabs(car.inputOmega) * 60.0 / (2.0 * PI);
     s.starter = car.starterClock > 0;
@@ -176,6 +177,7 @@ struct Game {
         input.c.shiftUp = input.c.shiftDown = input.c.toggleAuto = input.c.toggleSport = false;
         input.c.cycleHeight = input.c.toggleIgnition = input.c.toggleActiva = false;
         input.c.requestGear = 99;
+        input.c.fire = false;
         input.reset = input.repair = false;
       }
       if (debugWheel.exchange(false) && car.wheels[0].deflate == 0) {
@@ -189,7 +191,12 @@ struct Game {
         car = carStart;
         resetVisuals = true;
       }
-      if (in.repair) {
+      // Pieces that have flown off cannot just be put back on: a torn-up car starts over.
+      if (in.repair && (car.exploded || sim.splitGeneration != simStart.splitGeneration)) {
+        sim = simStart;
+        car = carStart;
+        resetVisuals = true;
+      } else if (in.repair) {
         applyRepair();
         resetVisuals = true;
       }
@@ -209,6 +216,7 @@ struct Game {
         in.c.shiftUp = in.c.shiftDown = in.c.toggleAuto = in.c.toggleSport = false;
         in.c.cycleHeight = in.c.toggleIgnition = in.c.toggleActiva = false;
         in.c.requestGear = 99;
+        in.c.fire = false;
       }
       if (steps == kMaxStepsPerSlice) accumulator = std::min(accumulator, kPhysDt * kMaxStepsPerSlice);
       busy += std::chrono::duration<double>(Clock::now() - t0).count();
@@ -395,7 +403,7 @@ struct SoundDriver {
   AudioSynth synth;
   double volume = 0.8;
   bool muted = false;
-  double metalClock = 0, glassClock = 0, thumpClock = 0;
+  double metalClock = 0, glassClock = 0, thumpClock = 0, crackClock = 0;
   int lastGear = 1;
   double scrapeLP = 0;
 
@@ -437,9 +445,12 @@ struct SoundDriver {
       gain = float(1.0 / (1.0 + d / 16.0));
     };
 
+    f.fire = s.scorch > 0 ? float(clampd(s.scorch, 0, 1)) : 0.f;
+    synth.setFeed(f);
     metalClock -= dt;
     glassClock -= dt;
     thumpClock -= dt;
+    crackClock -= dt;
     // Bending metal, however much of it. Several per second while a crash goes on.
     if (feel.plasticRate > 4000.0 && metalClock <= 0) {
       const float st = float(clampd(std::log10(feel.plasticRate / 4000.0) / 2.5, 0.15, 1.0));
@@ -451,7 +462,27 @@ struct SoundDriver {
     int glassN = 0, crunchN = 0;
     V3 glassAt, crunchAt;
     for (const SimEvent& e : s.events) {
-      if (e.kind == EV_GLASS) {
+      if (e.kind == EV_BLAST) {
+        float pan, gain;
+        place(e.p, pan, gain);
+        synth.trigger(Sfx::Boom, 1.f, pan, std::max(gain, 0.18f) * 1.4f);
+      } else if (e.kind == EV_WOOD) {
+        if (crackClock <= 0) {
+          float pan, gain;
+          place(e.p, pan, gain);
+          synth.trigger(Sfx::Crack, 1.f, pan, gain * 1.2f);
+          crackClock = 0.07;
+        }
+      } else if (e.kind == EV_BRANCH) {
+        if (crackClock <= 0) {
+          float pan, gain;
+          place(e.p, pan, gain);
+          synth.trigger(Sfx::Crack, 0.35f, pan, gain);
+          crackClock = 0.05;
+        }
+      } else if (e.kind == EV_MUZZLE) {
+        synth.trigger(Sfx::Gun, 1.f, 0.f, 1.1f);
+      } else if (e.kind == EV_GLASS) {
         glassAt = e.p;
         glassN++;
       } else if (e.kind == EV_CRUNCH) {
@@ -553,10 +584,18 @@ int main(int argc, char** argv) {
   preferDiscreteGpu();
   std::string shotDir, wavPath;
   int scriptMode = 0;
+  size_t treeIndex = 0;
+  double treeRun = 30.0;
+  double treeSpeed = 60.0;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--shots") && i + 1 < argc) shotDir = argv[++i];
     if (!strcmp(argv[i], "--script") && i + 1 < argc) scriptMode = atoi(argv[++i]);
     if (!strcmp(argv[i], "--wav") && i + 1 < argc) wavPath = argv[++i];
+    if (!strcmp(argv[i], "--tree") && i + 2 < argc) {
+      treeIndex = size_t(atoi(argv[++i]));
+      treeRun = atof(argv[++i]);
+      if (i + 1 < argc && argv[i + 1][0] != '-') treeSpeed = atof(argv[++i]);
+    }
     if (!strcmp(argv[i], "--spawn") && i + 2 < argc) {
       kSpawn.x = atof(argv[++i]);
       kSpawn.y = atof(argv[++i]);
@@ -577,6 +616,12 @@ int main(int argc, char** argv) {
     const RoadPoint& p = G.world.roads()[0].pts[1200];
     kSpawn.x = p.x;
     kSpawn.y = p.y;
+  }
+  // Script 19 starts straight in front of a tree.
+  if (scriptMode == 19) {
+    const V3 t = G.world.trees()[treeIndex];
+    kSpawn.x = t.x - treeRun;
+    kSpawn.y = t.y + 0.25;
   }
   kSpawn.z = G.world.height(kSpawn.x, kSpawn.y);
   G.car = buildXantia(G.sim, kSpawn, 0.0, &G.rig);
@@ -748,7 +793,8 @@ int main(int argc, char** argv) {
             case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: edges.shiftDown = true; break;
             case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: edges.shiftUp = true; break;
             case SDL_GAMEPAD_BUTTON_NORTH: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.yaw = 0; break;
-            case SDL_GAMEPAD_BUTTON_WEST: edges.toggleSport = true; break;
+            case SDL_GAMEPAD_BUTTON_WEST: edges.fire = true; break;
+            case SDL_GAMEPAD_BUTTON_RIGHT_STICK: edges.toggleSport = true; break;
             case SDL_GAMEPAD_BUTTON_EAST: doRepair = true; break;
             case SDL_GAMEPAD_BUTTON_BACK: doReset = true; break;
             case SDL_GAMEPAD_BUTTON_START: paused = !paused; break;
@@ -780,6 +826,7 @@ int main(int argc, char** argv) {
             case SDLK_P: paused = !paused; break;
             case SDLK_LEFTBRACKET: timeScale = std::max(0.05, timeScale * 0.5); break;
             case SDLK_RIGHTBRACKET: timeScale = std::min(1.0, timeScale * 2.0); break;
+            case SDLK_F: edges.fire = true; break;
             case SDLK_B: hud.motionBlur = !hud.motionBlur; break;
             case SDLK_J: shakeOn = !shakeOn; break;
             case SDLK_N: sound->muted = !sound->muted; break;
@@ -967,6 +1014,26 @@ int main(int argc, char** argv) {
           scriptBrake = view.speedKmh > 175 ? 0.3 : 0.0;
           break;
         }
+        case 19:
+          rig.mode = CAM_ORBIT;
+          rig.dist = 14.0;
+          rig.pitch = 0.32;
+          rig.yaw = 2.3;
+          scriptGas = view.speedKmh < treeSpeed && tNow > 2.0 ? 1.0 : 0.0;
+          scriptSteer = 0;
+          break;
+        case 18:  // straight up the road, then the bomb goes off
+          rig.mode = CAM_ORBIT;
+          rig.dist = 13.0;
+          rig.pitch = 0.2;
+          rig.yaw = 0.9;
+          scriptGas = tNow < 4.0 ? 0.5 : 0.0;
+          scriptBrake = tNow > 4.5 ? 1.0 : 0.0;
+          if (tNow > 6.0 && !repairDone) {
+            sendC.fire = true;
+            repairDone = true;
+          }
+          break;
         case 16:  // the steering wheel from the back seat, turning
           scriptSteer = std::sin(tNow * 1.2) * 0.7;
           break;
@@ -1019,6 +1086,7 @@ int main(int argc, char** argv) {
       c.cycleHeight |= sendC.cycleHeight;
       c.toggleIgnition |= sendC.toggleIgnition;
       c.toggleActiva |= sendC.toggleActiva;
+      c.fire |= sendC.fire;
       c.requestGear = sendC.requestGear;
       G.input.reset |= doReset;
       G.input.repair |= doRepair;
@@ -1080,6 +1148,7 @@ int main(int argc, char** argv) {
       view.damageMsg = G.snap.damageMsg;
       view.damageAge = G.snap.damageAge;
       view.physLoad = G.snap.physLoad;
+      view.scorch = G.snap.scorch;
       view.engineLoad = G.snap.engineLoad;
       view.inputRpm = G.snap.inputRpm;
       view.starter = G.snap.starter;

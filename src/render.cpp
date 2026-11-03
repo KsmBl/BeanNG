@@ -122,10 +122,13 @@ in vec3 vPos; in vec3 vNrm; in vec4 vCol; in vec4 vShadow; in vec3 vRest; in vec
 uniform vec3 uEye;
 uniform vec3 uSun;
 uniform sampler2DShadow uShadow;
+uniform sampler2DShadow uShadowFar;
+uniform mat4 uShadowFarVP;
 uniform float uAlpha;
 uniform sampler2DArray uScratchTex;
 uniform sampler2D uDetailTex;
 uniform float uDetail;
+uniform float uScorch;
 layout(location=0) out vec4 frag;
 layout(location=1) out vec2 velOut;
 vec3 sky(vec3 d){
@@ -157,13 +160,26 @@ vec2 scratchAt(){
   }
   return textureGrad(uScratchTex, vec3(uv, layer), gx, gy).rg;
 }
-float shadow(){
-  vec3 p = vShadow.xyz/vShadow.w*0.5+0.5;
-  if(p.x<0.0||p.x>1.0||p.y<0.0||p.y>1.0||p.z>1.0) return 1.0;
+float shadowIn(sampler2DShadow map, vec3 p, float texel, float bias){
   float s=0.0;
   for(int x=-1;x<=1;x++) for(int y=-1;y<=1;y++)
-    s += texture(uShadow, vec3(p.xy+vec2(x,y)/2048.0, p.z-0.0009));
+    s += texture(map, vec3(p.xy+vec2(x,y)*texel, p.z-bias));
   return s/9.0;
+}
+// Two maps: a sharp one around the car, and a coarse one reaching far out over the landscape.
+float shadow(){
+  vec3 p = vShadow.xyz/vShadow.w*0.5+0.5;
+  float near = 1.0;
+  float edge = 2.0*max(abs(p.x-0.5), abs(p.y-0.5));
+  bool inNear = edge < 1.0 && p.z <= 1.0;
+  if(inNear) near = shadowIn(uShadow, p, 1.0/2048.0, 0.0009);
+  if(inNear && edge < 0.85) return near;
+  vec4 f = uShadowFarVP*vec4(vPos,1.0);
+  vec3 q = f.xyz/f.w*0.5+0.5;
+  float edgeF = 2.0*max(abs(q.x-0.5), abs(q.y-0.5));
+  float far = 1.0;
+  if(edgeF < 1.0 && q.z <= 1.0) far = mix(shadowIn(uShadowFar, q, 1.0/4096.0, 0.0007), 1.0, smoothstep(0.85, 1.0, edgeF));
+  return inNear ? mix(near, far, smoothstep(0.85, 1.0, edge)) : far;
 }
 void main(){
   vec3 N = normalize(vNrm);
@@ -194,6 +210,13 @@ void main(){
     float fine = texture(uDetailTex, vPos.xy/3.7).r;
     float wide = texture(uDetailTex, vPos.xy/41.0 + 0.37).g;
     albedo *= uDetail*(0.62 + 0.55*fine + 0.45*wide) + (1.0 - uDetail);
+  }
+  if(uScorch > 0.0){
+    // Burnt out: paint gone to soot and scale, with some patches lasting longer than others.
+    float n = texture(uDetailTex, vRest.xy/1.3 + vRest.zz*0.37).g;
+    float burn = clamp(uScorch*(0.75 + 1.1*n), 0.0, 1.0);
+    albedo = mix(albedo, vec3(0.018,0.016,0.015) + 0.05*vec3(0.5,0.32,0.2)*n, burn);
+    gloss *= 1.0 - burn;
   }
   float diff = max(dot(N,uSun),0.0)*shadow();
   vec3 amb = mix(vec3(0.20,0.19,0.17), vec3(0.34,0.40,0.50), N.z*0.5+0.5);
@@ -232,7 +255,7 @@ void main(){
 const char* kPostFS = R"(#version 330 core
 in vec2 vUv; flat in mat4 vSkyReproject;
 uniform sampler2D uColor; uniform sampler2D uVel; uniform sampler2D uDepth;
-uniform vec2 uRes; uniform float uBlur; uniform float uNear; uniform float uFar; uniform float uVignette;
+uniform vec2 uRes; uniform float uBlur; uniform float uNear; uniform float uFar; uniform float uVignette; uniform float uFlash;
 out vec4 frag;
 float linZ(float d){ float z=d*2.0-1.0; return 2.0*uNear*uFar/(uFar+uNear-z*(uFar-uNear)); }
 vec2 motionAt(vec2 uv, float depth){
@@ -273,6 +296,7 @@ void main(){
   // At speed the edges of the view fall away a little, as they do in the eye.
   vec2 e = vUv*2.0-1.0;
   c *= 1.0 - uVignette*smoothstep(0.35, 1.5, dot(e,e));
+  c += uFlash*vec3(1.0, 0.85, 0.6);
   frag = vec4(c, 1.0);
 })";
 
@@ -378,7 +402,7 @@ layout(location=1) in vec4 aCol;
 layout(location=2) in float aSize;
 uniform mat4 uVP; uniform float uScale;
 out vec4 vCol;
-void main(){ gl_Position=uVP*vec4(aPos,1.0); vCol=aCol; gl_PointSize=clamp(aSize*uScale/gl_Position.w,1.0,160.0); })";
+void main(){ gl_Position=uVP*vec4(aPos,1.0); vCol=aCol; gl_PointSize=clamp(aSize*uScale/gl_Position.w,1.0,420.0); })";
 const char* kPartFS = R"(#version 330 core
 in vec4 vCol; out vec4 frag;
 void main(){ vec2 c=gl_PointCoord*2.0-1.0; float a=1.0-dot(c,c); if(a<=0.0) discard; frag=vec4(vCol.rgb,vCol.a*a); })";
@@ -485,6 +509,10 @@ void propColor(u8 c, float& r, float& g, float& b, float& gloss) {
     case COL_CONCRETE: r = .55f; g = .55f; b = .52f; break;
     case COL_GUARDRAIL: r = .55f; g = .57f; b = .6f; gloss = .35f; break;
     case COL_CONE: r = .9f; g = .27f; b = .03f; break;
+    case COL_BARK: r = .22f; g = .155f; b = .10f; break;
+    case COL_NEEDLES: r = .10f; g = .25f; b = .08f; break;
+    case COL_NEEDLES2: r = .13f; g = .30f; b = .10f; break;
+    case COL_NEEDLES3: r = .08f; g = .21f; b = .09f; break;
     default: r = g = b = .5f;
   }
 }
@@ -497,7 +525,8 @@ struct Renderer::Impl {
   GLuint progWheel = 0, progWheelDepth = 0;
   GLuint progMesh = 0, progDepth = 0, progSky = 0, progPart = 0, progLine = 0, progHud = 0;
   GLuint shadowFbo = 0, shadowTex = 0;
-  static constexpr int kShadow = 2048;
+  GLuint shadowFarFbo = 0, shadowFarTex = 0;
+  static constexpr int kShadow = 2048, kShadowFar = 4096;
 
   struct Chunk {
     GLuint vao = 0, vbo = 0, ibo = 0;
@@ -1068,11 +1097,23 @@ struct Renderer::Impl {
       for (size_t i = 0; i < segs; i++) {
         const RoadPoint& a = road.pts[i];
         const RoadPoint& b = road.pts[(i + 1) % cnt];
-        const double tx = b.x - a.x, ty = b.y - a.y, tl = std::hypot(tx, ty);
-        const double nx = -ty / tl, ny = tx / tl;
+        // Each point has one cross direction, shared by the two pieces that meet there. With one per
+        // piece the edges of neighbouring pieces do not line up, and the bends fall into segments.
+        auto across = [&](size_t k, double& nx, double& ny) {
+          const RoadPoint& p0 = road.pts[road.closed ? (k + cnt - 1) % cnt : (k > 0 ? k - 1 : 0)];
+          const RoadPoint& p1 = road.pts[road.closed ? (k + 1) % cnt : std::min(k + 1, cnt - 1)];
+          const double tx = p1.x - p0.x, ty = p1.y - p0.y, tl = std::hypot(tx, ty);
+          nx = -ty / tl;
+          ny = tx / tl;
+        };
+        double anx, any, bnx, bny;
+        across(i, anx, any);
+        across((i + 1) % cnt, bnx, bny);
         auto at = [&](const RoadPoint& p, double off) {
-          const double x = p.x + nx * off, y = p.y + ny * off;
-          return V3{x, y, world->height(x, y) + 0.025};
+          const bool first = &p == &a;
+          const double x = p.x + (first ? anx : bnx) * off, y = p.y + (first ? any : bny) * off;
+          // Height from the road's own plane, not the 1 m terrain grid, so that it never saws up and down.
+          return V3{x, y, p.z + off * p.bank + 0.035};
         };
         const double w = road.halfWidth;
         addQuad(v, at(a, -w), at(b, -w), at(b, w), at(a, w), .085f, .085f, .09f, 0);
@@ -1118,28 +1159,6 @@ struct Renderer::Impl {
           box(z0, z0 + 0.75, .85f, .85f, .83f);
           box(z0 + 0.75, z0 + 0.95, .05f, .05f, .05f);
           box(z0 + 0.80, z0 + 0.88, .95f, .55f, .15f);
-        }
-      }
-    }
-    // Tree crowns: two cones each over the solid trunk.
-    {
-      u32 hash = 7;
-      for (const V3& t : world->trees()) {
-        hash = hash * 2654435761u + 17u;
-        const double scale = 0.8 + double(hash >> 24) / 255.0 * 0.8;
-        const float tint = float((hash >> 12) & 63) / 63.f;
-        for (int layer = 0; layer < 2; layer++) {
-          const double r0 = (layer == 0 ? 2.6 : 1.9) * scale;
-          const V3 base{t.x, t.y, t.z + (layer == 0 ? 2.2 : 4.6) * scale};
-          const V3 tip = base + V3{0, 0, (layer == 0 ? 4.2 : 3.8) * scale};
-          constexpr int kSides = 9;
-          const float cr = .10f + tint * .07f, cg = .24f + tint * .12f + float(layer) * .03f, cb = .08f + tint * .04f;
-          for (int k = 0; k < kSides; k++) {
-            const double a0 = 2 * PI * k / kSides, a1 = 2 * PI * (k + 1) / kSides;
-            const V3 p0 = base + V3{std::cos(a0) * r0, std::sin(a0) * r0, 0};
-            const V3 p1 = base + V3{std::cos(a1) * r0, std::sin(a1) * r0, 0};
-            addQuad(v, p0, p1, tip, tip, cr, cg, cb, 0);
-          }
         }
       }
     }
@@ -1273,6 +1292,7 @@ struct Renderer::Impl {
       if (!p.bound) continue;
       const bool isGlass = p.mat == MM_GLASS;
       if (partHidden[pi] || (xrayNow && !isMechanical(p))) continue;
+      if (s.scorch > 0 && (p.mat == MM_GLASS || p.mat == MM_LENS)) continue;
       auto& list = isGlass ? glassIdx : (p.mat == MM_LENS ? lensIdx : carIdx);
       u32 overstrained = 0;
       for (u32 t = p.firstTri; t < p.firstTri + p.triCount; t++) {
@@ -1532,9 +1552,139 @@ struct Renderer::Impl {
         case EV_GLASS:
           spawnGlass(e.p, e.v);
           break;
+        case EV_WOOD:
+        case EV_BRANCH: {
+          // Splinters off a trunk, a puff of needles off a branch.
+          const bool trunk = e.kind == EV_WOOD;
+          for (int i = 0; i < (trunk ? 7 : 3); i++) {
+            Particle q;
+            q.p = e.p;
+            q.v = e.v * .5 + V3{rnd(-4, 4), rnd(-4, 4), rnd(0, 5)};
+            q.maxLife = q.life = rnd(.8f, 2.f);
+            q.size = trunk ? rnd(.02f, .06f) : rnd(.03f, .08f);
+            if (trunk) { q.r = .78f; q.g = .62f; q.b = .36f; }
+            else { q.r = .14f; q.g = .32f; q.b = .10f; }
+            q.a = 1.f;
+            q.gravity = trunk ? 9.81f : 3.f;
+            q.drag = trunk ? .5f : 3.f;
+            particles.push_back(q);
+          }
+          break;
+        }
+        case EV_BLAST: {
+          const float R = e.strength;  // the blast's radius in metres
+          flash = std::max(flash, 1.f);
+          // Fireball.
+          for (int i = 0; i < 90; i++) {
+            Particle q;
+            const V3 d = norm(V3{rnd(-1, 1), rnd(-1, 1), rnd(-.2f, 1.2f)});
+            q.p = e.p + d * rnd(.1f, .6f);
+            q.v = d * rnd(.3f, 1.3f) * R * .75;
+            q.maxLife = q.life = rnd(.25f, .7f);
+            q.size = rnd(.5f, 1.2f) * (.3f + R * .04f);
+            q.r = 1.f; q.g = rnd(.45f, .85f); q.b = rnd(.08f, .25f); q.a = 1.f;
+            q.gravity = -3.f;
+            q.drag = 4.f;
+            particles.push_back(q);
+          }
+          // A column of black smoke, slow to clear.
+          for (int i = 0; i < 70; i++) {
+            Particle q;
+            const V3 d = norm(V3{rnd(-1, 1), rnd(-1, 1), rnd(0, 1.5f)});
+            q.p = e.p + d * rnd(.1f, 1.f);
+            q.v = d * rnd(.3f, 1.f) * R * .35 + V3{0, 0, rnd(1.f, 5.f)};
+            q.maxLife = q.life = rnd(2.f, 6.f);
+            q.size = rnd(.5f, 1.3f) * (.4f + R * .05f);
+            const float g = rnd(.04f, .13f);
+            q.r = g; q.g = g; q.b = g; q.a = rnd(.5f, .8f);
+            q.gravity = -.8f;
+            q.drag = 1.6f;
+            particles.push_back(q);
+          }
+          // Shrapnel and sparks.
+          for (int i = 0; i < 130; i++) {
+            Particle q;
+            const V3 d = norm(V3{rnd(-1, 1), rnd(-1, 1), rnd(-.1f, 1.f)});
+            q.p = e.p;
+            q.v = d * rnd(.5f, 2.4f) * R;
+            q.maxLife = q.life = rnd(.5f, 1.8f);
+            q.size = rnd(.02f, .06f);
+            q.r = 1.f; q.g = rnd(.5f, .8f); q.b = .2f; q.a = 1.f;
+            q.gravity = 9.81f;
+            q.drag = .25f;
+            particles.push_back(q);
+          }
+          break;
+        }
+        case EV_FIRE: {
+          Particle q;
+          q.p = e.p + V3{rnd(-.5f, .5f), rnd(-.5f, .5f), rnd(-.1f, .3f)};
+          q.v = V3{rnd(-.3f, .3f), rnd(-.3f, .3f), rnd(1.f, 3.f)};
+          q.maxLife = q.life = rnd(.3f, .8f);
+          q.size = rnd(.22f, .5f) * (.4f + e.strength);
+          q.r = 1.f; q.g = rnd(.35f, .7f); q.b = .08f; q.a = .9f;
+          q.gravity = -1.f;
+          q.drag = 1.f;
+          particles.push_back(q);
+          if (rng() % 2 == 0) {
+            Particle k = q;
+            k.p.z += .4;
+            k.v = V3{rnd(-.4f, .4f), rnd(-.4f, .4f), rnd(2.f, 5.f)};
+            k.maxLife = k.life = rnd(2.f, 5.f);
+            k.size = rnd(.35f, .8f);
+            const float g = rnd(.03f, .10f);
+            k.r = g; k.g = g; k.b = g; k.a = .55f;
+            k.gravity = -.5f;
+            k.drag = .6f;
+            particles.push_back(k);
+          }
+          break;
+        }
+        case EV_MUZZLE: {
+          flash = std::max(flash, .35f);
+          for (int i = 0; i < 26; i++) {
+            Particle q;
+            const V3 d = norm(e.v + V3{rnd(-.35f, .35f), rnd(-.35f, .35f), rnd(-.35f, .35f)});
+            q.p = e.p + d * rnd(0.f, 1.2f);
+            q.v = d * rnd(4.f, 22.f);
+            q.maxLife = q.life = rnd(.05f, .16f);
+            q.size = rnd(.3f, .8f);
+            q.r = 1.f; q.g = rnd(.6f, .9f); q.b = .3f; q.a = 1.f;
+            q.gravity = 0.f;
+            q.drag = 5.f;
+            particles.push_back(q);
+          }
+          for (int i = 0; i < 26; i++) {
+            Particle q;
+            const V3 d = norm(e.v * (rnd(0, 1) < .5f ? 1.0 : 0.15) + V3{rnd(-.6f, .6f), rnd(-.6f, .6f), rnd(-.3f, .6f)});
+            q.p = e.p;
+            q.v = d * rnd(2.f, 12.f);
+            q.maxLife = q.life = rnd(.6f, 2.4f);
+            q.size = rnd(.3f, .8f);
+            const float g = rnd(.55f, .72f);
+            q.r = g; q.g = g; q.b = g * .96f; q.a = .5f;
+            q.gravity = -.4f;
+            q.drag = 2.5f;
+            particles.push_back(q);
+          }
+          break;
+        }
+        case EV_TRACER: {
+          Particle q;
+          q.p = e.p;
+          q.v = e.v * .02;
+          q.maxLife = q.life = .16f;
+          q.size = .16f;
+          q.r = 1.f; q.g = .75f; q.b = .35f; q.a = 1.f;
+          q.gravity = 0.f;
+          q.drag = 0.f;
+          particles.push_back(q);
+          break;
+        }
       }
     }
   }
+  float flash = 0;  // lights up the whole picture for a moment after a detonation
 
   void stepParticles(double dt) {
     partVerts.clear();
@@ -1698,7 +1848,7 @@ struct Renderer::Impl {
           "A D / LEFT RIGHT LENKEN    SPACE HANDBREMSE",
           "Q E GANG RUNTER/HOCH      T AUTO/MANUELL",
           "G HYDRACTIVE SPORT   H NIVEAU   V ACTIVA AN/AUS",
-          "I ZUENDUNG   R ZURUECK ZUM START   F5 REPARIEREN",
+          "I ZUENDUNG   R ZURUECK ZUM START   F5 REPARIEREN   F BOMBE/FEUER",
           "C KAMERA   M MAUSLENKUNG   P PAUSE   [ ] ZEITLUPE",
           "B BEWEGUNGSUNSCHAERFE   J KAMERA-WACKELN   N TON   + - LAUTSTAERKE",
           "F2 BEAM-ANSICHT   F3 ROENTGEN   F12 SCREENSHOT   ESC BEENDEN",
@@ -1706,7 +1856,7 @@ struct Renderer::Impl {
           "",
           "CONTROLLER: L-STICK LENKEN  RT GAS  LT BREMSE",
           "R-STICK KAMERA  A HANDBREMSE  LB/RB GANG  Y KAMERA",
-          "X SPORT  B REPARIEREN  BACK START  START PAUSE",
+          "X BOMBE/FEUER  R3 SPORT  B REPARIEREN  BACK START  START PAUSE",
       };
       const float hw = 720 * scale, hh = float(sizeof(lines) / sizeof(lines[0])) * 22 * scale + 24 * scale;
       const float hx = (W - hw) * 0.5f, hy = (H - hh) * 0.5f;
@@ -1819,6 +1969,20 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
   glBindFramebuffer(GL_FRAMEBUFFER, d->shadowFbo);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, d->shadowTex, 0);
+  glDrawBuffer(GL_NONE);
+  glReadBuffer(GL_NONE);
+  glGenFramebuffers(1, &d->shadowFarFbo);
+  glGenTextures(1, &d->shadowFarTex);
+  glBindTexture(GL_TEXTURE_2D, d->shadowFarTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, Impl::kShadowFar, Impl::kShadowFar, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+  glBindFramebuffer(GL_FRAMEBUFFER, d->shadowFarFbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, d->shadowFarTex, 0);
   glDrawBuffer(GL_NONE);
   glReadBuffer(GL_NONE);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1957,6 +2121,17 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   const Mat4 lightView = lookAt(lightEye, focus, V3{0, 0, 1});
   const Mat4 lightVP = mul(ortho(-kRange, kRange, -kRange, kRange, 1.0, 260.0), lightView);
   const Mat4 I = D.identity();
+  // The far map looks over the car's shoulder, covering what the camera actually sees.
+  constexpr double kRangeFar = 420.0;
+  V3 focusFar = cam.eye + norm(cam.target - cam.eye) * 260.0;
+  {
+    const V3 lr = norm(cross(D.sun, V3{0, 0, 1}));
+    const V3 lu = cross(lr, D.sun);
+    const double texel = 2.0 * kRangeFar / Impl::kShadowFar;
+    const double a = std::round(dot(focusFar, lr) / texel) * texel, b = std::round(dot(focusFar, lu) / texel) * texel;
+    focusFar = lr * a + lu * b + D.sun * dot(focusFar, D.sun);
+  }
+  const Mat4 lightFarVP = mul(ortho(-kRangeFar, kRangeFar, -kRangeFar, kRangeFar, 1.0, 900.0), lookAt(focusFar + D.sun * 450.0, focusFar, V3{0, 0, 1}));
 
   auto drawDyn = [&](GLuint prog) {
     D.setMat(prog, "uModel", I);
@@ -1964,8 +2139,11 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     glBindVertexArray(D.carVao);
     glDrawElements(GL_TRIANGLES, GLsizei(D.carIdx.size()), GL_UNSIGNED_INT, nullptr);
     D.setMat(prog, "uPrevWorld", I);
+    const GLint uScorchLoc = glGetUniformLocation(prog, "uScorch");
+    if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
     glBindVertexArray(D.propVao);
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.propVerts.size()));
+    if (uScorchLoc >= 0) glUniform1f(uScorchLoc, float(s.scorch));
     D.setMat(prog, "uPrevWorld", D.carPrevWorld);
     // Running gear: arms, shafts and struts between their real nodes.
     glBindVertexArray(D.rodVao);
@@ -2003,6 +2181,16 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glBindVertexArray(D.staticVao);
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
   D.drawWheels(s, D.progWheelDepth, lightVP, lightVP);
+
+  glBindFramebuffer(GL_FRAMEBUFFER, D.shadowFarFbo);
+  glViewport(0, 0, Impl::kShadowFar, Impl::kShadowFar);
+  glClear(GL_DEPTH_BUFFER_BIT);
+  glUseProgram(D.progDepth);
+  D.setMat(D.progDepth, "uVP", lightFarVP);
+  drawDyn(D.progDepth);
+  D.setMat(D.progDepth, "uModel", I);
+  glBindVertexArray(D.staticVao);
+  glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
   glDisable(GL_POLYGON_OFFSET_FILL);
   glBindFramebuffer(GL_FRAMEBUFFER, D.sceneFbo);
   glViewport(0, 0, w, h);
@@ -2047,7 +2235,11 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glBindTexture(GL_TEXTURE_2D_ARRAY, D.scratchTex);
   glActiveTexture(GL_TEXTURE2);
   glBindTexture(GL_TEXTURE_2D, D.detailTex);
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D, D.shadowFarTex);
   glActiveTexture(GL_TEXTURE0);
+  glUniform1i(glGetUniformLocation(D.progMesh, "uShadowFar"), 3);
+  D.setMat(D.progMesh, "uShadowFarVP", lightFarVP);
   glUniform1i(glGetUniformLocation(D.progMesh, "uScratchTex"), 1);
   glUniform1i(glGetUniformLocation(D.progMesh, "uDetailTex"), 2);
   glUniform1f(glGetUniformLocation(D.progMesh, "uDetail"), 1.f);
@@ -2067,7 +2259,9 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
 
   glUniform1f(glGetUniformLocation(D.progMesh, "uDetail"), 0.f);
+  glUniform1f(glGetUniformLocation(D.progMesh, "uScorch"), float(s.scorch));
   drawDyn(D.progMesh);
+  glUniform1f(glGetUniformLocation(D.progMesh, "uScorch"), 0.f);
   glUseProgram(D.progWheel);
   glUniform3f(glGetUniformLocation(D.progWheel, "uEye"), float(cam.eye.x), float(cam.eye.y), float(cam.eye.z));
   glUniform3f(glGetUniformLocation(D.progWheel, "uSun"), float(D.sun.x), float(D.sun.y), float(D.sun.z));
@@ -2075,7 +2269,10 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glUniform1i(glGetUniformLocation(D.progWheel, "uShadow"), 0);
   glUniform1i(glGetUniformLocation(D.progWheel, "uScratchTex"), 1);
   glUniform1i(glGetUniformLocation(D.progWheel, "uDetailTex"), 2);
+  glUniform1i(glGetUniformLocation(D.progWheel, "uShadowFar"), 3);
+  D.setMat(D.progWheel, "uShadowFarVP", lightFarVP);
   glUniform1f(glGetUniformLocation(D.progWheel, "uDetail"), 0.f);
+  glUniform1f(glGetUniformLocation(D.progWheel, "uScorch"), float(s.scorch));
   D.drawWheels(s, D.progWheel, vp, lightVP);
 
   // From here on nothing writes motion: glass and sparks take on the motion of what is behind them.
@@ -2168,6 +2365,8 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glUniform1f(glGetUniformLocation(D.progPost, "uNear"), 0.12f);
   glUniform1f(glGetUniformLocation(D.progPost, "uFar"), 2500.f);
   glUniform1f(glGetUniformLocation(D.progPost, "uVignette"), hud.motionBlur ? float(0.28 * clampd((std::fabs(s.speedKmh) - 60.0) / 170.0, 0, 1)) : 0.f);
+  D.flash *= float(std::exp(-dt * 9.0));
+  glUniform1f(glGetUniformLocation(D.progPost, "uFlash"), D.flash * 0.75f);
   D.setMat(D.progPost, "uSkyVP", D.skyVP);
   D.setMat(D.progPost, "uSkyPrevVP", D.skyPrevVP);
   glBindVertexArray(D.hudVao);

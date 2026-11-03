@@ -179,6 +179,30 @@ void World::build() {
     for (int j = -kWin; j <= kWin; j++) sum += raw[(i + j + kLoop) % kLoop];
     loop.pts.push_back({xy[i].first, xy[i].second, sum / (2 * kWin + 1)});
   }
+  // Bends lean into the turn, like a well-built country road. The slope makes up for part of the
+  // cornering force at the design speed, and is limited to a gentle 7 degrees.
+  {
+    constexpr double kDesignSpeed = 34.0, kMaxSlope = 0.123;
+    std::vector<double> want(kLoop);
+    for (int i = 0; i < kLoop; i++) {
+      constexpr int kSpan = 8;  // about 11 m either way, so the wiggles of the line do not count
+      const RoadPoint& a = loop.pts[(i - kSpan + kLoop) % kLoop];
+      const RoadPoint& b = loop.pts[i];
+      const RoadPoint& c = loop.pts[(i + kSpan) % kLoop];
+      const double ux = b.x - a.x, uy = b.y - a.y, vx = c.x - b.x, vy = c.y - b.y;
+      const double turn = std::atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+      const double curvature = turn / std::max(0.5 * (std::hypot(ux, uy) + std::hypot(vx, vy)), 0.1);
+      // Turning left means the left side is the inside: it is the lower one, so the slope is negative.
+      want[i] = -clampd(curvature * kDesignSpeed * kDesignSpeed / 9.81 * 0.5, -kMaxSlope, kMaxSlope);
+    }
+    for (int i = 0; i < kLoop; i++) {
+      // Spread out, so that the road twists gradually instead of kinking at the start of a bend.
+      constexpr int kWin = 26;
+      double sum = 0;
+      for (int j = -kWin; j <= kWin; j++) sum += want[(i + j + kLoop) % kLoop];
+      loop.pts[i].bank = gBankScale * sum / (2 * kWin + 1);
+    }
+  }
   roads_.push_back(loop);
 
   // Two straight connectors from the pad out to the loop.
@@ -228,7 +252,10 @@ void World::build() {
           const size_t id = size_t(iy) * N + ix;
           if (d < dist[id]) {
             dist[id] = float(d);
-            roadH[id] = float(lerpd(a.z, b.z, t));
+            // Signed distance to the left of the road's centre line, levelling off beyond the shoulder.
+            const double tl = std::sqrt(l2);
+            const double side = clampd((-dy * px + dx * py) / tl, -(r.halfWidth + 2.0), r.halfWidth + 2.0);
+            roadH[id] = float(lerpd(a.z, b.z, t) + side * lerpd(a.bank, b.bank, t));
           }
         }
     }
@@ -256,7 +283,7 @@ void World::build() {
     }
 
   // Trees along the country road. Something has to rush past, or the speed is only a number on the
-  // dial. Their trunks are solid: this is a game about what happens when you hit one.
+  // dial. They are built as soft bodies in populateWorld: this only decides where they stand.
   {
     u32 seed = 90210;
     auto rnd = [&](double a, double b) {
@@ -265,7 +292,7 @@ void World::build() {
     };
     const Road& lp = roads_[0];
     const size_t cnt = lp.pts.size();
-    for (int n = 0; n < 520; n++) {
+    for (int n = 0; n < 300; n++) {
       const size_t i = size_t(rnd(0, double(cnt - 1)));
       const RoadPoint& a = lp.pts[i];
       const RoadPoint& b = lp.pts[(i + 1) % cnt];
@@ -276,11 +303,10 @@ void World::build() {
       bool clear = std::hypot(x, y) > kPadR + 30.0;
       for (const Road& r : roads_)
         for (size_t k = 0; clear && k < r.pts.size(); k += 2)
-          if (std::hypot(r.pts[k].x - x, r.pts[k].y - y) < r.halfWidth + 4.5) clear = false;
+          if (std::hypot(r.pts[k].x - x, r.pts[k].y - y) < r.halfWidth + 5.0) clear = false;
       if (!clear) continue;
       const double zb = height(x, y);
       trees_.push_back({x, y, zb});
-      addBox({x, y, zb + 1.5}, {0.22, 0.22, 2.2}, rnd(0, 3), 0, SURF_CONCRETE, .24f, .17f, .11f);
     }
   }
 

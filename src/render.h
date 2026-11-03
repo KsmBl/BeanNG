@@ -45,6 +45,7 @@ struct Snapshot {
   double timeScale = 1;
   double realtime = 1;   // simulated seconds per real second
   bool paused = false;
+  double scorch = 0;  // the car has burnt out, 0..1
   // For the sound.
   double engineLoad = 0, inputRpm = 0, clutchSlip = 0;
   bool starter = false, shifting = false;

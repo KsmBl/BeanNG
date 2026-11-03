@@ -1414,6 +1414,59 @@ int main(int argc, char** argv) {
     testJitter("60 km/h", 60);
     testJitter("120 km/h", 120);
   }
+  if (argc > 1 && !strcmp(argv[1], "tree")) {
+    // A car into a tree at various speeds. Does the trunk stop it, or does it snap? How does it land?
+    for (double kmh : {15.0, 30.0, 50.0, 80.0, 120.0}) {
+      World probe;
+      probe.build();
+      const V3 tr = probe.trees()[3];
+      Bench b({tr.x - 6.0, tr.y + 0.2, probe.height(tr.x - 6.0, tr.y + 0.2)}, 0, true);
+      u16 treeObj = 0;
+      for (size_t i = 0; i < b.sim.objs.size(); i++)
+        if (b.sim.objs[i].nodeCount > 0 && len2(b.sim.rest[b.sim.objs[i].nodeStart] - tr) < 1.0) treeObj = u16(i);
+      const u32 top = b.sim.objs[treeObj].nodeStart + 25;
+      const size_t before = b.sim.objs.size();
+      b.launchAt(kmh / 3.6, 2);
+      double peakV = kmh / 3.6;
+      double minTop = 1e9;
+      u32 brokenWood = 0, brokenBranch = 0;
+      b.run(9.0, [&](double, Controls& c) { c.brake = 0; minTop = std::min(minTop, b.sim.pos[top].z - tr.z); });
+      const Obj& o = b.sim.objs[treeObj];
+      double plastBranch = 0;
+      for (u32 i = o.beamStart; i < o.beamStart + o.beamCount; i++) {
+        const Beam& B = b.sim.beams[i];
+        if (B.flags & BF_BROKEN) (B.tag == kTagWood ? brokenWood : brokenBranch)++;
+        if (B.tag == kTagBranch) plastBranch += std::fabs(B.L0 - B.Lorig);
+      }
+      (void)peakV;
+      printf("%3.0f km/h: car now %5.1f km/h, plastic %6.1f kJ, new pieces %zu, trunk beams broken %u, branches %u, branch set %.1f m, tree top lowest z %.1f (rest %.1f), guard %llu sane %d\n", kmh, b.car.speed * 3.6, b.sim.plasticEnergy / 1e3, b.sim.objs.size() - before, brokenWood, brokenBranch, plastBranch, minTop, b.sim.rest[top].z - tr.z, (unsigned long long)b.sim.clampedSteps, b.sane());
+    }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "bomb")) {
+    Bench b({-90, 0, 0}, 0, true);
+    b.run(1.0, [&](double, Controls&) {});
+    Controls fireNow;
+    fireNow.fire = true;
+    bool once = true;
+    for (int sec = 0; sec < 30; sec++) {
+      const double before = b.sim.plasticEnergy;
+      const auto t0 = std::chrono::steady_clock::now();
+      b.run(1.0, [&](double, Controls& c) { c.fire = once; once = false; });
+      const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      double vmax = 0, vavg = 0;
+      int n = 0;
+      for (u32 i = 0; i < b.sim.objs[0].nodeCount; i++) {
+        const double v = len(b.sim.vel[i]);
+        vmax = std::max(vmax, v);
+        vavg += v;
+        n++;
+      }
+      int awake = int(b.sim.active.size());
+      printf("t=%2d plastic +%7.1f kJ  objs %zu awake %d  node v avg %.2f max %.1f  guard %llu  load %.0f%% sane %d\n", sec + 1, (b.sim.plasticEnergy - before) / 1e3, b.sim.objs.size(), awake, vavg / std::max(n, 1), vmax, (unsigned long long)b.sim.clampedSteps, wall * 100, b.sane());
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "buckle2")) {
     for (double kmh : {25.0}) {
       Bench b({-46, 91.0, 0}, 0.45);
