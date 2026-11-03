@@ -574,33 +574,34 @@ void Sim::rebuildPairs(double dt) {
         }
   };
 
+  listPrimitives();
   const u32 nTris = u32(tris.size());
-  for (u32 i = 0; i < nTris; i++) {
-    const Tri& t = tris[i];
-    if ((t.flags & TF_VISUAL) || !objs[t.obj].awake) continue;
-    const V3& a = pos[t.a];
-    const V3& b = pos[t.b];
-    const V3& c = pos[t.c];
-    // A triangle whose corners have been torn apart is no surface any more. It must not even reach
-    // the grid: spanning tens of metres, it would land in tens of thousands of cells at every rebuild.
-    constexpr double kTear2 = 1.5 * 1.5;
-    if (len2(b - a) > kTear2 * len2(rest[t.b] - rest[t.a]) || len2(c - b) > kTear2 * len2(rest[t.c] - rest[t.b]) ||
-        len2(a - c) > kTear2 * len2(rest[t.a] - rest[t.c]))
-      continue;
-    insertBox(i,
-              {std::min({a.x, b.x, c.x}), std::min({a.y, b.y, c.y}), std::min({a.z, b.z, c.z})},
-              {std::max({a.x, b.x, c.x}), std::max({a.y, b.y, c.y}), std::max({a.z, b.z, c.z})});
-  }
-  for (u32 i = 0; i < blocks.size(); i++) {
-    const Block& bl = blocks[i];
-    if (!objs[bl.obj].awake) continue;
-    V3 mn = pos[bl.n[0]], mx = mn;
-    for (int k = 1; k < 8; k++) {
-      const V3& p = pos[bl.n[k]];
-      mn = {std::min(mn.x, p.x), std::min(mn.y, p.y), std::min(mn.z, p.z)};
-      mx = {std::max(mx.x, p.x), std::max(mx.y, p.y), std::max(mx.z, p.z)};
+  for (u32 oi : active) {
+    for (u32 i : objTris[oi]) {
+      const Tri& t = tris[i];
+      const V3& a = pos[t.a];
+      const V3& b = pos[t.b];
+      const V3& c = pos[t.c];
+      // A triangle whose corners have been torn apart is no surface any more. It must not even reach
+      // the grid: spanning tens of metres, it would land in tens of thousands of cells at every rebuild.
+      constexpr double kTear2 = 1.5 * 1.5;
+      if (len2(b - a) > kTear2 * len2(rest[t.b] - rest[t.a]) || len2(c - b) > kTear2 * len2(rest[t.c] - rest[t.b]) ||
+          len2(a - c) > kTear2 * len2(rest[t.a] - rest[t.c]))
+        continue;
+      insertBox(i,
+                {std::min({a.x, b.x, c.x}), std::min({a.y, b.y, c.y}), std::min({a.z, b.z, c.z})},
+                {std::max({a.x, b.x, c.x}), std::max({a.y, b.y, c.y}), std::max({a.z, b.z, c.z})});
     }
-    insertBox(nTris + i, mn, mx);
+    for (u32 i : objBlocks[oi]) {
+      const Block& bl = blocks[i];
+      V3 mn = pos[bl.n[0]], mx = mn;
+      for (int k = 1; k < 8; k++) {
+        const V3& p = pos[bl.n[k]];
+        mn = {std::min(mn.x, p.x), std::min(mn.y, p.y), std::min(mn.z, p.z)};
+        mx = {std::max(mx.x, p.x), std::max(mx.y, p.y), std::max(mx.z, p.z)};
+      }
+      insertBox(nTris + i, mn, mx);
+    }
   }
 
   for (u32 oi : active) {
@@ -612,6 +613,7 @@ void Sim::rebuildPairs(double dt) {
       for (int it = hashHead[h]; it >= 0; it = hashEntries[it].next) {
         const u32 prim = hashEntries[it].prim;
         if (stamp[prim] == i) continue;  // a primitive spanning hash-colliding cells
+        if (stamp[prim] == 0xffffffffu) stamped.push_back(prim);
         stamp[prim] = i;
         // The hash only says "same cell". Most candidates are far apart, and every pair kept here
         // is tested on each of the next steps, so an exact box test now pays for itself many times.
@@ -646,7 +648,20 @@ void Sim::rebuildPairs(double dt) {
     }
     // stamp stores the last node seen; node ids are unique across objects, so no reset needed.
   }
-  std::fill(stamp.begin(), stamp.end(), 0xffffffffu);
+  for (u32 prim : stamped) stamp[prim] = 0xffffffffu;
+  stamped.clear();
+}
+
+void Sim::listPrimitives() {
+  // Objects are split and primitives added rarely; the lists hold until then.
+  if (primsListed == tris.size() + blocks.size() + objs.size() && primsSplit == splitGeneration) return;
+  primsListed = tris.size() + blocks.size() + objs.size();
+  primsSplit = splitGeneration;
+  objTris.assign(objs.size(), {});
+  objBlocks.assign(objs.size(), {});
+  for (u32 i = 0; i < u32(tris.size()); i++)
+    if (!(tris[i].flags & TF_VISUAL)) objTris[tris[i].obj].push_back(i);
+  for (u32 i = 0; i < u32(blocks.size()); i++) objBlocks[blocks[i].obj].push_back(i);
 }
 
 void Sim::contactFriction(u32 n, V3 nrm, double fn, double muv, double dt, V3 relVel, double mEff,

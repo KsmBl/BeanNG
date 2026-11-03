@@ -125,7 +125,7 @@ void Duel::build() {
   sim.active.clear();
   for (u32 id : scenery) {
     const Obj& o = sim.objs[id];
-    if (o.nodeStart >= sim.firstSceneryNode) sim.active.push_back(id);
+    if (o.nodeStart >= sim.firstSceneryNode && o.awake) sim.active.push_back(id);
   }
   sim.events.clear();
   sim.scrapes.clear();

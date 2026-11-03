@@ -208,6 +208,12 @@ class Sim {
   struct HashEntry { u32 prim; int next; };
   std::vector<HashEntry> hashEntries;
   std::vector<u32> stamp;
+  std::vector<u32> stamped;  // which entries of it are in use, so that only those are put back
+  // What can be touched, object by object, so that a pair search looks only at what is awake.
+  std::vector<std::vector<u32>> objTris, objBlocks;
+  size_t primsListed = size_t(-1);
+  u32 primsSplit = u32(-1);
+  void listPrimitives();
   double pairMargin = 0.1;
 
   void rebuildPairs(double dt);

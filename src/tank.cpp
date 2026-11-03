@@ -722,17 +722,19 @@ void Tank::makeWreck(Sim& sim) {
   throwTrack(sim, 0);
   throwTrack(sim, 1);
   damage = 1.0;
+  // Rusted solid: it stands where it stands and stops what runs into it. Turret on hull with nothing holding it would
+  // otherwise be two bodies in one place, and blow themselves apart the moment anything woke them.
   for (u16 oi : {hullObj, turretObj}) {
     Obj& o = sim.objs[oi];
-    o.armoured = false;
+    o.armoured = true;
     o.kind = OBJ_PROP;
     o.alwaysAwake = false;
     o.awake = false;
-  }
-  for (u32 n : sim.objs[turretObj].nodes) sim.flags[n] |= NF_COLLIDE;
-  for (const RoadWheel& w : wheels) {
-    sim.flags[w.in] |= NF_COLLIDE;
-    sim.flags[w.out] |= NF_COLLIDE;
+    for (u32 n : o.nodes) {
+      sim.flags[n] |= NF_FIXED;
+      sim.invMass[n] = 0;
+      sim.vel[n] = {};
+    }
   }
 }
 
