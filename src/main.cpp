@@ -746,7 +746,7 @@ struct Game {
         in = input;
         input.chatOut.clear();
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = false;
       }
       if (!in.chatOut.empty() && state == NET_IN) {
         saying = in.chatOut;
@@ -769,6 +769,11 @@ struct Game {
       if (in.c.setup) out.setupCount++;
       if (in.c.placeFoot) out.mineFootCount++;
       if (in.c.placeTank) out.mineTankCount++;
+      if (in.c.strike) {
+        out.strikeCount++;
+        out.strikeX = float(in.c.strikeAt.x);
+        out.strikeY = float(in.c.strikeAt.y);
+      }
 
       if (state == NET_CONNECTING) {
         if (now - connectStart > 4.0) {
@@ -1530,6 +1535,7 @@ static void runGame() {
       key("Einsteigen und aussteigen", "E");
       key("Waffe wählen", "1 2 3 4 5");
       key("Tretmine, Panzermine legen", "M, N");
+      key("Bombencode auf den Punkt der Karte", "K, Klick, B");
       key("Scharfschützengewehr aufbauen, Zielfernrohr, Zoom", "X, rechte Maustaste, Mausrad");
       key("Rennen, springen", "Umschalt, Leertaste");
       key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
@@ -1736,6 +1742,16 @@ static void runGame() {
             case SDLK_F: edges.fire = true; break;
             case SDLK_E: edges.use = true; break;
             case SDLK_X: edges.setup = true; break;
+            case SDLK_B:
+              // On the point marked on the map; without one, the map comes up to mark it on.
+              if (hasMark && view.foot.codes > 0) {
+                edges.strike = true;
+                edges.strikeAt = markPoint;
+                hasMark = false;
+              } else {
+                mapOpen = true;
+              }
+              break;
             case SDLK_M: edges.placeFoot = true; break;
             case SDLK_N: edges.placeTank = true; break;
             case SDLK_F12: wantShot = true; break;
@@ -1907,6 +1923,10 @@ static void runGame() {
       c.setup |= sendC.setup;
       c.placeFoot |= sendC.placeFoot;
       c.placeTank |= sendC.placeTank;
+      if (sendC.strike) {
+        c.strike = true;
+        c.strikeAt = sendC.strikeAt;
+      }
       G.input.yaw = rig.yaw;
       G.input.pitch = rig.pitch;
       G.input.sprint = sprint;
@@ -1921,7 +1941,7 @@ static void runGame() {
         // The camera flies with the missile, and where it looks is where it goes.
         const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
         c.aimPoint = view.missileP - back * 2000.0;
-      } else if (hasMark) {
+      } else if (hasMark && inTank && myVehicle % TK_COUNT == TK_ARTILLERY) {
         c.aimPoint = markPoint;
         c.indirect = true;
       } else {

@@ -562,7 +562,9 @@ void Duel::stepBullets(double dt) {
   for (size_t i = 0; i < bullets.size();) {
     Bullet& b = bullets[i];
     b.age += dt;
-    if (b.kind == WP_RPG) {
+    if (b.kind == kKindStrike) {
+      // Straight down the last of the way.
+    } else if (b.kind == WP_RPG) {
       // A rocket wanders, more the longer it flies.
       const double wander = 0.25 * std::min(b.age, 3.0);
       b.v += V3{std::sin(b.age * 7.0 + b.p.x), std::cos(b.age * 5.0 + b.p.y), std::sin(b.age * 6.0)} * (wander * 12.0 * dt);
@@ -573,8 +575,8 @@ void Duel::stepBullets(double dt) {
     }
     const V3 from = b.p;
     b.p += b.v * dt;
-    if ((b.kind == WP_RPG && int(b.age * 200.0) % 4 == 0) || (b.kind != WP_RPG && int(b.age * 200.0) % 8 == 0)) sim.event(EV_TRACER, b.p, b.v, 1.f);
-    bool stop = b.age > 6.0;
+    if (((b.kind == WP_RPG || b.kind == kKindStrike) && int(b.age * 200.0) % 4 == 0) || (b.kind != WP_RPG && int(b.age * 200.0) % 8 == 0)) sim.event(EV_TRACER, b.p, b.v, 1.f);
+    bool stop = b.age > (b.kind == kKindStrike ? 20.0 : 6.0);
     V3 at = b.p;
     const V3 seg = b.p - from;
     const double L = len(seg);
@@ -582,14 +584,14 @@ void Duel::stepBullets(double dt) {
     // Those it may hit: the other player, where the shooter saw them.
     if (!stop) {
       const int q = 1 - b.owner;
-      if (players[q].vehicle < 0) {
+      if (players[q].vehicle < 0 && b.kind != kKindStrike) {
         const V3 foot = soldierAt(q, b.lag);
         const double t = clampd(dot(V3{foot.x - from.x, foot.y - from.y, 0}, V3{seg.x, seg.y, 0}) / std::max(seg.x * seg.x + seg.y * seg.y, 1e-9), 0, 1);
         const V3 near = from + seg * t;
         if (std::hypot(near.x - foot.x, near.y - foot.y) < 0.38 && near.z > foot.z && near.z < foot.z + Soldier::kHeight) {
           stop = true;
           at = near;
-          if (b.kind != WP_RPG) {
+          if (b.kind < WP_RPG) {
             // In the head it counts for more than in the boots.
             const double z = near.z - foot.z;
             players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
@@ -630,12 +632,30 @@ void Duel::stepBullets(double dt) {
     }
     if (stop) {
       if (b.kind == WP_RPG) sim.explode(at, 2800.0, 10.0);
+      else if (b.kind == kKindStrike) sim.explode(at, 6500.0, 24.0);
       else if (b.age < 6.0) sim.event(EV_SPARK, at, b.v * -0.01, 0.3f);
       bullets[i] = bullets.back();
       bullets.pop_back();
       continue;
     }
     i++;
+  }
+}
+
+void Duel::callStrike(int p, V3 at) {
+  Player& pl = players[p];
+  if (pl.strikeCodes <= 0) return;
+  pl.strikeCodes--;
+  for (int k = 0; k < kStrikeRockets; k++) {
+    // Four rockets at a point, none of them on it: anywhere in a circle round it, a good stone's throw across.
+    randState = randState * 1664525u + 1013904223u;
+    const double a = double(randState >> 16) / 65535.0 * 2.0 * PI;
+    randState = randState * 1664525u + 1013904223u;
+    const double r = std::sqrt(double(randState >> 16) / 65535.0) * kStrikeSpread;
+    Incoming in;
+    in.at = at + V3{std::cos(a) * r, std::sin(a) * r, 0};
+    in.in = kStrikeDelay + k * kStrikeGap;
+    incoming.push_back(in);
   }
 }
 
@@ -749,6 +769,23 @@ void Duel::stepPlayers(const Intent in[2]) {
     bulletDebt -= 0.005;
     stepBullets(0.005);
     stepMines(0.005);
+    for (size_t k = 0; k < incoming.size();) {
+      incoming[k].in -= 0.005;
+      if (incoming[k].in > 0) {
+        k++;
+        continue;
+      }
+      // From high up, already on its way down: there is just time to hear it.
+      Bullet b;
+      const V3 g{incoming[k].at.x, incoming[k].at.y, world.height(incoming[k].at.x, incoming[k].at.y)};
+      b.p = g + V3{40.0, 25.0, 400.0};
+      b.v = norm(g - b.p) * 190.0;
+      b.kind = kKindStrike;
+      b.owner = 0;
+      bullets.push_back(b);
+      incoming[k] = incoming.back();
+      incoming.pop_back();
+    }
   }
   for (int i = 0; i < 2; i++) {
     Player& pl = players[i];
@@ -759,6 +796,7 @@ void Duel::stepPlayers(const Intent in[2]) {
     if (in[i].setup && pl.weapon == WP_SNIPER && pl.vehicle < 0) pl.wantProne = !pl.wantProne;
     if (pl.weapon != WP_SNIPER || pl.vehicle >= 0) pl.wantProne = false;
     s.prone = clampd(s.prone + (pl.wantProne ? 1.0 : -1.5) * kDt / kSetupTime * (pl.wantProne ? 1.0 : 3.0), 0.0, 1.0);
+    if (in[i].strike && phase == PLAYING) callStrike(i, in[i].strikeAt);
     if (pl.vehicle < 0 && phase == PLAYING) {
       fireWeapon(i, in[i]);
       if (in[i].placeFoot) placeMine(i, 0);
@@ -850,6 +888,7 @@ void Duel::restart() {
   winner = -1;
   phaseClock = 0;
   bullets.clear();
+  incoming.clear();
   for (auto& row : mines)
     for (Mine& m : row) m.live = false;
   {

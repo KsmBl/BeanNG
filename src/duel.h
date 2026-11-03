@@ -101,6 +101,8 @@ class Duel {
     bool fireFoot = false;  // a press of the trigger
     bool fireHeld = false;
     bool placeFoot = false, placeTank = false;
+    bool strike = false;    // a code used on the point marked on the map
+    V3 strikeAt;
     bool setup = false;     // lies down behind the big rifle, or gets up again
     int weapon = WP_PISTOL;
     double lag = 0;         // how far in the past this player sees the others, in seconds
@@ -133,6 +135,14 @@ class Duel {
     double age = 0, lag = 0;
   };
   std::vector<Bullet> bullets;
+  // Rockets ordered by a strike code, on their way. They come one after the other, each somewhere near the point.
+  struct Incoming {
+    V3 at;
+    double in = 0;
+  };
+  std::vector<Incoming> incoming;
+  static constexpr double kStrikeDelay = 6.0, kStrikeSpread = 38.0, kStrikeGap = 1.4;
+  static constexpr int kStrikeRockets = 4, kKindStrike = WP_COUNT;
   struct Past {
     V3 soldier[2];
   };
@@ -214,6 +224,7 @@ class Duel {
   void fireWeapon(int p, const Intent& in);
   void stepBullets(double dt);
   void placeMine(int p, int kind);
+  void callStrike(int p, V3 at);
   void stepMines(double dt);
   V3 soldierAt(int p, double lag) const;
   void leaveVehicle(int p);

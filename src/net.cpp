@@ -82,6 +82,9 @@ void write(Writer& w, const InputMsg& m) {
   w.put(m.setupCount);
   w.put(m.mineFootCount);
   w.put(m.mineTankCount);
+  w.put(m.strikeCount);
+  w.put(m.strikeX);
+  w.put(m.strikeY);
   w.put(m.yaw);
   w.put(m.pitch);
   w.put(u8((m.sprint ? 1 : 0) | (m.fireHeld ? 2 : 0)));
@@ -115,6 +118,9 @@ bool read(Reader& r, InputMsg& m) {
   r.get(m.setupCount);
   r.get(m.mineFootCount);
   r.get(m.mineTankCount);
+  r.get(m.strikeCount);
+  r.get(m.strikeX);
+  r.get(m.strikeY);
   r.get(m.yaw);
   r.get(m.pitch);
   u8 sprint = 0;
@@ -135,6 +141,8 @@ bool read(Reader& r, InputMsg& m) {
   // The server must survive anything a player's machine sends it.
   m.steer = sane(m.steer, -1, 1);
   m.yaw = sane(m.yaw, -1000, 1000);
+  m.strikeX = sane(m.strikeX, -1000, 1000);
+  m.strikeY = sane(m.strikeY, -1000, 1000);
   m.pitch = sane(m.pitch, -2, 2);
   m.throttle = sane(m.throttle, 0, 1);
   m.brake = sane(m.brake, 0, 1);

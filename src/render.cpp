@@ -2575,7 +2575,7 @@ struct Renderer::Impl {
         toMap(o.map.me.x, o.map.me.y, sx, sy);
         rrect(sx + float(std::cos(o.map.meYaw)) * 9 * u - 2 * u, sy - float(std::sin(o.map.meYaw)) * 9 * u - 2 * u, 4 * u, 4 * u, 2 * u, {.35f, .85f, .95f, 1});
       }
-      label(mx0 + 14 * u, my0 + ms - 18 * u, "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
+      label(mx0 + 14 * u, my0 + ms - 18 * u, "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  B: Bombencode  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }
 
     // ---- The chat, above the instruments.

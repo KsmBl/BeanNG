@@ -166,7 +166,7 @@ struct Client {
   char name[kNameBytes] = {};
   u32 chatSeq = 0;  // the last line of theirs that has gone in the log
   // One-shot controls, each seen once however many packets carry the same count.
-  bool fire = false, launch = false, repair = false, use = false, setup = false, mineFoot = false, mineTank = false;
+  bool fire = false, launch = false, repair = false, use = false, setup = false, mineFoot = false, mineTank = false, strike = false;
   // Scenery that has moved, as far as this player has been told, and where the slow sweep has got to.
   std::vector<float> told;
   u32 sweep = 0;
@@ -296,6 +296,7 @@ int main(int argc, char** argv) {
           if (m.setupCount != c.in.setupCount) c.setup = true;
           if (m.mineFootCount != c.in.mineFootCount) c.mineFoot = true;
           if (m.mineTankCount != c.in.mineTankCount) c.mineTank = true;
+          if (m.strikeCount != c.in.strikeCount) c.strike = true;
         }
         c.in = m;
         c.haveInput = true;
@@ -628,6 +629,8 @@ int main(int argc, char** argv) {
         in[i].setup = c.setup;
         in[i].placeFoot = c.mineFoot;
         in[i].placeTank = c.mineTank;
+        in[i].strike = c.strike;
+        in[i].strikeAt = V3{c.in.strikeX, c.in.strikeY, 0};
         in[i].fireFoot = c.fire;
         in[i].fireHeld = c.in.fireHeld;
         in[i].weapon = c.in.weapon;
@@ -641,7 +644,7 @@ int main(int argc, char** argv) {
         in[i].walk.yaw = c.in.yaw;
         in[i].walk.jump = c.in.handbrake > 0.5;
         in[i].walk.sprint = c.in.sprint;
-        c.fire = c.launch = c.repair = c.use = c.setup = c.mineFoot = c.mineTank = false;
+        c.fire = c.launch = c.repair = c.use = c.setup = c.mineFoot = c.mineTank = c.strike = false;
       }
       for (int i = 0; i < 2; i++) duel->players[i].present = clients[i].used;
       duel->step(in);

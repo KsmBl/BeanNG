@@ -29,6 +29,8 @@ struct Controls {
   bool use = false;       // edge-triggered: getting in and out
   bool setup = false;     // edge-triggered: lying down behind the big rifle, or getting up
   bool placeFoot = false, placeTank = false;  // edge-triggered: mines
+  bool strike = false;    // edge-triggered: a strike code used on strikeAt
+  V3 strikeAt;
 };
 
 // What makes one car's powertrain and tyres different from another's. Defaults: the Xantia.
