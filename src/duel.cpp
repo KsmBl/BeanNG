@@ -574,7 +574,11 @@ void Duel::fireWeapon(int p, const Intent& in) {
   b.kind = w;
   b.lag = in.lag;
   bullets.push_back(b);
-  sim.event(EV_MUZZLE, b.p, dir, w == WP_RPG ? 0.5f : (w == WP_SNIPER ? 0.45f : 0.12f));
+  sim.event(EV_MUZZLE, b.p, dir, w == WP_RPG ? 0.5f : (w == WP_SNIPER ? 1.0f : (w == WP_AR ? 0.14f : 0.1f)));
+  if (w == WP_SNIPER) {
+    // The blast from the muzzle brake raises the dust around it.
+    for (int k = 0; k < 6; k++) sim.event(EV_DUST, eye + dir * 1.0 + V3{chance() * 1.2, chance() * 1.2, -0.3}, V3{chance() * 3.0, chance() * 3.0, 1.0}, 1.f);
+  }
 }
 
 void Duel::stepBullets(double dt) {
@@ -594,7 +598,8 @@ void Duel::stepBullets(double dt) {
     }
     const V3 from = b.p;
     b.p += b.v * dt;
-    if (((b.kind == WP_RPG || b.kind == kKindStrike) && int(b.age * 200.0) % 4 == 0) || (b.kind != WP_RPG && int(b.age * 200.0) % 8 == 0)) sim.event(EV_TRACER, b.p, b.v, 1.f);
+    if (b.kind == WP_SNIPER) sim.event(EV_TRACER, b.p, b.v, 2.f);  // bright enough to follow all the way, every few metres
+    else if (((b.kind == WP_RPG || b.kind == kKindStrike) && int(b.age * 200.0) % 4 == 0) || (b.kind != WP_RPG && int(b.age * 200.0) % 8 == 0)) sim.event(EV_TRACER, b.p, b.v, 1.f);
     bool stop = b.age > (b.kind == kKindStrike ? 20.0 : 6.0);
     V3 at = b.p;
     const V3 seg = b.p - from;
@@ -681,6 +686,12 @@ void Duel::stepBullets(double dt) {
     if (stop) {
       if (b.kind == WP_RPG) sim.explode(at, 2800.0, 10.0);
       else if (b.kind == kKindStrike) sim.explode(at, 6500.0, 24.0);
+      else if (b.kind == WP_SNIPER && b.age < 6.0) {
+        // A shell of its own, near enough: a hole in the ground, stone gone, a dent in whatever it hits, and whoever
+        // stands right beside it feels it too. The dust goes up high, for the shooter to see where it went.
+        sim.explode(at, 650.0, 4.0, 2.4);
+        sim.event(EV_IMPACT, at, V3{double(b.owner), 0, 0}, 1.f);
+      }
       else if (b.age < 6.0) sim.event(EV_SPARK, at, b.v * -0.01, 0.3f);
       bullets[i] = bullets.back();
       bullets.pop_back();

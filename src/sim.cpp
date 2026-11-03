@@ -376,18 +376,18 @@ void Sim::restoreObjects(const Sim& start, u32 count) {
 
 static constexpr double kBlastEnd = 450.0;
 
-void Sim::explode(V3 c, double impulse, double radius) {
+void Sim::explode(V3 c, double impulse, double radius, double hole) {
   blasts.push_back({c, impulse, radius, 0.0});
   blastCount++;
   lastBlast = c;
   lastBlastRadius = radius;
   lastBlastImpulse = impulse;
-  if (logBlasts) blastLog.push_back({c, impulse, radius});
+  if (logBlasts) blastLog.push_back({c, impulse, radius, hole});
   if (craterWorld) {
     // Only what goes off close to the ground digs into it.
     const double above = c.z - craterWorld->height(c.x, c.y);
     // The heavier the charge, the bigger the hole, beyond what its reach alone would say.
-    const double heavy = std::max(1.0, std::sqrt(impulse / 2200.0));
+    const double heavy = hole * std::max(1.0, std::sqrt(impulse / 2200.0));
     if (above < 3.0) craterWorld->addCrater(c.x, c.y, radius * 0.18 * heavy, radius * 0.05 * heavy * (1.0 - std::max(above, 0.0) / 3.0));
     // Boulders crack apart.
     // On a player's machine the server has already sent the dust.

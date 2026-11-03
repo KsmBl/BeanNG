@@ -92,7 +92,7 @@ struct Obj {
 // Beam tags of trees: their breaking is heard and seen differently from steel.
 constexpr u8 kTagWood = 200, kTagBranch = 201;
 
-enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH, EV_ROCK };
+enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH, EV_ROCK, EV_IMPACT };
 struct SimEvent {
   V3 p, v;
   float strength;
@@ -141,7 +141,7 @@ class Sim {
   // For the duel server: what went off, for the players' machines to set off as well.
   struct BlastRecord {
     V3 c;
-    double impulse, radius;
+    double impulse, radius, hole;
   };
   bool logBlasts = false;
   std::vector<BlastRecord> blastLog;
@@ -184,7 +184,7 @@ class Sim {
   }
   // A detonation: a pressure wave running out from c. impulse is in N s per square metre of surface
   // at 1 m from the centre, radius is where it has faded out. Tears what is nearest, throws the rest.
-  void explode(V3 c, double impulse, double radius);
+  void explode(V3 c, double impulse, double radius, double hole = 1.0);  // hole: how much bigger its crater than its reach says
   void event(EventKind k, V3 p, V3 v, float s);
   // Largest eigenvalue of M^-1 K for one object at its current shape, by power iteration. A
   // symplectic Euler step is stable only while this stays below (2/dt)^2.

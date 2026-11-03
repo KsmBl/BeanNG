@@ -58,7 +58,7 @@ inline constexpr WeaponInfo kWeapons[WP_COUNT] = {
     {"Kampfmesser", 0.6, false, 0, 60, 0},
     {"Pistole", 0.28, false, 360, 26, 0.006},
     {"Sturmgewehr", 0.1, true, 800, 28, 0.009},
-    {"Scharfschützengewehr", 2.2, false, 950, 130, 0.0004},
+    {"Scharfschützengewehr", 2.2, false, 950, 220, 0.0004},
     {"Raketenwerfer", 4.0, false, 130, 0, 0.012},  // loose at long range: it wanders as it flies
 };
 

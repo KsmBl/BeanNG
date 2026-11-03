@@ -1944,8 +1944,41 @@ struct Renderer::Impl {
           }
           break;
         }
+        case EV_IMPACT: {
+          // Where the big rifle's bullet went: a pillar of dust that goes up high and stays a moment, seen far off.
+          if (int(e.v.x) == s.foot.slot) {
+            impactAt = e.p;
+            impactClock = 5.0f;
+          }
+          for (int i = 0; i < 90; i++) {
+            Particle q;
+            const float up = rnd(0.f, 1.f);
+            q.p = e.p + V3{rnd(-.5f, .5f), rnd(-.5f, .5f), 0.2f};
+            q.v = V3{rnd(-1.6f, 1.6f), rnd(-1.6f, 1.6f), 4.f + up * up * 26.f};
+            q.maxLife = q.life = rnd(1.5f, 4.5f);
+            q.size = rnd(.5f, 1.5f) * (1.f + float(len(e.p - lastCamEye)) * .0025f);
+            const float g = rnd(.42f, .68f);
+            q.r = g * 1.05f; q.g = g * .95f; q.b = g * .78f; q.a = rnd(.45f, .8f);
+            q.gravity = 1.6f;
+            q.drag = 1.8f;
+            particles.push_back(q);
+          }
+          for (int i = 0; i < 40; i++) {
+            Particle q;
+            const V3 d = norm(V3{rnd(-1, 1), rnd(-1, 1), rnd(.2f, 1.6f)});
+            q.p = e.p;
+            q.v = d * rnd(6.f, 30.f);
+            q.maxLife = q.life = rnd(.15f, .6f);
+            q.size = rnd(.06f, .18f);
+            q.r = 1.f; q.g = rnd(.7f, .95f); q.b = .35f; q.a = 1.f;
+            q.gravity = 6.f;
+            q.drag = 1.5f;
+            particles.push_back(q);
+          }
+          break;
+        }
         case EV_MUZZLE: {
-          flash = std::max(flash, .35f);
+          flash = std::max(flash, .35f * e.strength);
           for (int i = 0; i < 26; i++) {
             Particle q;
             const V3 d = norm(e.v + V3{rnd(-.35f, .35f), rnd(-.35f, .35f), rnd(-.35f, .35f)});
@@ -1977,8 +2010,10 @@ struct Renderer::Impl {
           Particle q;
           q.p = e.p;
           q.v = e.v * .02;
-          q.maxLife = q.life = .16f;
-          q.size = .16f;
+          // The big rifle's is a line of light that hangs in the air a moment, and can be made out from afar.
+          const bool heavy = e.strength > 1.5f;
+          q.maxLife = q.life = heavy ? .7f : .16f;
+          q.size = heavy ? .16f + float(len(e.p - lastCamEye)) * .0009f : .16f;
           q.r = 1.f; q.g = .75f; q.b = .35f; q.a = 1.f;
           q.gravity = 0.f;
           q.drag = 0.f;
@@ -2182,6 +2217,8 @@ struct Renderer::Impl {
   enum { IC_WATER = 0xE000, IC_OIL, IC_FUEL, IC_WRENCH, IC_ENGINE, IC_TYRE, IC_WARN, IC_BRAKE, IC_SKID, IC_CAMERA, IC_CLOCK, IC_SHELL, IC_TURRET, IC_PAD };
 
   static constexpr double Duel_kFixError = 70.0;
+  V3 impactAt, lastCamEye;
+  float impactClock = 0;
   std::vector<Col> mapColors;
   V3 camEye, camTarget;
   void buildHud(const Snapshot& s, const HudOptions& o, int w, int h) {
@@ -2616,6 +2653,27 @@ struct Renderer::Impl {
       rrect(0, H * .62f, W, H * .38f, 0, dark);
     }
 
+    // ---- Where the big rifle's last bullet went: a ring on the spot, with the distance, for as long as it matters.
+    if (impactClock > 0 && (o.scope > 0 || s.foot.onFoot)) {
+      const Mat4& m = camVP;
+      const V3 p = impactAt;
+      const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
+      const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
+      const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
+      if (qw > 0.1) {
+        const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H);
+        const float fade = std::min(impactClock, 1.f);
+        const Col mark{1.f, .45f, .1f, .95f * fade};
+        arc(sx, sy, 11 * u, 2.f * u, 0, kPi2, mark);
+        rrect(sx - .75f * u, sy - 18 * u, 1.5f * u, 7 * u, 0, mark);
+        rrect(sx - .75f * u, sy + 11 * u, 1.5f * u, 7 * u, 0, mark);
+        rrect(sx - 18 * u, sy - .75f * u, 7 * u, 1.5f * u, 0, mark);
+        rrect(sx + 11 * u, sy - .75f * u, 7 * u, 1.5f * u, 0, mark);
+        snprintf(buf, sizeof buf, "%.0f m", len(p - camEye));
+        labelMid(sx, sy + 32 * u, buf, 14 * u, {1, 1, 1, fade});
+      }
+    }
+
     // ---- The chat, above the instruments.
     if (!s.chat.empty() || s.chatOpen) {
       const float cx0 = 24 * u;
@@ -2899,6 +2957,8 @@ void Renderer::resetDamage() {
 
 void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt) {
   d->camEye = cam.eye;
+  d->lastCamEye = cam.eye;
+  d->impactClock = std::max(0.f, d->impactClock - float(dt));
   d->camTarget = cam.target;
   Impl& D = *d;
   D.origin = {};  // positions stay within +-512 m, which is fine for float vertex data

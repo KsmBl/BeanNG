@@ -339,7 +339,11 @@ struct SoundDriver {
           crackClock = 0.05;
         }
       } else if (e.kind == EV_MUZZLE) {
-        synth.trigger(Sfx::Gun, 1.f, 0.f, 1.1f);
+        // By how big the gun is and how far away it went off: a pistol is no tank, and the big rifle is close.
+        float pan, gain;
+        place(e.p, pan, gain);
+        const float size = std::clamp(e.strength, 0.05f, 1.f);
+        synth.trigger(Sfx::Gun, size, pan, std::max(gain * 1.6f, 0.03f) * (0.25f + size * 1.1f));
       } else if (e.kind == EV_GLASS) {
         glassAt = e.p;
         glassN++;
@@ -1007,12 +1011,13 @@ struct Game {
           }
           for (u32 i = first; i < first + count; i++) {
             const V3 c = r.getV3();
-            float impulse = 0, radius = 0;
+            float impulse = 0, radius = 0, hole = 1;
             r.get(impulse);
             r.get(radius);
+            r.get(hole);
             if (!r.ok()) break;
             if (i == blastsDone) {
-              sim.explode(c, impulse, radius);
+              sim.explode(c, impulse, radius, hole);
               blastsDone++;
             }
           }
@@ -1025,7 +1030,7 @@ struct Game {
             u8 evKind = 0;
             r.get(strength);
             r.get(evKind);
-            if (!r.ok() || evKind > EV_ROCK) break;
+            if (!r.ok() || evKind > EV_IMPACT) break;
             sim.event(EventKind(evKind), p, v, strength);
           }
         } else if (kind == net::P_CHATLOG) {
@@ -1327,6 +1332,7 @@ struct Game {
       {
         std::lock_guard<std::mutex> lock(snapMutex);
         snap.foot.weapon = in.weapon;
+        snap.foot.slot = mySlot;
         snap.foot.prone = me.prone;
         snap.foot.wind = duel.wind;
         const Duel::Player& who = duel.players[mySlot];
@@ -1522,6 +1528,9 @@ static void runGame() {
   bool chatting = false;
   std::string chatText;
   int weaponPick = WP_PISTOL;
+  // What a heavy shot does to whoever fires it, as far as the eye can tell.
+  double gunKick = 0;
+  int kickAmmo = -1, kickWeapon = -1;
   // The big rifle's scope: right mouse button once it is set up.
   bool scoped = false;
   double scopeZoom = 6.0;
@@ -1994,8 +2003,8 @@ static void runGame() {
       if (inMatch) {
         panelKind = PANEL_NONE;
         weaponPick = WP_SNIPER;
-        rig.yaw = PI;
-        rig.pitch = -0.02;
+        rig.yaw = G.world.base(slot).facing + PI;
+        if (!scoped) rig.pitch = 0.03;
         static double since = tNow;
         static bool down = false;
         if (tNow - since > 1.0 && !down) {
@@ -2003,7 +2012,7 @@ static void runGame() {
           sendC.setup = true;
         }
         if (view.foot.prone > 0.99) scoped = true;
-        scopeZoom = tNow - since > 8.0 ? 24.0 : 6.0;
+        scopeZoom = 6.0;
         if (std::fmod(tNow, 2.5) < dt) sendC.fire = true;
       }
     }
@@ -2302,6 +2311,25 @@ static void runGame() {
       cam.inside = false;
       cam.fovY = 66.0 * PI / 180.0 + gSet.fov * PI / 180.0;
     }
+    {
+      // A shot gone means the ammunition went down with the same weapon in hand.
+      const int ammoNow = view.foot.ammo;
+      if (onFoot && kickWeapon == weaponPick && kickAmmo >= 0 && ammoNow == kickAmmo - 1) {
+        if (weaponPick == WP_SNIPER) {
+          gunKick = 1.0;
+          rig.pitch = clampd(rig.pitch - 0.018 * (scoped ? 6.0 / scopeZoom : 1.0), -0.30, 1.2);
+          rig.yaw += 0.004 * std::sin(tNow * 91.0) * (scoped ? 6.0 / scopeZoom : 1.0);
+        } else if (weaponPick == WP_RPG) {
+          gunKick = 0.7;
+        } else if (weaponPick == WP_AR) {
+          gunKick = std::max(gunKick, 0.12);
+        } else if (weaponPick == WP_PISTOL) {
+          gunKick = std::max(gunKick, 0.1);
+        }
+      }
+      kickAmmo = ammoNow;
+      kickWeapon = weaponPick;
+    }
     hud.scope = scoped ? scopeZoom : 0.0;
     if (scoped) {
       const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
@@ -2313,6 +2341,18 @@ static void runGame() {
       cam.target = cam.eye - back * 100.0;
       cam.up = {0, 0, 1};
       cam.fovY = (60.0 / scopeZoom) * PI / 180.0;
+    }
+    if (gunKick > 0.002) {
+      // The picture jumps up and shakes, and comes back in a moment. Through a scope it would leave the view otherwise.
+      const double amount = scoped ? 0.035 * 6.0 / scopeZoom : 0.05;
+      const double range = len(cam.target - cam.eye);
+      const double rattle = std::sin(tNow * 83.0) * 0.4 * gunKick;
+      cam.target += V3{0, 0, 1} * (range * amount * gunKick) + V3{std::cos(rig.yaw + 1.57), std::sin(rig.yaw + 1.57), 0} * (range * amount * rattle);
+      if (!scoped) cam.eye += norm(cam.eye - cam.target) * (0.18 * gunKick);
+      cam.fovY *= 1.0 + 0.05 * gunKick;
+      gunKick *= std::exp(-dt * 7.0);
+    } else {
+      gunKick = 0;
     }
     if (scriptMode == 48 && inVehicle) {
       // Beside a car on the move, to see its wheels go round.

@@ -454,6 +454,7 @@ int main(int argc, char** argv) {
       w.putV3(log[i].c);
       w.put(float(log[i].impulse));
       w.put(float(log[i].radius));
+      w.put(float(log[i].hole));
     }
     const size_t nEv = std::min(events.size(), size_t(kMaxEventsPerPacket));
     w.put(u8(nEv));
@@ -687,8 +688,10 @@ int main(int argc, char** argv) {
         // The player's machine sets off its own bang and its own cracked rocks from the blast list; the wall
         // stones' dust is worth sending. A tracer has plenty of company.
         if (e.kind == EV_BLAST) continue;
-        if (e.kind == EV_TRACER && (tracerCount++ & 3) != 0) continue;
-        if (pending.size() < 400) pending.push_back(e);
+        if (e.kind == EV_TRACER && e.strength < 1.5f && (tracerCount++ & 3) != 0) continue;
+        // Spend the room on what matters: a marked shot never waits behind sparks.
+        if (e.kind == EV_IMPACT) pending.insert(pending.begin(), e);
+        else if (pending.size() < 400) pending.push_back(e);
       }
     }
     if (t >= nextSend) {
