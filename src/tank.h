@@ -7,6 +7,25 @@
 #include <vector>
 #include "vehicle.h"
 
+enum TurretKind : u8 { TK_STANDARD, TK_LIGHT, TK_ARTILLERY, TK_MISSILE, TK_COUNT };
+
+// What makes one turret different. All have the same nodes and beams: only where the muzzle lies, how heavy it
+// all is and what it fires differ, so that the hull under it notices the weight by itself.
+struct TurretSpec {
+  const char* name;
+  const char* mesh;
+  double massScale, powerScale;
+  double gunLen, recoilLen, recoilForce;
+  double reload;
+  int ammo;
+  double shellSpeed, blastImpulse, blastRadius, shellLife;
+  double pitchMin, pitchMax, yawRate, pitchRate;  // degrees, and degrees per second
+  int missiles;
+};
+const TurretSpec& turretSpec(TurretKind k);
+
+enum TankModule { TM_ENGINE, TM_RING, TM_GUN, TM_AMMO, TM_TRACK_L, TM_TRACK_R, TM_COUNT };
+
 class Tank {
  public:
   static constexpr double kWheelR = 0.37;   // road wheel with track
@@ -43,6 +62,10 @@ class Tank {
   bool autoBox = true;
   double reloadTime = 4;
   double shotsFired = 0;
+  int ammo = -1;  // rounds left; -1 never runs out, as in free driving
+
+  TurretKind kind = TK_STANDARD;
+  const TurretSpec& spec() const { return turretSpec(kind); }
 
   struct Shell {
     V3 p, v;
@@ -63,11 +86,41 @@ class Tank {
   bool destroyed = false;
   double burnTime = 0;
   bool trackOff[2] = {false, false};
+  double mod[TM_COUNT] = {1, 1, 1, 1, 1, 1};  // what is left of each part; at nothing it no longer works
+
+  // A guided missile is flown by hand towards aimPoint, one at a time. Firing again sets it off early.
+  int missiles = 0;
+  bool missileLive = false;
+  V3 missileP, missileV;
+  double missileAge = 0;
+
+  // A repair takes a kit and standing still for a while.
+  int repairKits = 0;
+  double repairClock = 0;
+  static constexpr double kRepairTime = 6.0;
   V3 trackWidthDir(int side) const { return trackOff[side] ? thrownLeft_[side] : left; }
 
   void update(Sim& sim, const Controls& in, double dt);
   void tickFire(Sim& sim, double dt);  // goes on burning while the wreck itself sleeps
   void shiftIndices(long nodes, long beams, long objects);
+
+  // A player's machine runs no physics. This is what it needs to show a tank and fill in the instruments.
+  struct NetState {
+    V3 vel, muzzle, gunDir, sight;
+    float turretYaw = 0, gunPitch = 0, reload = 0, reloadTime = 4, damage = 0, burnTime = 0;
+    float trackPhase[2] = {}, trackOmega[2] = {};
+    float engineOmega = 0, throttle = 0, brake = 0, steer = 0, speed = 0, latAcc = 0, lonAcc = 0, fuel = 0, load = 0;
+    int gear = 1, ammo = -1;
+    bool destroyed = false, trackOff[2] = {}, autoBox = true;
+    float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1};
+    int missiles = 0, repairKits = 0;
+    float repairClock = 0;
+    bool missileLive = false;
+    V3 missileP, missileV;
+  };
+  NetState netState() const;
+  // Call once the nodes hold their new positions.
+  void applyNetState(Sim& sim, const NetState& n, double dt);
   void settle(Sim& sim, double seconds);
   // The closed line of the track around sprocket, wheels and idler, in world space.
   void trackPath(const Sim& sim, int side, std::vector<V3>& out) const;
@@ -87,11 +140,17 @@ class Tank {
   void dampHull(Sim& sim, double dt);
   double tetDet_ = 0;
   void updateFrame(Sim& sim, double dt);
+  void updateWheelLift(const Sim& sim, double dt);
   void updateTurret(Sim& sim, const Controls& in, double dt);
   void updateDrive(Sim& sim, const Controls& in, double dt);
   void updateTracks(Sim& sim, double dt);
   void updateShells(Sim& sim, double dt);
   void addToHull(Sim& sim, V3 point, V3 force);
+  void damageModules(Sim& sim, V3 c, double impulse);
+  void updateMissile(Sim& sim, const Controls& in, double dt);
+  void updateRepair(Sim& sim, const Controls& in, double dt);
+  bool pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at) const;
+  V3 ring_;
 };
 
-Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig);
+Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind = TK_STANDARD);

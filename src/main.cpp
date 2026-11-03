@@ -3,16 +3,21 @@
 #include <epoxy/gl.h>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 #include "audio.h"
+#include "duel.h"
+#include "duelnet.h"
 #include "props.h"
 #include "render.h"
 #include "tank.h"
@@ -58,560 +63,6 @@ static void saveSettings() {
 }
 
 namespace {
-constexpr double kPhysDt = 1.0 / 2000.0;
-constexpr int kMaxStepsPerSlice = 80;  // never spiral: if we fall behind, time simply slows down
-
-V3 kSpawn{-90, 0, 0};
-
-// Everything the input thread hands to the physics thread.
-enum VehicleKind { VK_XANTIA, VK_LEOPARD, VK_ONE1, VK_HUMMER, VK_COUNT };
-
-struct SharedInput {
-  Tuning tuning;
-  double tankReload = 4;
-  Controls c;
-  bool reset = false, repair = false, resetWorld = false, paused = false;
-  int startPlace = 0;
-  double timeScale = 1.0;
-  int grabNode = -1;
-  V3 grabTarget;
-};
-
-struct Game {
-  World world;
-  Sim sim;
-  Vehicle car;
-  CarRig rig;
-  CarMesh mesh;
-  Sim simStart;
-  Vehicle carStart;
-  int kind = VK_XANTIA;
-  int startPlace = 0;
-  Tank tank, tankStart;
-  // One of each standing at the start. They run only while something has woken them.
-  std::vector<Vehicle> parked, parkedStart;
-  Tank parkedTank, parkedTankStart;
-  bool hasParked = false;
-  u32 parkedBlastSeen = 0;
-  bool parkedTrackFresh = true;
-  void stepParked(double dt) {
-    if (!hasParked) return;
-    Controls still;
-    still.handbrake = 1.0;
-    const bool blast = sim.blastCount != parkedBlastSeen;
-    parkedBlastSeen = sim.blastCount;
-    for (Vehicle& v : parked) {
-      // What a shell has torn open right beside it no longer works as a vehicle.
-      if (blast && !v.exploded && len(v.cog - sim.lastBlast) < sim.lastBlastRadius * 0.30) v.wreck(sim);
-      if (sim.objs[v.obj].awake) v.update(sim, still, dt);
-    }
-    Obj& hull = sim.objs[parkedTank.hullObj];
-    Obj& turret = sim.objs[parkedTank.turretObj];
-    if (hull.awake || turret.awake) {
-      if (!parkedTank.destroyed) {
-        sim.wake(parkedTank.hullObj);
-        sim.wake(parkedTank.turretObj);
-      }
-      parkedTank.update(sim, still, dt);
-      parkedTrackFresh = true;
-    } else {
-      parkedTank.tickFire(sim, dt);
-    }
-  }
-
-  std::mutex inputMutex;
-  SharedInput input;
-  std::mutex snapMutex;
-  Snapshot snap;
-  std::atomic<bool> running{true};
-  std::atomic<bool> resetVisuals{false};
-  std::atomic<bool> debugWheel{false};
-  std::atomic<bool> debugWing{false};
-  double realtimeFactor = 1;
-
-  void applyRepair() {
-    // Restore the pristine car, keeping position and heading.
-    const V3 cog = car.cog;
-    const V3 fwd = car.fwd;
-    const double yaw = std::atan2(fwd.y, fwd.x);
-    const V3 c0 = carStart.cog;
-    const double yaw0 = std::atan2(carStart.fwd.y, carStart.fwd.x);
-    const double dy = yaw - yaw0;
-    const double cy = std::cos(dy), sy = std::sin(dy);
-    const Obj& o = simStart.objs[carStart.obj];
-    const double ground = world.height(cog.x, cog.y);
-    for (u32 i = o.nodeStart, e = i + o.nodeCount; i < e; i++) {
-      const V3 r = simStart.pos[i] - c0;
-      sim.pos[i] = V3{cog.x + cy * r.x - sy * r.y, cog.y + sy * r.x + cy * r.y, ground + c0.z + r.z + 0.03};
-      sim.vel[i] = {};
-    }
-    for (u32 i = o.beamStart, e = i + o.beamCount; i < e; i++) sim.beams[i] = simStart.beams[i];
-    car = carStart;
-    sim.plasticEnergy = 0;
-    sim.events.clear();
-  }
-
-  // ---- Damage diagram. Each part reads the beams of its node group: how much of it has torn and how
-  // far the rest has been bent out of shape.
-  struct Gauge {
-    PartState show;
-    std::vector<u32> beams;
-    double fullStrain = 0.08;  // average bend counted as a write-off
-    int wheel = -1;
-    int flag = 0;  // 1 engine, 2 gearbox, 3 radiator, 4 tank
-  };
-  std::vector<Gauge> gauges;
-  int gaugeTick = 0;
-
-  void buildGauges() {
-    gauges.clear();
-    const std::vector<u32>* group[32] = {};
-    std::vector<int> nodePart;
-    auto nodesOf = [&](const char* name) -> const std::vector<u32>* {
-      for (const NodeGroup& g : rig.groups)
-        if (g.name == name) return &g.nodes;
-      return nullptr;
-    };
-    (void)group;
-    auto addPart = [&](const char* label, float x, float y, float w, float h, const char* name, double x0, double x1, double fullStrain, int flag) {
-      Gauge g;
-      g.show = {label, x, y, w, h, 0.f};
-      g.fullStrain = fullStrain;
-      g.flag = flag;
-      const std::vector<u32>* nodes = name ? nodesOf(name) : nullptr;
-      if (nodes) {
-        std::vector<u8> in(simStart.pos.size(), 0);
-        for (u32 n : *nodes) {
-          const double design = rig.noseX - (simStart.rest[n].x - kSpawn.x);
-          if (design >= x0 && design < x1) in[n] = 1;
-        }
-        for (size_t i = 0; i < simStart.beams.size(); i++) {
-          const Beam& b = simStart.beams[i];
-          if (in[b.a] && in[b.b]) g.beams.push_back(u32(i));
-        }
-      }
-      gauges.push_back(std::move(g));
-    };
-    constexpr double kAll0 = -9, kAll1 = 99;
-    if (kind == VK_LEOPARD) {
-      addPart("WANNE", 18, 34, 64, 170, "hull", kAll0, kAll1, 0.06, 0);
-      addPart("TURM", 30, 84, 40, 70, "turret", kAll0, kAll1, 0.06, 0);
-      addPart("ROHR", 47, 4, 6, 80, "gun", kAll0, kAll1, 0.04, 0);
-      for (int s = 0; s < 2; s++) {
-        Gauge g;
-        g.show = {nullptr, s == 0 ? 4.f : 84.f, 34.f, 12.f, 170.f, 0.f};
-        gauges.push_back(g);
-      }
-      return;
-    }
-    if (kind == VK_HUMMER) {
-      addPart(nullptr, 6, 2, 88, 66, "body", kAll0, 1.46, 0.07, 0);
-      addPart(nullptr, 2, 70, 11, 42, "door_l", kAll0, kAll1, 0.09, 0);
-      addPart(nullptr, 87, 70, 11, 42, "door_r", kAll0, kAll1, 0.09, 0);
-      addPart(nullptr, 14, 70, 72, 104, "body", 1.46, 3.7, 0.06, 0);
-      addPart(nullptr, 4, 176, 92, 58, "body", 3.7, 99, 0.07, 0);
-      addPart(nullptr, 24, 4, 52, 8, "radiator", kAll0, kAll1, 0.06, 3);
-      addPart(nullptr, 26, 14, 48, 34, "engine", kAll0, kAll1, 0.05, 1);
-      addPart(nullptr, 34, 50, 32, 26, "gearbox", kAll0, kAll1, 0.05, 2);
-      addPart(nullptr, 22, 178, 56, 20, "tank", kAll0, kAll1, 0.05, 4);
-      const float wxh[2] = {0.f, 83.f};
-      for (int i = 0; i < 4 && i < int(car.wheels.size()); i++) {
-        const Wheel& w = car.wheels[size_t(i)];
-        Gauge g;
-        g.show = {nullptr, w.left ? wxh[0] : wxh[1], w.front ? 22.f : 186.f, 17.f, 40.f, 0.f};
-        g.wheel = i;
-        gauges.push_back(g);
-      }
-      return;
-    }
-    if (kind == VK_ONE1) {
-      addPart(nullptr, 8, 2, 84, 46, "body", kAll0, 1.0, 0.08, 0);
-      addPart(nullptr, 2, 48, 96, 44, "body", 1.0, 1.75, 0.08, 0);
-      addPart(nullptr, 2, 92, 11, 62, "door_l", kAll0, kAll1, 0.08, 0);
-      addPart(nullptr, 87, 92, 11, 62, "door_r", kAll0, kAll1, 0.08, 0);
-      addPart(nullptr, 14, 92, 72, 62, "body", 1.75, 2.95, 0.04, 0);
-      addPart(nullptr, 2, 155, 96, 60, "body", 2.95, 99, 0.08, 0);
-      addPart(nullptr, 6, 216, 88, 18, "wing", kAll0, kAll1, 0.06, 0);
-      addPart(nullptr, 24, 6, 52, 9, "radiator", kAll0, kAll1, 0.06, 3);
-      addPart(nullptr, 24, 138, 52, 14, "tank", kAll0, kAll1, 0.05, 4);
-      addPart(nullptr, 26, 156, 48, 32, "engine", kAll0, kAll1, 0.05, 1);
-      addPart(nullptr, 34, 189, 32, 22, "gearbox", kAll0, kAll1, 0.05, 2);
-      const float wx2[2] = {0.f, 85.f};
-      for (int i = 0; i < 4 && i < int(car.wheels.size()); i++) {
-        const Wheel& w = car.wheels[size_t(i)];
-        Gauge g;
-        g.show = {nullptr, w.left ? wx2[0] : wx2[1], w.front ? 24.f : 168.f, 15.f, 34.f, 0.f};
-        g.wheel = i;
-        gauges.push_back(g);
-      }
-      return;
-    }
-    // Plan view, nose at the top.
-    addPart(nullptr, 12, 2, 76, 16, "bumper_f", kAll0, kAll1, 0.10, 0);
-    addPart(nullptr, 14, 19, 72, 52, "hood", kAll0, kAll1, 0.10, 0);
-    addPart(nullptr, 2, 19, 11, 52, "body", kAll0, 1.3, 0.08, 0);   // front wings, the nose structure
-    addPart(nullptr, 87, 19, 11, 52, "body", kAll0, 1.3, 0.08, 0);
-    addPart(nullptr, 16, 72, 68, 14, "windscreen", kAll0, kAll1, 0.03, 0);
-    addPart(nullptr, 2, 72, 13, 44, "door_fl", kAll0, kAll1, 0.10, 0);
-    addPart(nullptr, 85, 72, 13, 44, "door_fr", kAll0, kAll1, 0.10, 0);
-    addPart(nullptr, 2, 117, 13, 42, "door_rl", kAll0, kAll1, 0.10, 0);
-    addPart(nullptr, 85, 117, 13, 42, "door_rr", kAll0, kAll1, 0.10, 0);
-    addPart("DACH", 16, 87, 68, 72, "body", 1.3, 3.3, 0.06, 0);
-    addPart(nullptr, 2, 160, 96, 34, "body", 3.3, 99, 0.08, 0);     // rear quarter and floor
-    addPart(nullptr, 14, 164, 72, 54, "tailgate", kAll0, kAll1, 0.10, 0);
-    addPart(nullptr, 12, 220, 76, 16, "bumper_r", kAll0, kAll1, 0.10, 0);
-    // Inside parts, on top.
-    addPart("KUEHL", 22, 21, 56, 9, "radiator", kAll0, kAll1, 0.06, 3);
-    addPart("MOTOR", 22, 31, 36, 30, "engine", kAll0, kAll1, 0.05, 1);
-    addPart("GETR", 59, 31, 21, 30, "gearbox", kAll0, kAll1, 0.05, 2);
-    addPart("TANK", 26, 168, 48, 18, "tank", kAll0, kAll1, 0.05, 4);
-    // The wheels, at their corners.
-    const float wx[2] = {0.f, 86.f};
-    for (int i = 0; i < 4 && i < int(car.wheels.size()); i++) {
-      const Wheel& w = car.wheels[size_t(i)];
-      Gauge g;
-      g.show = {nullptr, w.left ? wx[0] : wx[1], w.front ? 30.f : 168.f, 14.f, 34.f, 0.f};
-      g.wheel = i;
-      gauges.push_back(g);
-    }
-  }
-
-  void updateGauges(Snapshot& s) {
-    s.parts.clear();
-    for (Gauge& g : gauges) {
-      double d = 0;
-      if (!g.beams.empty()) {
-        double strain = 0;
-        int broken = 0;
-        for (u32 id : g.beams) {
-          const Beam& b = sim.beams[id];
-          if (b.flags & BF_BROKEN) broken++;
-          else strain += std::fabs(b.L0 - b.Lorig) / b.Lorig;
-        }
-        const double n = double(g.beams.size());
-        d = broken / n * 2.5 + strain / n / g.fullStrain;
-      }
-      if (g.wheel >= 0) {
-        const Wheel& w = car.wheels[size_t(g.wheel)];
-        float dent = 0;
-        for (float v : w.dent) dent = std::max(dent, v);
-        d = std::max(double(dent) / 0.04, std::hypot(w.runoutX, w.runoutZ) / 0.02);
-        if (w.deflate > 0) d = std::max(d, 0.7);
-        if (!w.attached) d = 1.0;
-      }
-      if (kind != VK_LEOPARD) {
-        if (g.flag == 1 && car.dmg.seized) d = 1.0;
-        if (g.flag == 1 && car.dmg.oilLeak) d = std::max(d, 0.6);
-        if (g.flag == 2 && (car.dmg.gearbox || car.dmg.bellHousing)) d = 1.0;
-        if (g.flag == 3 && car.dmg.radiator) d = std::max(d, 0.8);
-        if (g.flag == 4 && car.dmg.tank) d = std::max(d, 0.8);
-      }
-      PartState p = g.show;
-      p.damage = float(d);
-      s.parts.push_back(p);
-    }
-  }
-
-  void fillSnapshot(double load) {
-    std::lock_guard<std::mutex> lock(snapMutex);
-    Snapshot& s = snap;
-    if ((gaugeTick++ & 15) == 0) updateGauges(s);
-    s.pos = sim.pos;
-    if (hasParked && parkedTrackFresh) {
-      parkedTank.trackPath(sim, 0, s.parkedTrackPath[0]);
-      parkedTank.trackPath(sim, 1, s.parkedTrackPath[1]);
-      s.parkedTrackLeft[0] = parkedTank.trackWidthDir(0);
-      s.parkedTrackLeft[1] = parkedTank.trackWidthDir(1);
-      parkedTrackFresh = false;
-    }
-    if (hasParked) {
-      for (size_t k = 0; k < parked.size(); k++) s.parkedScorch[k] = parked[k].exploded ? 0.8f : 0.f;
-      s.parkedScorch[3] = parkedTank.destroyed ? float(clampd(parkedTank.burnTime / 3.0, 0.15, 1.0)) : float(parkedTank.damage * 0.3);
-    }
-    s.beamForce.resize(sim.objs[0].beamCount);
-    for (u32 i = 0; i < sim.objs[0].beamCount; i++) {
-      const Beam& b = sim.beams[i];
-      s.beamForce[i] = (b.flags & BF_BROKEN) ? 0.f : (b.force == 0.f ? 1e-3f : b.force);
-    }
-    s.carResets = sim.carResets;
-    s.events.insert(s.events.end(), sim.events.begin(), sim.events.end());
-    if (s.events.size() > 2000) s.events.clear();
-    sim.events.clear();
-    if (s.scrapes.size() < 2000) s.scrapes.insert(s.scrapes.end(), sim.scrapes.begin(), sim.scrapes.end());
-    sim.scrapes.clear();
-    if (s.craters.size() != world.craters().size()) s.craters = world.craters();
-    s.physLoad = load;
-    s.awake = int(sim.active.size());
-    s.objectCount = int(sim.objs.size());
-    if (s.splitGeneration != sim.splitGeneration) {
-      s.splitGeneration = sim.splitGeneration;
-      s.nodeObj = sim.nodeObj;
-    }
-    if (kind == VK_LEOPARD) {
-      s.tank = true;
-      s.carCog = tank.cog;
-      s.carFwd = tank.fwd;
-      s.carUp = tank.up;
-      s.carLeft = tank.left;
-      s.carVel = tank.vCog;
-      s.scorch = tank.destroyed ? clampd(tank.burnTime / 3.0, 0.15, 1.0) : tank.damage * 0.3;
-      s.tankArmour = clampd(1.0 - tank.damage, 0, 1);
-      s.tankDead = tank.destroyed;
-      for (int i = 0; i < 2; i++) {
-        s.trackLeft[i] = tank.trackWidthDir(i);
-        tank.trackPath(sim, i, s.trackPath[i]);
-        s.trackPhase[i] = tank.trackPhase[i];
-        s.trackSpeed[i] = tank.trackOmega[i] * Tank::kSprocketR;
-      }
-      for (int i = 0; i < 4; i++) {
-        // What the camera shake and the sound read from the wheels.
-        WheelView& v = s.wheels[i];
-        const Tank::RoadWheel& w = tank.wheels[size_t(i) * 4 % 14];
-        v.fz = w.Fn * 0.25;
-        v.surface = w.soft > 0.5 ? u8(SURF_GRAVEL) : u8(SURF_ASPHALT);
-        v.skid = 0;
-      }
-      s.speedKmh = tank.speed * 3.6;
-      s.rpm = tank.rpm();
-      s.rpmMax = 2500;
-      s.rpmRed = 2300;
-      s.throttle = tank.throttleAct;
-      s.brake = tank.brakeAct;
-      s.steer = tank.steerAct;
-      s.latG = tank.latAcc / 9.81;
-      s.lonG = tank.lonAcc / 9.81;
-      s.plastic = sim.plasticEnergy;
-      s.gear = tank.gear;
-      s.autoBox = tank.autoBox;
-      s.running = true;
-      s.fuel = tank.fuel;
-      s.engineLoad = tank.loadNow;
-      s.inputRpm = 0;
-      s.turretYaw = tank.turretYaw;
-      s.gunPitch = tank.gunPitch;
-      s.reload = std::max(tank.reload, 0.0);
-      s.reloadTime = tank.reloadTime;
-      s.muzzle = tank.muzzle;
-      s.gunDir = tank.gunDir;
-      s.sight = tank.sight;
-      return;
-    }
-    s.conventional = car.spec.conventional;
-    s.boost = car.boost;
-    s.rpmMax = car.spec.rpmMax;
-    s.rpmRed = car.spec.rpmRed;
-    s.oilTemp = car.dmg.oilTemp;
-    s.oilLevel = car.oilLevel;
-    s.absOn = car.tune.abs;
-    s.espOn = car.tune.esp;
-    s.tcsOn = car.tune.tcs;
-    s.absActive = car.absActive;
-    s.espActive = car.espActive;
-    s.tcsActive = car.tcsActive;
-    s.carCog = car.cog;
-    s.carFwd = car.fwd;
-    s.carUp = car.up;
-    s.carLeft = car.left;
-    s.carVel = car.vCog;
-    for (int i = 0; i < 4; i++) {
-      const Wheel& w = car.wheels[i];
-      WheelView& v = s.wheels[i];
-      v.hub = (sim.pos[w.axIn] + sim.pos[w.axOut]) * 0.5;
-      v.axis = norm(w.left ? sim.pos[w.axOut] - sim.pos[w.axIn] : sim.pos[w.axIn] - sim.pos[w.axOut]);
-      v.up = sim.pos[w.ring[0]] - v.hub;
-      v.theta = w.theta;
-      v.left = w.left;
-      v.skid = w.skid;
-      v.omega = w.omega;
-      v.fz = w.Fz;
-      v.surface = w.surface;
-      v.patch = w.patchPoint;
-      v.deflate = w.deflate;
-      v.groundN = -w.patchNormal;
-      v.groundD = w.contact ? dot(w.patchPoint - v.hub, v.groundN) : 10.0;
-      std::copy(w.dent, w.dent + Wheel::kDentBins, v.dent);
-      v.runoutX = w.runoutX;
-      v.runoutZ = w.runoutZ;
-      s.flat[i] = w.deflate > 0.1;
-    }
-    s.speedKmh = car.speed * 3.6;
-    s.rpm = car.rpm();
-    s.throttle = car.throttleAct;
-    s.brake = car.brakeAct;
-    s.steer = car.steerAct;
-    s.coolant = car.dmg.coolantTemp;
-    s.accum = car.accumulator;
-    s.roll = car.rollAngle;
-    s.latG = car.latAcc / 9.81;
-    s.lonG = car.lonAcc / 9.81;
-    s.peakG = car.peakG;
-    s.plastic = sim.plasticEnergy;
-    s.ram = car.axle[0].ram;
-    s.gear = car.gear;
-    s.heightMode = car.heightMode;
-    s.autoBox = car.autoBox;
-    s.soft = car.hydractiveSoft;
-    s.sport = car.sportMode;
-    s.activa = car.activaOn;
-    s.running = car.engineRunning;
-    s.radiator = car.dmg.radiator;
-    s.hydraulics = car.dmg.hydraulics;
-    s.mount = car.dmg.engineMount;
-    s.steering = car.dmg.steering;
-    s.seized = car.dmg.seized;
-    s.gearboxBad = car.dmg.gearbox || car.dmg.bellHousing;
-    s.tankBad = car.dmg.tank;
-    s.oilBad = car.dmg.oilLeak;
-    s.lhm = car.reservoir;
-    s.fuel = car.fuelLitres;
-    s.gear = car.shiftPhase != 0 ? car.shiftTarget : car.gear;
-    s.damageMsg = car.lastDamage;
-    s.damageAge = car.lastDamageAge;
-    s.physLoad = load;
-    s.scorch = car.exploded ? clampd(car.burnTime / 3.0, 0.15, 1.0) : 0.0;
-    s.engineLoad = clampd((car.manifold - 0.22) / 0.78, 0, 1);
-    s.inputRpm = std::fabs(car.inputOmega) * 60.0 / (2.0 * PI);
-    s.starter = car.starterClock > 0;
-    s.shifting = car.shiftPhase != 0;
-    s.awake = int(sim.active.size());
-    s.objectCount = int(sim.objs.size());
-    if (s.splitGeneration != sim.splitGeneration) {
-      s.splitGeneration = sim.splitGeneration;
-      s.nodeObj = sim.nodeObj;
-    }
-  }
-
-  void physicsLoop() {
-    using Clock = std::chrono::steady_clock;
-    auto last = Clock::now();
-    double accumulator = 0;
-    double busy = 0, window = 0, load = 0, simWindow = 0;
-    constexpr double kSlice = 1.0 / 250.0;
-    while (running.load(std::memory_order_relaxed)) {
-      auto now = Clock::now();
-      const double wallElapsed = std::chrono::duration<double>(now - last).count();
-      last = now;
-      const double elapsed = std::min(wallElapsed, 0.05);
-
-      SharedInput in;
-      {
-        std::lock_guard<std::mutex> lock(inputMutex);
-        in = input;
-        input.c.shiftUp = input.c.shiftDown = input.c.toggleAuto = input.c.toggleSport = false;
-        input.c.cycleHeight = input.c.toggleIgnition = input.c.toggleActiva = false;
-        input.c.requestGear = 99;
-        input.c.fire = false;
-        input.reset = input.repair = input.resetWorld = false;
-        car.tune = input.tuning;
-        tank.reloadTime = input.tankReload;
-      }
-      if (debugWing.exchange(false) && !car.wingMountBeams.empty()) sim.sever(car.wingMountBeams[0]);
-      if (debugWheel.exchange(false) && kind != VK_LEOPARD && car.wheels[0].deflate == 0) {
-        Wheel& w = car.wheels[0];
-        w.deflate = 0.001;
-        w.dent[3] = 0.02f; w.dent[4] = 0.04f; w.dent[5] = 0.045f; w.dent[6] = 0.03f; w.dent[7] = 0.012f;
-        w.runoutX = 0.012f;
-      }
-      // The vehicle goes back; the world keeps every fence it knocked down and every hole it left.
-      const auto restoreVehicle = [&] {
-        sim.restoreObjects(simStart, kind == VK_LEOPARD ? 2 : 1);
-        car = carStart;
-        tank = tankStart;
-        // Set down wherever the driver chose to start from, turned to face along the way.
-        if (startPlace > 0 && startPlace < int(world.places().size())) {
-          const World::Place& pl = world.places()[size_t(startPlace)];
-          const double cy = std::cos(pl.yaw), sy = std::sin(pl.yaw);
-          const u32 count = kind == VK_LEOPARD ? 2 : 1;
-          for (u32 oi = 0; oi < count; oi++) {
-            const Obj& o0 = sim.objs[oi];
-            for (u32 i = o0.nodeStart; i < o0.nodeStart + o0.nodeCount; i++) {
-              const V3 q = sim.pos[i] - V3{kSpawn.x, kSpawn.y, kSpawn.z};
-              sim.pos[i] = V3{pl.x + cy * q.x - sy * q.y, pl.y + sy * q.x + cy * q.y, world.height(pl.x, pl.y) + 0.45 + q.z};
-            }
-          }
-          resetVisuals = true;
-          return;
-        }
-        // If the start itself has been blown into a crater, the car still has to come down on the ground.
-        const double dip = world.height(kSpawn.x, kSpawn.y) - kSpawn.z;
-        if (dip > 0.02) {
-          const Obj& o0 = sim.objs[0];
-          for (u32 i = o0.nodeStart; i < o0.nodeStart + o0.nodeCount; i++) sim.pos[i].z += dip;
-        }
-        resetVisuals = true;
-      };
-      startPlace = in.startPlace;
-      if (in.resetWorld) {
-        world.clearCraters();
-        sim = simStart;
-        car = carStart;
-        tank = tankStart;
-        parked = parkedStart;
-        parkedTank = parkedTankStart;
-        parkedTrackFresh = true;
-        parkedBlastSeen = sim.blastCount;
-        if (startPlace > 0) restoreVehicle();
-        resetVisuals = true;
-      } else if (in.reset || (kind == VK_LEOPARD && in.repair)) {
-        restoreVehicle();
-      }
-      // Pieces that have flown off cannot just be put back on: a torn-up car starts over.
-      if (in.resetWorld || in.reset) {
-        // Done above.
-      } else if (in.repair && (car.exploded || sim.splitGeneration != simStart.splitGeneration)) {
-        restoreVehicle();
-      } else if (in.repair && kind != VK_LEOPARD) {
-        applyRepair();
-        resetVisuals = true;
-      }
-      sim.grab.node = in.grabNode;
-      sim.grab.target = in.grabTarget;
-
-      if (!in.paused) accumulator += elapsed * in.timeScale;
-      int steps = 0;
-      auto t0 = Clock::now();
-      while (accumulator >= kPhysDt && steps < kMaxStepsPerSlice) {
-        sim.forces(kPhysDt);
-        if (kind == VK_LEOPARD) tank.update(sim, in.c, kPhysDt);
-        else car.update(sim, in.c, kPhysDt);
-        stepParked(kPhysDt);
-        sim.finish(kPhysDt);
-        accumulator -= kPhysDt;
-        steps++;
-        // Edge-triggered inputs apply to one step only.
-        in.c.shiftUp = in.c.shiftDown = in.c.toggleAuto = in.c.toggleSport = false;
-        in.c.cycleHeight = in.c.toggleIgnition = in.c.toggleActiva = false;
-        in.c.requestGear = 99;
-        in.c.fire = false;
-      }
-      if (steps == kMaxStepsPerSlice) accumulator = std::min(accumulator, kPhysDt * kMaxStepsPerSlice);
-      busy += std::chrono::duration<double>(Clock::now() - t0).count();
-      // Load is the share of wall time spent stepping, measured over the real time that passed.
-      // Also report how far simulated time keeps up, which is what the driver actually feels.
-      window += wallElapsed;
-      simWindow += steps * kPhysDt;
-      if (window > 0.25) {
-        realtimeFactor = simWindow / window;
-        simWindow = 0;
-        load = busy / window;
-        busy = window = 0;
-      }
-      fillSnapshot(load);
-      {
-        std::lock_guard<std::mutex> lock(snapMutex);
-        snap.realtime = realtimeFactor;
-      }
-      {
-        std::lock_guard<std::mutex> lock(snapMutex);
-        snap.paused = in.paused;
-        snap.timeScale = in.timeScale;
-      }
-
-      const auto spent = std::chrono::duration<double>(Clock::now() - now).count();
-      if (spent < kSlice) std::this_thread::sleep_for(std::chrono::duration<double>(kSlice - spent));
-    }
-  }
-};
 
 enum CamMode { CAM_CHASE, CAM_ORBIT, CAM_HOOD, CAM_DRIVER, CAM_COUNT };
 const char* kCamNames[CAM_COUNT] = {"Verfolger", "Orbit", "Haube", "Fahrer"};
@@ -996,178 +447,545 @@ static SoundDriver* sound = nullptr;
 static std::vector<float> wavSamples;
 static double wavDebt = 0;
 
-// One vehicle in one world. Returns the vehicle to continue with, or -1 to quit.
-// What outlasts a change of vehicle: it counts as a respawn in the same world.
-struct CarriedWorld {
-  World world;
-  Sim sim;
-  u32 cars = 1;
-  std::vector<Vehicle> parked;
-  Tank parkedTank;
-};
-static CarriedWorld* gCarried = nullptr;
-static int gStartPlace = 0;
 
-static int playSession(int kind, bool openMenu) {
-  kSpawn = gSpawnBase;
-  // Every session has its own GL context: closing it frees everything the renderer ever made.
+// Where the server is: asked for in the menu, and remembered between runs.
+static std::string gServerHost = "127.0.0.1";
+static int gServerPort = net::kDefaultPort;
+static bool gConnectNow = false;
+static int gPickTurret = TK_STANDARD;
+static constexpr const char* kServerFile = "server.cfg";
+
+static void loadServerAddress() {
+  FILE* f = fopen(kServerFile, "r");
+  if (!f) return;
+  char host[256];
+  int port;
+  if (fscanf(f, "%255s %d", host, &port) == 2) {
+    gServerHost = host;
+    gServerPort = port;
+  }
+  fclose(f);
+}
+
+static void saveServerAddress() {
+  FILE* f = fopen(kServerFile, "w");
+  if (!f) return;
+  fprintf(f, "%s %d\n", gServerHost.c_str(), gServerPort);
+  fclose(f);
+}
+
+// Everything the window's thread hands to the network thread.
+struct SharedInput {
+  Controls c;
+  bool ready = false;
+  u8 turret = TK_STANDARD;
+  u8 items[IT_COUNT] = {};
+};
+
+// The connection to the server and the copy of the world it describes. Nothing is simulated here: both tanks and
+// everything else go where the server says, a tenth of a second late so that there is always a next position.
+struct Game {
+  Duel duel;
+  World& world = duel.world;
+  Sim& sim = duel.sim;
+  Sim& simStart = duel.simStart;
+  CarRig rig;
+  CarMesh mesh;
+
+  std::mutex inputMutex;
+  SharedInput input;
+  std::mutex snapMutex;
+  Snapshot snap;
+  std::atomic<bool> running{true};
+  std::atomic<bool> resetVisuals{false};
+
+  // Asked for from the window's thread.
+  enum Command { CMD_NONE, CMD_CONNECT, CMD_LEAVE };
+  std::atomic<int> command{CMD_NONE};
+
+  // What the window's thread reads, under snapMutex.
+  enum NetState { NET_OFF, NET_CONNECTING, NET_IN };
+  int netState = NET_OFF;
+  std::string netError;
+  int phase = Duel::WAITING;
+  double phaseClock = 0;
+  int slot = 0;
+  int myTank = -1;
+  bool myReady = false;
+
+  // Which tank the camera and the instruments are on: one's own, or the one being chosen.
+  int viewTank(int turret) const { return myTank >= 0 ? myTank : Duel::tankIndex(slot, turret); }
+
+  void fillSnapshot(const char* message, int turret) {
+    std::lock_guard<std::mutex> lock(snapMutex);
+    Snapshot& s = snap;
+    s.pos = sim.pos;
+    s.tank = true;
+    s.tankTracks.resize(Duel::kTanks);
+    for (int i = 0; i < Duel::kTanks; i++) {
+      const Tank& t = duel.tanks[i];
+      Snapshot::TankTrack& tt = s.tankTracks[size_t(i)];
+      for (int k = 0; k < 2; k++) {
+        t.trackPath(sim, k, tt.path[k]);
+        tt.left[k] = t.trackWidthDir(k);
+        tt.phase[k] = t.trackPhase[k];
+        tt.speed[k] = t.trackOmega[k] * Tank::kSprocketR;
+      }
+      s.parkedScorch[i] = t.destroyed ? float(clampd(t.burnTime / 3.0, 0.15, 1.0)) : float(t.damage * 0.3);
+    }
+    s.events.insert(s.events.end(), sim.events.begin(), sim.events.end());
+    if (s.events.size() > 2000) s.events.clear();
+    sim.events.clear();
+    sim.scrapes.clear();
+    if (s.craters.size() != world.craters().size()) s.craters = world.craters();
+    s.awake = int(sim.active.size());
+    s.objectCount = int(sim.objs.size());
+    s.realtime = 1;
+    s.paused = false;
+    s.timeScale = 1;
+    s.damageMsg = message;
+    s.damageAge = message[0] ? 0.0 : 99.0;
+
+    const Tank& tank = duel.tanks[viewTank(turret)];
+    s.carCog = tank.cog;
+    s.carFwd = tank.fwd;
+    s.carUp = tank.up;
+    s.carLeft = tank.left;
+    s.carVel = tank.vCog;
+    s.tankArmour = clampd(1.0 - tank.damage, 0, 1);
+    s.tankAmmo = tank.ammo;
+    s.tankDead = tank.destroyed;
+    s.enemyCog = myTank >= 0 ? duel.tanks[Duel::tankIndex(1 - slot, duel.players[1 - slot].turret)].cog : V3{};
+    s.parts.clear();
+    const auto part = [&](const char* label, float x, float y, float w, float h, double health) { s.parts.push_back({label, x, y, w, h, float(1.0 - health)}); };
+    part("WANNE", 18, 34, 64, 170, 1.0 - tank.damage);
+    part("MOTOR", 26, 150, 48, 50, tank.mod[TM_ENGINE]);
+    part("TURM", 30, 84, 40, 60, tank.mod[TM_RING]);
+    part("ROHR", 47, 4, 6, 80, tank.mod[TM_GUN]);
+    part(nullptr, 4, 34, 12, 170, tank.trackOff[0] ? 0.0 : tank.mod[TM_TRACK_L]);
+    part(nullptr, 84, 34, 12, 170, tank.trackOff[1] ? 0.0 : tank.mod[TM_TRACK_R]);
+    for (int i = 0; i < 2; i++) {
+      s.trackLeft[i] = tank.trackWidthDir(i);
+      s.trackPhase[i] = tank.trackPhase[i];
+      s.trackSpeed[i] = tank.trackOmega[i] * Tank::kSprocketR;
+    }
+    for (int i = 0; i < 4; i++) {
+      // What the camera shake and the sound read from the wheels.
+      WheelView& v = s.wheels[i];
+      const Tank::RoadWheel& w = tank.wheels[size_t(i) * 4 % 14];
+      v.fz = w.Fn * 0.25;
+      v.surface = w.soft > 0.5 ? u8(SURF_GRAVEL) : u8(SURF_ASPHALT);
+      v.skid = 0;
+    }
+    s.speedKmh = tank.speed * 3.6;
+    s.rpm = myTank >= 0 ? tank.rpm() : 0;
+    s.rpmMax = 2500;
+    s.rpmRed = 2300;
+    s.throttle = tank.throttleAct;
+    s.brake = tank.brakeAct;
+    s.steer = tank.steerAct;
+    s.latG = tank.latAcc / 9.81;
+    s.lonG = tank.lonAcc / 9.81;
+    s.gear = tank.gear;
+    s.autoBox = tank.autoBox;
+    s.running = myTank >= 0;
+    s.fuel = tank.fuel;
+    s.engineLoad = tank.loadNow;
+    s.inputRpm = 0;
+    s.turretYaw = tank.turretYaw;
+    s.gunPitch = tank.gunPitch;
+    s.reload = std::max(tank.reload, 0.0);
+    s.reloadTime = tank.reloadTime;
+    s.muzzle = tank.muzzle;
+    s.gunDir = tank.gunDir;
+    s.sight = tank.sight;
+    s.missileLive = tank.missileLive;
+    s.missileP = tank.missileP;
+    s.missileV = tank.missileV;
+    s.missiles = tank.missiles;
+    s.repairKits = tank.repairKits;
+    s.repairClock = tank.repairClock;
+  }
+
+  struct NetFrame {
+    u32 tick = 0;
+    V3 cog;
+    Tank::NetState state;
+    std::vector<i16> offsets;
+  };
+
+  void netLoop() {
+    using Clock = std::chrono::steady_clock;
+    constexpr double kViewDelay = 0.10;
+    const auto start = Clock::now();
+    const auto clock = [&] { return std::chrono::duration<double>(Clock::now() - start).count(); };
+    std::unique_ptr<net::Socket> sock;
+    net::Addr server;
+    u32 token = 0;
+    int state = NET_OFF;
+    double connectStart = 0, nextHello = 0;
+    std::deque<NetFrame> frames[Duel::kTanks];
+    u32 match = 0, metaTick = 0, blastsDone = 0;
+    int phaseNow = Duel::WAITING, winner = -1, mySlot = 0, tankNow = -1;
+    u32 wins[2] = {};
+    float clockNow = 0;
+    double timeOffset = 0;
+    bool haveOffset = false;
+    double lastHeard = 0, nextInput = 0, last = clock();
+    net::InputMsg out;
+    std::string error;
+
+    const auto resetWorld = [&] {
+      world.clearCraters();
+      sim = simStart;
+      for (int i = 0; i < Duel::kTanks; i++) {
+        duel.tanks[i] = duel.tanksStart[i];
+        frames[i].clear();
+      }
+      blastsDone = 0;
+      metaTick = 0;
+      tankNow = -1;
+      resetVisuals = true;
+    };
+    const auto disconnect = [&](const std::string& why) {
+      if (sock && state == NET_IN) {
+        net::Writer bye(net::P_BYE);
+        bye.put(token);
+        for (int i = 0; i < 3; i++) sock->send(bye.data(), bye.size(), server);
+      }
+      sock.reset();
+      state = NET_OFF;
+      error = why;
+      phaseNow = Duel::WAITING;
+      winner = -1;
+      match = 0;
+      out = net::InputMsg{};
+      resetWorld();
+    };
+
+    while (running.load(std::memory_order_relaxed)) {
+      const double now = clock();
+      const double dt = std::max(now - last, 1e-4);
+      last = now;
+      const int cmd = command.exchange(CMD_NONE);
+      if (cmd == CMD_LEAVE) disconnect("");
+      if (cmd == CMD_CONNECT) {
+        disconnect("");
+        std::string host;
+        int port;
+        {
+          std::lock_guard<std::mutex> lock(inputMutex);
+          host = gServerHost;
+          port = gServerPort;
+        }
+        sock = std::make_unique<net::Socket>();
+        if (port <= 0 || port > 65535) error = "Ungültiger Port";
+        else if (!net::resolve(host.c_str(), u16(port), server)) error = "Adresse nicht gefunden: " + host;
+        else if (!sock->open(0)) error = "Netzwerk nicht verfügbar";
+        else {
+          state = NET_CONNECTING;
+          connectStart = now;
+          nextHello = 0;
+        }
+        if (state != NET_CONNECTING) sock.reset();
+      }
+
+      SharedInput in;
+      {
+        std::lock_guard<std::mutex> lock(inputMutex);
+        in = input;
+        input.c.shiftUp = input.c.shiftDown = input.c.toggleAuto = false;
+        input.c.requestGear = 99;
+        input.c.fire = input.c.launch = input.c.repair = false;
+      }
+      if (in.c.fire) out.fireCount++;
+      if (in.c.shiftUp) out.shiftUpCount++;
+      if (in.c.shiftDown) out.shiftDownCount++;
+      if (in.c.toggleAuto) out.autoCount++;
+      if (in.c.launch) out.launchCount++;
+      if (in.c.repair) out.repairCount++;
+
+      if (state == NET_CONNECTING) {
+        if (now - connectStart > 4.0) {
+          disconnect("Keine Antwort von " + net::toString(server));
+        } else if (now >= nextHello) {
+          nextHello = now + 0.25;
+          net::Writer w(net::P_HELLO);
+          w.put(net::kProtocol);
+          while (w.size() < 64) w.put(u8(0));
+          sock->send(w.data(), w.size(), server);
+        }
+      }
+
+      u8 buf[net::kMaxPacket];
+      net::Addr from;
+      int n;
+      while (sock && (n = sock->recv(buf, sizeof buf, from)) >= 0) {
+        if (!(from == server)) continue;
+        net::Reader r(buf, size_t(n));
+        u8 kind = 0;
+        if (!r.header(kind)) continue;
+        if (kind == net::P_FULL) {
+          u8 why = 0;
+          r.get(why);
+          disconnect(why ? "Der Server hat eine andere Spielversion" : "Der Server ist voll");
+          break;
+        }
+        if (kind == net::P_WELCOME) {
+          u16 protocol = 0;
+          u8 s = 0;
+          u32 nodes = 0, beams = 0, t = 0;
+          r.get(protocol);
+          r.get(s);
+          r.get(t);
+          r.get(nodes);
+          r.get(beams);
+          if (!r.ok() || protocol != net::kProtocol || s > 1 || state != NET_CONNECTING) continue;
+          if (nodes != sim.pos.size() || beams != sim.beams.size()) {
+            disconnect("Die Spielversion passt nicht zum Server");
+            break;
+          }
+          mySlot = s;
+          token = t;
+          out.token = t;
+          state = NET_IN;
+          lastHeard = now;
+          haveOffset = false;
+          continue;
+        }
+        if (state != NET_IN) continue;
+        u32 tick = 0, id = 0;
+        r.get(tick);
+        r.get(id);
+        if (!r.ok() || id < match) continue;
+        if (id > match) {
+          resetWorld();
+          match = id;
+        }
+        lastHeard = now;
+        if (kind == net::P_TANK) {
+          u8 idx = 0;
+          r.get(idx);
+          NetFrame f;
+          f.tick = tick;
+          f.cog = r.getV3();
+          net::readState(r, f.state);
+          u16 count = 0;
+          r.get(count);
+          if (!r.ok() || idx >= Duel::kTanks || count != duel.tankNodes) continue;
+          f.offsets.resize(size_t(count) * 3);
+          for (i16& v : f.offsets) r.get(v);
+          if (!r.ok()) continue;
+          auto& q = frames[idx];
+          if (!q.empty() && q.back().tick >= tick) continue;
+          q.push_back(std::move(f));
+          while (q.size() > 16) q.pop_front();
+          // Where this machine's clock stands against the server's, without the jitter of any one packet.
+          const double seen = now - double(tick) / net::kSendRate;
+          timeOffset = haveOffset ? timeOffset + (seen - timeOffset) * 0.05 : seen;
+          haveOffset = true;
+        } else if (kind == net::P_META) {
+          if (tick <= metaTick) continue;
+          u8 ph = 0, mask = 0;
+          i8 win = 0, tanks[2] = {};
+          float pc = 0;
+          r.get(ph);
+          r.get(win);
+          r.get(wins[0]);
+          r.get(wins[1]);
+          r.get(pc);
+          r.get(mask);
+          r.get(tanks[0]);
+          r.get(tanks[1]);
+          u32 first = 0;
+          u8 count = 0;
+          r.get(first);
+          r.get(count);
+          if (!r.ok()) continue;
+          metaTick = tick;
+          phaseNow = ph;
+          winner = win;
+          clockNow = pc;
+          tankNow = tanks[mySlot];
+          for (int i = 0; i < 2; i++) {
+            duel.players[i].tank = tanks[i];
+            duel.players[i].ready = mask & (4 << i);
+            if (tanks[i] >= 0) duel.players[i].turret = tanks[i] % TK_COUNT;
+          }
+          for (u32 i = first; i < first + count; i++) {
+            const V3 c = r.getV3();
+            float impulse = 0, radius = 0;
+            r.get(impulse);
+            r.get(radius);
+            if (!r.ok()) break;
+            if (i == blastsDone) {
+              sim.explode(c, impulse, radius);
+              blastsDone++;
+            }
+          }
+          u8 nEv = 0;
+          r.get(nEv);
+          for (int i = 0; i < nEv; i++) {
+            const V3 p = r.getV3();
+            const V3 v = r.getV3();
+            float strength = 0;
+            u8 evKind = 0;
+            r.get(strength);
+            r.get(evKind);
+            if (!r.ok() || evKind > EV_ROCK) break;
+            sim.event(EventKind(evKind), p, v, strength);
+          }
+        } else if (kind == net::P_SCENERY) {
+          u8 count = 0;
+          r.get(count);
+          for (int i = 0; i < count; i++) {
+            u32 k = 0;
+            r.get(k);
+            const V3 p = r.getV3();
+            if (!r.ok()) break;
+            if (k >= duel.tanksEnd && k < sim.pos.size()) sim.pos[k] = p;
+          }
+        }
+      }
+      if (state == NET_IN && now - lastHeard > 5.0) disconnect("Verbindung zum Server verloren");
+
+      // Every tank we have word of, at the moment a little in the past that lies between two frames.
+      const double viewTime = (now - timeOffset - kViewDelay) * net::kSendRate;
+      u32 viewTick = 0;
+      for (int side = 0; side < Duel::kTanks; side++) {
+        const auto& q = frames[side];
+        if (q.empty()) continue;
+        size_t b = 0;
+        while (b + 1 < q.size() && double(q[b].tick) < viewTime) b++;
+        const NetFrame& fb = q[b];
+        const NetFrame& fa = b > 0 ? q[b - 1] : fb;
+        const double span = double(fb.tick) - double(fa.tick);
+        const double a = span > 0 ? clampd((viewTime - double(fa.tick)) / span, 0, 1) : 1.0;
+        viewTick = std::max(viewTick, fa.tick);
+        Tank& t = duel.tanks[side];
+        const u32 first = duel.tankFirst[side];
+        const size_t count = fb.offsets.size() / 3;
+        const V3 cog = fa.cog + (fb.cog - fa.cog) * a;
+        for (size_t k = 0; k < count; k++) {
+          const V3 oa{double(fa.offsets[k * 3]), double(fa.offsets[k * 3 + 1]), double(fa.offsets[k * 3 + 2])};
+          const V3 ob{double(fb.offsets[k * 3]), double(fb.offsets[k * 3 + 1]), double(fb.offsets[k * 3 + 2])};
+          sim.pos[first + k] = cog + (oa + (ob - oa) * a) * (1.0 / net::kNodeScale);
+        }
+        t.applyNetState(sim, fb.state, dt);
+      }
+
+      if (state == NET_IN && now >= nextInput) {
+        nextInput = now + 1.0 / 60.0;
+        out.seq++;
+        out.steer = float(in.c.steer);
+        out.throttle = float(in.c.throttle);
+        out.brake = float(in.c.brake);
+        out.handbrake = float(in.c.handbrake);
+        out.aim = in.c.aimPoint;
+        out.indirect = in.c.indirect;
+        out.requestGear = i8(in.c.requestGear == 99 ? 0 : in.c.requestGear);
+        out.ackBlasts = blastsDone;
+        out.ackMatch = match;
+        out.viewTick = viewTick;
+        out.turret = in.turret;
+        out.ready = in.ready ? 1 : 0;
+        for (int i = 0; i < IT_COUNT; i++) out.items[i] = in.items[i];
+        net::Writer w(net::P_INPUT);
+        net::write(w, out);
+        sock->send(w.data(), w.size(), server);
+      }
+
+      char msg[128] = "";
+      if (state == NET_IN) {
+        const Tank* mine = tankNow >= 0 ? &duel.tanks[tankNow] : nullptr;
+        if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf den zweiten Spieler");
+        else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
+        else if (phaseNow == Duel::FINISHED) snprintf(msg, sizeof msg, "%s  ·  Stand %u : %u", winner < 0 ? "Unentschieden" : (winner == mySlot ? "Sieg!" : "Niederlage"), wins[mySlot], wins[1 - mySlot]);
+        else if (mine && mine->repairClock > 0) snprintf(msg, sizeof msg, "Reparatur  ·  %.0f s", mine->repairClock);
+        else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
+      }
+      {
+        std::lock_guard<std::mutex> lock(snapMutex);
+        netState = state;
+        netError = error;
+        phase = phaseNow;
+        phaseClock = clockNow;
+        slot = mySlot;
+        myTank = tankNow;
+      }
+      fillSnapshot(msg, in.turret);
+      std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    }
+    if (state == NET_IN) disconnect("");
+  }
+};
+
+static void runGame() {
   SDL_GLContext ctx = SDL_GL_CreateContext(window);
   if (!ctx) {
     fprintf(stderr, "OpenGL: %s\n", SDL_GetError());
-    return -1;
+    return;
   }
   glClearColor(.05f, .05f, .06f, 1.f);
   glClear(GL_COLOR_BUFFER_BIT);
   SDL_GL_SwapWindow(window);
   auto* game = new Game();
   Game& G = *game;
-  printf("Baue Welt und Fahrzeug...\n");
-  G.kind = kind;
-  G.world.build();
-  G.sim.world = &G.world;
-  // Script 15 starts on the country road, on its long southern stretch.
-  if (scriptMode == 15) {
-    const RoadPoint& p = G.world.roads()[0].pts[1200];
-    kSpawn.x = p.x;
-    kSpawn.y = p.y;
+  printf("Baue Welt und Fahrzeuge...\n");
+  G.duel.build();
+  // This copy never takes a step of its own.
+  G.sim.mirror = true;
+  G.sim.logBlasts = false;
+  G.simStart.mirror = true;
+  G.simStart.logBlasts = false;
+  for (int i = 0; i < Duel::kTanks; i++) {
+    G.duel.tanks[i].applyNetState(G.sim, G.duel.tanks[i].netState(), 0.01);
+    G.duel.tanksStart[i] = G.duel.tanks[i];
   }
-  // Script 19 starts straight in front of a tree.
-  if (scriptMode == 19) {
-    const V3 t = G.world.trees()[treeIndex];
-    kSpawn.x = t.x - treeRun;
-    kSpawn.y = t.y + 0.25;
-  }
-  kSpawn.z = G.world.height(kSpawn.x, kSpawn.y);
-  // Script 24 stands on a road, so that the crater goes through the tarmac.
-  if (kind == VK_LEOPARD) G.tank = buildLeopard(G.sim, kSpawn, &G.rig);
-  else if (kind == VK_ONE1) G.car = buildOne1(G.sim, kSpawn, &G.rig);
-  else if (kind == VK_HUMMER) G.car = buildHummer(G.sim, kSpawn, &G.rig);
-  else G.car = buildXantia(G.sim, kSpawn, 0.0, &G.rig);
-  // One of each stands beside the start, to be driven into or shot at.
-  const u32 drivenObjects = u32(G.sim.objs.size());
-  CarRig parkedRigs[4];
-  V3 parkedSpawn[4];
-  const bool withParked = scriptMode == 0 || scriptMode >= 33;
-  if (withParked) {
-    const double parkX[4] = {-101.0, -90.0, -79.0, -65.0};
-    const auto placed = [&](int i) {
-      const double y = -13.0;
-      parkedSpawn[i] = V3{parkX[i], y, G.world.height(parkX[i], y)};
-      return parkedSpawn[i];
-    };
-    G.parked.push_back(buildXantia(G.sim, placed(0), 0.0, &parkedRigs[0]));
-    G.parked.push_back(buildOne1(G.sim, placed(1), &parkedRigs[1]));
-    G.parked.push_back(buildHummer(G.sim, placed(2), &parkedRigs[2]));
-    G.parkedTank = buildLeopard(G.sim, placed(3), &parkedRigs[3]);
-    G.hasParked = true;
-  }
-  const u32 parkedObjects = u32(G.sim.objs.size()) - drivenObjects;
-  G.sim.firstSceneryNode = u32(G.sim.pos.size());
-  populateWorld(G.sim, G.world);
-  G.sim.finalize();
-  if (withParked) {
-    // Each comes to rest on its own, and then it sleeps until something touches it.
-    const auto all = G.sim.active;
-    const auto alone = [&](std::vector<u32> ids, auto settle) {
-      G.sim.active.clear();
-      for (u32 id : ids) {
-        G.sim.objs[id].awake = true;
-        G.sim.active.push_back(id);
-      }
-      settle();
-      for (u32 id : ids) {
-        Obj& o = G.sim.objs[id];
-        o.alwaysAwake = false;
-        o.awake = false;
-        o.sleepTimer = 0;
-        for (u32 n : o.nodes) G.sim.vel[n] = {};
-      }
-    };
-    for (Vehicle& v : G.parked) {
-      v.engineRunning = false;
-      alone({u32(v.obj)}, [&] { settleVehicle(G.sim, v, 2.5); });
+
+  // Everything that stands on the map, in one mesh, each bound to its own nodes.
+  G.rig.noseX = 0;
+  G.rig.carWheels = false;
+  G.rig.scratches = false;
+  G.mesh.noseX = 0;
+  G.rig.playerLinks = 0;
+  const V3 origin{};
+  static const char* carFiles[Duel::kCarKinds] = {"assets/xantia.mesh", "assets/one1.mesh", "assets/hummer.mesh"};
+  for (int k = 0; k < Duel::kVehicles; k++) {
+    const bool isTank = k < Duel::kTanks;
+    const char* file = isTank ? turretSpec(TurretKind(k % TK_COUNT)).mesh : carFiles[(k - Duel::kTanks) % Duel::kCarKinds];
+    CarMesh other;
+    if (!other.load(file)) {
+      fprintf(stderr, "%s fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n", file);
+      return;
     }
-    alone({u32(G.parkedTank.hullObj), u32(G.parkedTank.turretObj)}, [&] { G.parkedTank.settle(G.sim, 2.0); });
-    G.sim.active.clear();
-    for (u32 id : all)
-      if (id < drivenObjects || id >= drivenObjects + parkedObjects) G.sim.active.push_back(id);
-    G.parkedStart = G.parked;
-    G.parkedTankStart = G.parkedTank;
-  }
-  if (kind == VK_LEOPARD) G.tank.settle(G.sim, 3.0);
-  else settleVehicle(G.sim, G.car, 4.0);
-  G.sim.craterWorld = &G.world;
-  G.simStart = G.sim;
-  G.carStart = G.car;
-  G.tankStart = G.tank;
-  const bool carried = gCarried != nullptr;
-  if (carried) {
-    // Everything but the vehicle goes on where it left off. The start state stays as built, for the reset of
-    // the whole world, and the ground is taken over only now: the vehicle settled on the level.
-    G.world = gCarried->world;
-    const u32 newCars = kind == VK_LEOPARD ? 2 : 1;
-    const Sim& was = gCarried->sim;
-    const long dNode = long(G.sim.objs[newCars].nodeStart) - long(was.objs[gCarried->cars].nodeStart);
-    const long dBeam = long(G.sim.objs[newCars].beamStart) - long(was.objs[gCarried->cars].beamStart);
-    const long dObj = long(newCars) - long(gCarried->cars);
-    if (!G.sim.adoptWorld(gCarried->sim, gCarried->cars, newCars)) {
-      fprintf(stderr, "Welt konnte nicht uebernommen werden\n");
-    } else if (G.hasParked && !gCarried->parked.empty()) {
-      // The parked ones are part of the world: they stay as wrecked as they are, at their new place in the arrays.
-      G.parked = gCarried->parked;
-      G.parkedTank = gCarried->parkedTank;
-      for (Vehicle& v : G.parked) v.shiftIndices(dNode, dBeam, dObj);
-      G.parkedTank.shiftIndices(dNode, dBeam, dObj);
-    }
-    delete gCarried;
-    gCarried = nullptr;
-  }
-  // Back at the chosen start point, on whatever the ground has become.
-  G.input.startPlace = gStartPlace;
-  G.input.reset = carried || gStartPlace > 0;
-  const char* meshFile = kind == VK_LEOPARD ? "assets/leopard.mesh" : (kind == VK_ONE1 ? "assets/one1.mesh" : (kind == VK_HUMMER ? "assets/hummer.mesh" : "assets/xantia.mesh"));
-  if (!G.mesh.load(meshFile)) {
-    fprintf(stderr, "%s fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n", meshFile);
-    return -1;
-  }
-  G.mesh.noseX = G.rig.noseX;
-  G.rig.playerLinks = G.rig.links.size();
-  if (withParked) {
-    // They all go into one mesh with the driven vehicle, each bound to its own nodes.
-    const char* files[4] = {"assets/xantia.mesh", "assets/one1.mesh", "assets/hummer.mesh", "assets/leopard.mesh"};
-    for (int k = 0; k < 4; k++) {
-      CarMesh other;
-      if (!other.load(files[k])) {
-        fprintf(stderr, "%s fehlt.\n", files[k]);
-        continue;
+    const CarRig& r = G.duel.rigs[k];
+    std::vector<CarMesh::ParkedHub> hubs;
+    if (!isTank) {
+      const Vehicle& v = G.duel.carsStart[size_t(k - Duel::kTanks)];
+      for (size_t w = 0; w < v.wheels.size(); w++) {
+        const Wheel& wh = v.wheels[w];
+        const std::string name = std::to_string(k) + ":wheel" + std::to_string(w);
+        std::vector<u32> nodes{wh.axIn, wh.axOut};
+        nodes.insert(nodes.end(), std::begin(wh.ring), std::end(wh.ring));
+        G.rig.groups.push_back({name, nodes});
+        hubs.push_back({(G.simStart.rest[wh.axIn] + G.simStart.rest[wh.axOut]) * 0.5, wh.left, w >= 2 ? r.rearWidth : 1.f, "wheel" + std::to_string(w)});
       }
-      std::vector<CarMesh::ParkedHub> hubs;
-      if (k < 3) {
-        const Vehicle& v = G.parkedStart[size_t(k)];
-        for (size_t w = 0; w < v.wheels.size(); w++) {
-          const Wheel& wh = v.wheels[w];
-          const std::string name = std::to_string(k) + ":wheel" + std::to_string(w);
-          std::vector<u32> nodes{wh.axIn, wh.axOut};
-          nodes.insert(nodes.end(), std::begin(wh.ring), std::end(wh.ring));
-          G.rig.groups.push_back({name, nodes});
-          hubs.push_back({(G.simStart.rest[wh.axIn] + G.simStart.rest[wh.axOut]) * 0.5, wh.left, w >= 2 ? parkedRigs[k].rearWidth : 1.f, "wheel" + std::to_string(w)});
-        }
-      }
-      G.mesh.addParked(other, k, parkedSpawn[k], parkedRigs[k].noseX, kSpawn, hubs);
-      for (const NodeGroup& g : parkedRigs[k].groups) G.rig.groups.push_back({std::to_string(k) + ":" + g.name, g.nodes});
-      G.rig.links.insert(G.rig.links.end(), parkedRigs[k].links.begin(), parkedRigs[k].links.end());
     }
-    // Every node of the row, split at each vehicle.
-    const u32 tankEnd = G.sim.firstSceneryNode;
-    for (int k = 0; k < 4; k++) {
-      const Obj& o = G.simStart.objs[k < 3 ? G.parkedStart[size_t(k)].obj : G.parkedTankStart.hullObj];
-      const u32 end = k < 3 ? o.nodeStart + o.nodeCount : tankEnd;
-      G.rig.parkedNodes.push_back({o.nodeStart, end - o.nodeStart});
+    G.mesh.addParked(other, k, G.duel.spawn[k], r.noseX, origin, hubs);
+    for (const NodeGroup& g : r.groups) G.rig.groups.push_back({std::to_string(k) + ":" + g.name, g.nodes});
+    G.rig.links.insert(G.rig.links.end(), r.links.begin(), r.links.end());
+    u32 first, end;
+    if (isTank) {
+      first = G.duel.tankFirst[k];
+      end = first + G.duel.tankNodes;
+    } else {
+      first = G.simStart.objs[G.duel.carsStart[size_t(k - Duel::kTanks)].obj].nodeStart;
+      end = k + 1 < Duel::kVehicles ? G.simStart.objs[G.duel.carsStart[size_t(k + 1 - Duel::kTanks)].obj].nodeStart : G.sim.firstSceneryNode;
     }
+    G.rig.parkedNodes.push_back({first, end - first});
   }
-  G.buildGauges();
-  // Bind to the as-built pose: that is what the mesh was modelled against.
-  G.mesh.bind(G.simStart.rest, G.rig.groups, kSpawn);
+  G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());
 
   SDL_GL_SetSwapInterval(gSet.vsync ? 1 : 0);
@@ -1177,59 +995,31 @@ static int playSession(int kind, bool openMenu) {
   Renderer renderer;
   // The renderer reads only topology from this immutable copy (rest pose, triangle list, beam end
   // points). Everything that moves arrives through snapshots, so it never races the physics.
-  renderer.init(G.world, G.simStart, G.rig, G.mesh, kSpawn);
+  renderer.init(G.world, G.simStart, G.rig, G.mesh, origin);
 
-  G.fillSnapshot(0);
-  std::thread physics([&] { G.physicsLoop(); });
-
-  // Script 5 drives the real input path with a virtual gamepad, so that controller handling can be
-  // verified without hardware.
-  const bool scriptPad = scriptMode == 5;
-  const bool scriptMode_blocksAssist = scriptMode > 0 && !scriptPad;
-  SDL_Joystick* vpad = nullptr;
-  if (scriptPad) {
-    SDL_VirtualJoystickDesc desc;
-    SDL_INIT_INTERFACE(&desc);
-    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
-    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
-    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
-    desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1u;
-    desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1u;
-    desc.name = "BeanNG Virtual Pad";
-    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
-    vpad = SDL_OpenJoystick(id);
-    if (!vpad) fprintf(stderr, "virtual pad: %s\n", SDL_GetError());
-  }
+  G.fillSnapshot("", TK_STANDARD);
+  std::thread network([&] { G.netLoop(); });
+  if (gConnectNow) G.command = Game::CMD_CONNECT;
 
   SDL_Gamepad* gamepad = nullptr;
   CameraRig rig;
-  rig.tank = kind == VK_LEOPARD;
-  if (rig.tank) {
-    rig.yaw = PI;
-    rig.pitch = 0.20;
-    rig.dist = 8.0;
-  }
+  rig.tank = true;
+  rig.yaw = PI;
+  rig.pitch = 0.20;
+  rig.dist = 8.0;
   Camera cam;
   HudOptions hud;
-  hud.crosshair = rig.tank;
-  int nextVehicle = -1;
-  int startPlace = gStartPlace;
-  // Panels: 0 none, 1 vehicle menu, 2 settings.
-  enum { PANEL_NONE, PANEL_VEHICLE, PANEL_CAR, PANEL_GAME, PANEL_MAIN, PANEL_KEYS };
-  int panelKind = openMenu ? PANEL_MAIN : PANEL_NONE;
+  enum { PANEL_NONE, PANEL_GAME, PANEL_MAIN, PANEL_KEYS, PANEL_ONLINE, PANEL_LOADOUT };
+  int panelKind = PANEL_MAIN;
+  bool textEntry = false;
   int panelSel = 0;
-  bool fromMain = false;      // a page opened from the main menu goes back to it
-  bool menuSpin = openMenu;   // the first time, the vehicle slowly turns behind the menu
-  Tuning tuning;
-  double tankReload = 4;
+  bool fromMain = false;  // a page opened from the main menu goes back to it
   struct Item {
     std::string label, value;
     float fill;
     std::function<void(int)> change;
   };
   std::vector<Item> items;
-  Controls panelEdges;
-  bool panelRepair = false;
   bool relativeMouse = false;
   DriveFeel feel;
   {
@@ -1245,21 +1035,21 @@ static int playSession(int kind, bool openMenu) {
   }
   double fpsClock = 0;
   int fpsFrames = 0;
-  bool rmb = false, lmb = false;
-  bool mouseSteer = false;
-  double mouseSteerX = 0;
   double keySteer = 0;
-  double timeScale = 1.0;
-  bool paused = false;
-  int grabNode = -1;
-  V3 grabTarget;
-  V3 grabPlane;
-  double mx = 0, my = 0;
+  (void)keySteer;
   bool quit = false;
   int shotCount = 0;
   bool wantShot = false;
-  bool repairDone = false;
   Snapshot view;
+  // What this player is going to take into the match.
+  int pickTurret = gPickTurret;
+  u8 pickItems[IT_COUNT] = {};
+  bool pickReady = false;
+  int lastPhase = -1;
+  // The map, and the point on it the artillery lays on.
+  bool mapOpen = false;
+  bool hasMark = false;
+  V3 markPoint;
   auto lastFrame = std::chrono::steady_clock::now();
   const auto startTime = lastFrame;
 
@@ -1276,8 +1066,41 @@ static int playSession(int kind, bool openMenu) {
       fpsClock = 0;
     }
 
+    int netState, phase, slot, myTank;
+    double phaseClock;
+    std::string netError;
+    {
+      std::lock_guard<std::mutex> lock(G.snapMutex);
+      netState = G.netState;
+      phase = G.phase;
+      phaseClock = G.phaseClock;
+      slot = G.slot;
+      myTank = G.myTank;
+      netError = G.netError;
+    }
+    const bool inMatch = netState == Game::NET_IN && myTank >= 0;
+    // The choosing comes up by itself; afterwards it is gone by itself.
+    if (phase != lastPhase) {
+      if (phase == Duel::CHOOSING && netState == Game::NET_IN) {
+        pickReady = false;
+        panelKind = PANEL_LOADOUT;
+        panelSel = 0;
+        fromMain = false;
+      } else if (panelKind == PANEL_LOADOUT) {
+        panelKind = PANEL_NONE;
+      }
+      if (phase == Duel::PLAYING) {
+        // Behind the tank, wherever it stands. The camera's yaw is in the world.
+        rig.yaw = view.carFwd.x > 0 ? PI : 0.0;
+        hasMark = false;
+        mapOpen = false;
+        rig.pitch = 0.20;
+      }
+      lastPhase = phase;
+    }
+
     Controls edges;
-    bool doReset = false, doRepair = false, doResetWorld = false;
+    const auto leave = [&] { G.command = Game::CMD_LEAVE; };
 
     // The list on screen, rebuilt from the live state each frame.
     items.clear();
@@ -1295,64 +1118,54 @@ static int playSession(int kind, bool openMenu) {
     auto openPage = [&](int which) {
       fromMain = panelKind == PANEL_MAIN;
       panelKind = which;
-      panelSel = which == PANEL_VEHICLE ? kind : 0;
+      panelSel = 0;
     };
-    if (panelKind == PANEL_MAIN) {
-      page(menuSpin ? "Losfahren" : "Weiterfahren", [&] { panelKind = PANEL_NONE; menuSpin = false; if (rig.tank) rig.yaw = PI; else rig.yaw = 0; });
-      page("Fahrzeug wählen", [&] { openPage(PANEL_VEHICLE); });
-      {
-        char b[64];
-        snprintf(b, sizeof b, "%s", G.world.places()[size_t(startPlace) % G.world.places().size()].name);
-        items.push_back({"Startpunkt", b, -1.f, [&](int) {
-                           startPlace = (startPlace + 1) % int(G.world.places().size());
-                           G.input.startPlace = startPlace;
-                           doReset = true;
-                           panelKind = PANEL_NONE;
-                           menuSpin = false;
+    if (panelKind == PANEL_ONLINE) {
+      items.push_back({"Server-Adresse", gServerHost + (panelSel == 0 ? "_" : ""), -1.f, [&](int) {}});
+      items.push_back({"Port", std::to_string(gServerPort) + (panelSel == 1 ? "_" : ""), -1.f, [&](int) {}});
+      page(netState == Game::NET_CONNECTING ? "Verbinde..." : "Verbinden", [&] {
+        saveServerAddress();
+        G.command = Game::CMD_CONNECT;
+      });
+      if (!netError.empty()) items.push_back({netError, "", -1.f, [](int) {}});
+    } else if (panelKind == PANEL_LOADOUT) {
+      items.push_back({"Turm", turretSpec(TurretKind(pickTurret)).name, -1.f, [&](int d) {
+                         pickTurret = (pickTurret + d + TK_COUNT) % TK_COUNT;
+                         pickReady = false;
+                       }});
+      for (int i = 0; i < IT_COUNT; i++) {
+        char name[64], b[16];
+        snprintf(name, sizeof name, "%s  (%d %s)", kItems[i].name, kItems[i].slots, kItems[i].slots == 1 ? "Slot" : "Slots");
+        snprintf(b, sizeof b, "%d", pickItems[i]);
+        items.push_back({name, b, -1.f, [&, i](int d) {
+                           u8 next[IT_COUNT];
+                           memcpy(next, pickItems, sizeof next);
+                           if (d < 0 && next[i] == 0) return;
+                           next[i] = u8(int(next[i]) + d);
+                           if (slotsUsed(next) <= kLoadoutSlots) memcpy(pickItems, next, sizeof next);
+                           pickReady = false;
                          }});
       }
-      page("Fahrzeug-Einstellungen", [&] { openPage(PANEL_CAR); });
-      page("Spiel-Einstellungen", [&] { openPage(PANEL_GAME); });
-      page("Steuerung", [&] { openPage(PANEL_KEYS); });
-      page("Welt zurücksetzen", [&] {
-        doResetWorld = true;
+      {
+        char b[32];
+        snprintf(b, sizeof b, "%d / %d", slotsUsed(pickItems), kLoadoutSlots);
+        items.push_back({"Belegte Slots", b, float(slotsUsed(pickItems)) / float(kLoadoutSlots), [](int) {}});
+      }
+      page("Bereit", [&] {
+        pickReady = true;
         panelKind = PANEL_NONE;
       });
-      page("Beenden", [&] { quit = true; });
-    } else if (panelKind == PANEL_VEHICLE) {
-      items.push_back({"Citroën Xantia Activa", "V6  ·  190 PS  ·  1,5 t", -1.f, [&](int) {}});
-      items.push_back({"Leopard 1", "V10  ·  830 PS  ·  42 t", -1.f, [&](int) {}});
-      items.push_back({"Koenigsegg One:1", "V8 Biturbo  ·  1360 PS  ·  1,36 t", -1.f, [&](int) {}});
-      items.push_back({"Hummer H1", "V8 Diesel  ·  300 PS  ·  3,4 t  ·  Allrad", -1.f, [&](int) {}});
-    } else if (panelKind == PANEL_CAR) {
-      if (kind != VK_LEOPARD) {
-        toggle("ABS", tuning.abs, [&] { tuning.abs = !tuning.abs; });
-        toggle("ESP", tuning.esp, [&] { tuning.esp = !tuning.esp; });
-        toggle("ASR", tuning.tcs, [&] { tuning.tcs = !tuning.tcs; });
-        if (kind == VK_HUMMER) {
-          toggle("Geländeuntersetzung", tuning.lowRange, [&] { tuning.lowRange = !tuning.lowRange; });
-          toggle("Differenzialsperren", tuning.lockDiffs, [&] { tuning.lockDiffs = !tuning.lockDiffs; });
-        }
-        if (kind == VK_XANTIA) {
-          toggle("Activa", view.activa, [&] { panelEdges.toggleActiva = true; });
-          toggle("Hydractive Sport", view.sport, [&] { panelEdges.toggleSport = true; });
-          static const char* heights[3] = {"Niedrig", "Straße", "Hoch"};
-          items.push_back({"Niveau", heights[std::clamp(view.heightMode, 0, 2)], -1.f, [&](int) { panelEdges.cycleHeight = true; }});
-        }
-        items.push_back({"Getriebe", view.autoBox ? "Automatik" : "Manuell", -1.f, [&](int) { panelEdges.toggleAuto = true; }});
-        percent("Bremskraft", tuning.brake, 0.4, 1.6, 0.1);
-        percent("Dämpfung", tuning.damper, 0.4, 2.0, 0.1);
-        percent("Stabilisator", tuning.bar, 0.0, 2.0, 0.1);
-        percent("Lenkübersetzung", tuning.steer, 0.6, 1.4, 0.05);
+    } else if (panelKind == PANEL_MAIN) {
+      if (netState == Game::NET_IN) {
+        page("Weiterspielen", [&] { panelKind = PANEL_NONE; });
+        if (phase == Duel::CHOOSING) page("Ausrüstung wählen", [&] { panelKind = PANEL_LOADOUT; panelSel = 0; pickReady = false; });
+        page("Spiel verlassen", [&] { leave(); });
       } else {
-        items.push_back({"Getriebe", view.autoBox ? "Automatik" : "Manuell", -1.f, [&](int) { panelEdges.toggleAuto = true; }});
-        {
-          char b[32];
-          snprintf(b, sizeof b, "%.1f s", tankReload);
-          items.push_back({"Nachladezeit", b, float(tankReload / 8.0), [&](int d) { tankReload = clampd(tankReload + d * 0.5, 0.5, 8.0); }});
-        }
+        page("Online spielen", [&] { openPage(PANEL_ONLINE); });
       }
-      page("Fahrzeug reparieren", [&] { panelRepair = true; });
+      page("Spiel-Einstellungen", [&] { openPage(PANEL_GAME); });
+      page("Steuerung", [&] { openPage(PANEL_KEYS); });
+      page("Beenden", [&] { quit = true; });
     } else if (panelKind == PANEL_GAME) {
       toggle("Vollbild", gSet.fullscreen, [&] {
         gSet.fullscreen = !gSet.fullscreen;
@@ -1379,54 +1192,90 @@ static int playSession(int kind, bool openMenu) {
       auto key = [&](const char* what, const char* k) { items.push_back({what, k, -1.f, [&](int) {}}); };
       key("Gas und Bremse, im Stand rückwärts", "W S");
       key("Lenken", "A D");
-      key("Handbremse", "Leertaste");
+      key("Bremse", "Leertaste");
       key("Schalten / Automatik", "Q E / T");
-      key("Autobombe, Kanone", "F");
+      key("Zielen", "Maus");
+      key("Feuer", "Linke Maustaste, F");
+      key("Rakete starten, fliegt mit der Maus", "G");
+      key("Reparaturset, im Stand", "R");
+      key("Karte, Ziel für die Artillerie", "K");
       key("Kamera", "C");
-      key("Mauslenkung", "M");
-      key("Zeitlupe / Pause", "[ ] / P");
-      key("Fahrzeug-Einstellungen", "O");
-      key("Fahrzeug wählen", "TAB");
-      key("Fahrzeug zum Start / Reparieren", "R / F5");
-      key("Beams / Röntgen / Screenshot", "F2 F3 F12");
-      key("Hauptmenü", "ESC");
-      key("Controller: Bombe / Handbremse / Gang", "X / A / LB RB");
+      key("Screenshot", "F12");
     }
+    panelSel = items.empty() ? 0 : std::clamp(panelSel, 0, int(items.size()) - 1);
+
     auto choosePanel = [&] {
-      if (panelKind == PANEL_VEHICLE) {
-        if (panelSel != kind) {
-          nextVehicle = panelSel;
-          quit = true;
-        }
-        panelKind = PANEL_NONE;
-        menuSpin = false;
-        rig.yaw = rig.tank ? PI : 0;
-      } else if (panelKind != PANEL_KEYS && panelSel < int(items.size())) {
-        items[size_t(panelSel)].change(1);
-      }
+      if (panelKind == PANEL_ONLINE && panelSel < 2) panelSel = 2;  // from an address, ENTER goes on to the button
+      else if (panelKind != PANEL_KEYS && panelSel < int(items.size())) items[size_t(panelSel)].change(1);
     };
     auto closePanel = [&] {
       saveSettings();
+      if (panelKind == PANEL_LOADOUT) {
+        // Without a choice there is nothing else to do; the menu is one key further.
+        panelKind = PANEL_MAIN;
+        panelSel = 0;
+        return;
+      }
       if (panelKind != PANEL_MAIN && fromMain) {
-        panelSel = panelKind == PANEL_VEHICLE ? 1 : (panelKind == PANEL_CAR ? 2 : (panelKind == PANEL_GAME ? 3 : 4));
+        panelSel = panelKind == PANEL_ONLINE ? 0 : (netState == Game::NET_IN ? 2 : (panelKind == PANEL_GAME ? 1 : 2));
         panelKind = PANEL_MAIN;
         fromMain = false;
         return;
       }
-      panelKind = PANEL_NONE;
-      menuSpin = false;
-      if (rig.tank) rig.yaw = PI;
-      else if (rig.yaw != 0 && rig.mode == CAM_CHASE) rig.yaw = 0;
+      // With nothing to return to, the menu stays.
+      if (netState == Game::NET_IN) panelKind = PANEL_NONE;
     };
     auto panelMove = [&](int d) {
       if (!items.empty()) panelSel = (panelSel + d + int(items.size())) % int(items.size());
     };
     auto panelAdjust = [&](int d) {
-      if ((panelKind == PANEL_CAR || panelKind == PANEL_GAME) && panelSel < int(items.size())) items[size_t(panelSel)].change(d);
+      if ((panelKind == PANEL_GAME || panelKind == PANEL_LOADOUT) && panelSel < int(items.size())) items[size_t(panelSel)].change(d);
     };
+
+    // Typing goes to the address fields, and nowhere else.
+    const bool wantText = panelKind == PANEL_ONLINE && panelSel < 2;
+    if (wantText != textEntry) {
+      textEntry = wantText;
+      if (wantText) SDL_StartTextInput(window);
+      else SDL_StopTextInput(window);
+    }
 
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+      if (wantText && e.type == SDL_EVENT_TEXT_INPUT) {
+        std::lock_guard<std::mutex> lock(G.inputMutex);
+        for (const char* t = e.text.text; *t; t++) {
+          const unsigned char ch = static_cast<unsigned char>(*t);
+          if (panelSel == 0 && gServerHost.size() < 63 && (std::isalnum(ch) || ch == '.' || ch == '-')) gServerHost += char(ch);
+          if (panelSel == 1 && std::isdigit(ch) && gServerPort < 6553) gServerPort = gServerPort * 10 + (ch - '0');
+        }
+        continue;
+      }
+      if (wantText && e.type == SDL_EVENT_KEY_DOWN) {
+        const SDL_Keycode k = e.key.key;
+        if (k == SDLK_BACKSPACE) {
+          std::lock_guard<std::mutex> lock(G.inputMutex);
+          if (panelSel == 0 && !gServerHost.empty()) gServerHost.pop_back();
+          if (panelSel == 1) gServerPort /= 10;
+          continue;
+        }
+        // These are letters here, not menu keys.
+        if (k == SDLK_W || k == SDLK_A || k == SDLK_S || k == SDLK_D || k == SDLK_SPACE) continue;
+      }
+      // The map takes the mouse while it is open.
+      if (mapOpen && panelKind == 0 && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        int pw, ph;
+        SDL_GetWindowSizeInPixels(window, &pw, &ph);
+        float mx0, my0, ms;
+        mapLayout(pw, ph, mx0, my0, ms);
+        const double wx = (double(e.button.x - mx0) / ms * 2.0 - 1.0) * kMapHalf, wy = (1.0 - double(e.button.y - my0) / ms * 2.0) * kMapHalf;
+        if (e.button.button == SDL_BUTTON_LEFT && std::fabs(wx) < kMapHalf && std::fabs(wy) < kMapHalf) {
+          hasMark = true;
+          markPoint = V3{wx, wy, G.world.height(wx, wy)};
+        }
+        if (e.button.button == SDL_BUTTON_RIGHT) hasMark = false;
+        continue;
+      }
       // A panel on screen takes the keys and buttons it needs first.
       if (panelKind != 0) {
         bool used = true;
@@ -1437,7 +1286,7 @@ static int playSession(int kind, bool openMenu) {
             case SDLK_LEFT: case SDLK_A: panelAdjust(-1); break;
             case SDLK_RIGHT: case SDLK_D: panelAdjust(1); break;
             case SDLK_RETURN: case SDLK_SPACE: case SDLK_KP_ENTER: if (!e.key.repeat) choosePanel(); break;
-            case SDLK_ESCAPE: case SDLK_O: case SDLK_TAB: closePanel(); break;
+            case SDLK_ESCAPE: closePanel(); break;
             default: used = false; break;
           }
         } else if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
@@ -1462,7 +1311,7 @@ static int playSession(int kind, bool openMenu) {
           if (inside) panelSel = row;
           if (inside && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
             // In a value row: left half of the value down, right half up.
-            if (panelKind == PANEL_CAR || panelKind == PANEL_GAME) panelAdjust(mxp < px + pwid * 0.65f ? -1 : 1);
+            if ((panelKind == PANEL_GAME || panelKind == PANEL_LOADOUT) && row + 1 < int(items.size())) panelAdjust(mxp < px + pwid * 0.65f ? -1 : 1);
             else choosePanel();
           }
         } else {
@@ -1493,90 +1342,44 @@ static int playSession(int kind, bool openMenu) {
           switch (e.gbutton.button) {
             case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: edges.shiftDown = true; break;
             case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: edges.shiftUp = true; break;
-            case SDL_GAMEPAD_BUTTON_NORTH: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.yaw = 0; break;
-            case SDL_GAMEPAD_BUTTON_WEST: edges.fire = true; break;
-            case SDL_GAMEPAD_BUTTON_RIGHT_STICK: edges.toggleSport = true; break;
-            case SDL_GAMEPAD_BUTTON_LEFT_STICK: panelKind = PANEL_CAR; panelSel = 0; fromMain = false; break;
-            case SDL_GAMEPAD_BUTTON_GUIDE: panelKind = PANEL_MAIN; panelSel = 0; fromMain = false; break;
-            case SDL_GAMEPAD_BUTTON_EAST: doRepair = true; break;
-            case SDL_GAMEPAD_BUTTON_BACK: doReset = true; break;
-            case SDL_GAMEPAD_BUTTON_START: paused = !paused; break;
-            case SDL_GAMEPAD_BUTTON_DPAD_UP: edges.cycleHeight = true; break;
-            case SDL_GAMEPAD_BUTTON_DPAD_DOWN: edges.toggleActiva = true; break;
-            case SDL_GAMEPAD_BUTTON_DPAD_LEFT: timeScale = std::max(0.05, timeScale * 0.5); break;
-            case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: timeScale = std::min(1.0, timeScale * 2.0); break;
+            case SDL_GAMEPAD_BUTTON_NORTH: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); break;
             default: break;
           }
           break;
         case SDL_EVENT_KEY_DOWN:
           if (e.key.repeat) break;
           switch (e.key.key) {
-            case SDLK_ESCAPE: panelKind = PANEL_MAIN; panelSel = 0; fromMain = false; break;
+            case SDLK_ESCAPE:
+              if (mapOpen) mapOpen = false;
+              else {
+                panelKind = PANEL_MAIN;
+                panelSel = 0;
+                fromMain = false;
+              }
+              break;
             case SDLK_Q: edges.shiftDown = true; break;
             case SDLK_E: edges.shiftUp = true; break;
             case SDLK_T: edges.toggleAuto = true; break;
-            case SDLK_G: edges.toggleSport = true; break;
-            case SDLK_H: edges.cycleHeight = true; break;
-            case SDLK_V: edges.toggleActiva = true; break;
-            case SDLK_I: edges.toggleIgnition = true; break;
-            case SDLK_R: doReset = true; break;
-            case SDLK_F5: doRepair = true; break;
-            case SDLK_C: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.yaw = 0; rig.pitch = 0.22; break;
-            case SDLK_M:
-              mouseSteer = !mouseSteer;
-              mouseSteerX = 0;
-              break;
-            case SDLK_P: paused = !paused; break;
-            case SDLK_LEFTBRACKET: timeScale = std::max(0.05, timeScale * 0.5); break;
-            case SDLK_RIGHTBRACKET: timeScale = std::min(1.0, timeScale * 2.0); break;
+            case SDLK_R: edges.repair = true; break;
+            case SDLK_G: edges.launch = true; break;
+            case SDLK_K: mapOpen = !mapOpen; break;
+            case SDLK_C: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.pitch = 0.22; break;
             case SDLK_F: edges.fire = true; break;
-            case SDLK_O: panelKind = PANEL_CAR; panelSel = 0; fromMain = false; break;
-            case SDLK_TAB: panelKind = PANEL_VEHICLE; panelSel = kind; fromMain = false; break;
-            case SDLK_F2: hud.debugBeams = !hud.debugBeams; break;
-            case SDLK_F3: hud.xray = !hud.xray; break;
             case SDLK_F12: wantShot = true; break;
             default: break;
           }
           break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
-          if (e.button.button == SDL_BUTTON_RIGHT) rmb = true;
-          if (e.button.button == SDL_BUTTON_LEFT && rig.tank) {
-            edges.fire = true;
-          } else if (e.button.button == SDL_BUTTON_LEFT) {
-            lmb = true;
-            int w, h;
-            SDL_GetWindowSizeInPixels(window, &w, &h);
-            grabNode = renderer.pickNode(view, cam, w, h, e.button.x, e.button.y, 60.0);
-            if (grabNode >= 0) {
-              grabPlane = view.pos[grabNode];
-              grabTarget = grabPlane;
-            }
-          }
+          if (e.button.button == SDL_BUTTON_LEFT) edges.fire = true;
           break;
-        case SDL_EVENT_MOUSE_BUTTON_UP:
-          if (e.button.button == SDL_BUTTON_RIGHT) rmb = false;
-          if (e.button.button == SDL_BUTTON_LEFT) {
-            lmb = false;
-            grabNode = -1;
-          }
-          break;
-        case SDL_EVENT_MOUSE_MOTION:
-          mx = e.motion.x;
-          my = e.motion.y;
-          if (rig.tank) {
-            const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse;
+        case SDL_EVENT_MOUSE_MOTION: {
+          const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse;
+          if (!mapOpen) {
             rig.yaw -= e.motion.xrel * sens;
             rig.pitch = clampd(rig.pitch + e.motion.yrel * sens, -0.30, 1.2);
-          } else if (rmb) {
-            rig.yaw -= e.motion.xrel * 0.005 * gSet.mouse;
-            rig.pitch = clampd(rig.pitch + e.motion.yrel * 0.004 * gSet.mouse, -0.25, 1.45);
-          }
-          if (mouseSteer && !rmb) {
-            int w, h;
-            SDL_GetWindowSize(window, &w, &h);
-            mouseSteerX = clampd(mouseSteerX - e.motion.xrel / (double(w) * 0.25), -1, 1);
           }
           break;
+        }
         case SDL_EVENT_MOUSE_WHEEL:
           rig.dist = clampd(rig.dist * std::pow(0.9, double(e.wheel.y)), 2.5, 40.0);
           break;
@@ -1585,23 +1388,14 @@ static int playSession(int kind, bool openMenu) {
       }
     }
 
-    // Continuous inputs. Keyboard steering is rate-limited and speed-sensitive like a driver's
-    // hands: at speed a key press must not slam on more lock than the tyres can use.
+    // Continuous inputs.
     const bool* keys = SDL_GetKeyboardState(nullptr);
     double keyDir = 0;
     if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]) keyDir += 1;
     if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) keyDir -= 1;
-    const double speedAbs = std::fabs(view.speedKmh) / 3.6;
-    const double limit = clampd(5.0 / std::max(speedAbs, 1.0), 0.09, 1.0);
-    const double keyTarget = keyDir * limit;
-    const double keyRate = (keyDir != 0 && keyDir * keySteer >= 0) ? 2.4 : 4.0;
-    keySteer += clampd(keyTarget - keySteer, -keyRate * dt, keyRate * dt);
-
-    const double keyGas = (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) ? 1.0 : 0.0;
-    const double keyBrake = (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) ? 1.0 : 0.0;
-    double steer = keySteer, gas = keyGas, brake = keyBrake, hb = keys[SDL_SCANCODE_SPACE] ? 1.0 : 0.0;
-    if (mouseSteer) steer = mouseSteerX;
-    if (rig.tank) steer = keyDir;  // a tank has no speed-sensitive lock to protect
+    double gas = (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) ? 1.0 : 0.0;
+    double brake = (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) ? 1.0 : 0.0;
+    double steer = keyDir, hb = keys[SDL_SCANCODE_SPACE] ? 1.0 : 0.0;
 
     hud.gamepad = false;
     if (gamepad) {
@@ -1612,23 +1406,18 @@ static int playSession(int kind, bool openMenu) {
       const double ry = applyDeadzone(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY) / 32767.0, 0.15);
       const double stick = applyDeadzone(sx, 0.08);
       if (std::fabs(stick) > 0 || rt > 0.02 || lt > 0.02) hud.gamepad = true;
-      if (std::fabs(stick) > 0) {
-        // Curved for fine control around the centre, and narrowed with speed.
-        const double curved = std::copysign(std::pow(std::fabs(stick), 1.35), -stick);
-        steer = curved * clampd(8.0 / std::max(speedAbs, 1.0), 0.16, 1.0);
-      }
+      if (std::fabs(stick) > 0) steer = std::copysign(std::pow(std::fabs(stick), 1.35), -stick);
       gas = std::max(gas, rt);
       brake = std::max(brake, lt);
       if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_SOUTH)) hb = 1.0;
       rig.yaw -= rx * dt * 2.4;
       rig.pitch = clampd(rig.pitch + ry * dt * 1.4, -0.25, 1.45);
-      if (rx == 0 && rig.mode == CAM_CHASE && !rmb && !rig.tank) rig.yaw *= std::max(0.0, 1.0 - dt * 2.0);
     }
 
-    // Automatic box: holding the brake at a standstill selects reverse, holding the throttle
-    // selects drive. In reverse the pedals swap, so that S always means "go backwards".
+    // Holding the brake at a standstill selects reverse, holding the throttle selects drive. In reverse the
+    // pedals swap, so that S always means "go backwards".
     Controls sendC = edges;
-    if (view.autoBox && !scriptMode_blocksAssist) {
+    if (view.autoBox) {
       const bool stopped = std::fabs(view.speedKmh) < 1.5;
       if (stopped && brake > 0.1 && gas < 0.05 && view.gear >= 0) sendC.requestGear = -1;
       if (stopped && gas > 0.1 && brake < 0.05 && view.gear <= 0) sendC.requestGear = 1;
@@ -1638,311 +1427,56 @@ static int playSession(int kind, bool openMenu) {
     // While a panel is open the pedals rest: its keys are the same ones.
     if (panelKind != 0) gas = brake = steer = hb = 0;
     {
-      const bool wantRelative = rig.tank && panelKind == 0 && scriptMode == 0;
+      const bool wantRelative = panelKind == 0 && !mapOpen && scriptMode == 0;
       if (wantRelative != relativeMouse) {
         SDL_SetWindowRelativeMouseMode(window, wantRelative);
         relativeMouse = wantRelative;
       }
     }
-    sendC.toggleActiva |= panelEdges.toggleActiva;
-    sendC.toggleSport |= panelEdges.toggleSport;
-    sendC.cycleHeight |= panelEdges.cycleHeight;
-    sendC.toggleAuto |= panelEdges.toggleAuto;
-    panelEdges = Controls{};
-    doRepair |= panelRepair;
-    panelRepair = false;
-    if (menuSpin) rig.yaw += dt * 0.25;
-    const bool menuPause = panelKind == PANEL_MAIN || (fromMain && panelKind != PANEL_NONE);
+    // With no match to look at, the camera goes slowly round the yard.
+    if (!inMatch && panelKind != 0) rig.yaw += dt * 0.12;
 
-    // Scripted runs for automated screenshots.
-    bool scripted = false;
-    bool scriptHand = false;
-    double scriptBrake = 0;
-    double scriptGas = 0, scriptSteer = 0;
-    if (scriptMode > 0) {
-      scripted = true;
-      switch (scriptMode) {
-        case 1:  // static beauty shot, then drive into the gauntlet
-          scriptGas = tNow < 3.0 ? 0.0 : (view.speedKmh < 65 ? 0.9 : 0.0);
-          break;
-        case 2:  // down the main lane through everything
-        case 4: {  // the concrete crash wall in lane y = -30
-          const double yT = scriptMode == 2 ? 0.0 : -30.0;
-          const double vT = scriptMode == 2 ? 65.0 : 60.0;
-          const double head = std::atan2(view.carFwd.y, view.carFwd.x);
-          scriptGas = view.speedKmh < vT ? 0.9 : 0.15;
-          scriptSteer = clampd(-0.05 * (view.carCog.y - yT) - 0.7 * head, -0.25, 0.25);
-          break;
-        }
-        case 39:  // bomb beside the row, change to the Leopard, shoot, respawn, then reset the whole world
-          if (kind == VK_XANTIA) {
-            if (tNow > 3.0 && tNow < 3.0 + dt * 1.5) sendC.fire = true;
-            if (tNow > 6.0) {
-              nextVehicle = VK_LEOPARD;
-              quit = true;
-            }
-          } else {
-            if (std::fmod(tNow, 5.0) < dt && tNow > 3.0 && tNow < 18.0) sendC.fire = true;
-            static bool respawned = false, wiped = false;
-            if (tNow > 20.0 && !respawned) {
-              G.input.reset = true;
-              respawned = true;
-            }
-            if (tNow > 25.0 && !wiped) {
-              G.input.resetWorld = true;
-              wiped = true;
-            }
-          }
-          break;
-        case 40:  // circles at speed with a close look at the tracks
-          scriptGas = 1.0;
-          scriptSteer = tNow > 8.0 ? 0.35 : 0.0;
-          rig.mode = CAM_ORBIT;
-          rig.dist = 11.0;
-          rig.pitch = 0.1;
-          rig.yaw = 1.4 + double(shotCount) * 0.45;
-          break;
-        case 36:  // the car bomb, beside the row
-          if (tNow > 4.0 && tNow < 4.0 + dt * 1.5) sendC.fire = true;
-          break;
-        case 37:  // straight into the first of the row
-          scriptGas = view.speedKmh < 55 ? 1.0 : 0.0;
-          break;
-        case 38:  // the gun straight ahead along the row
-          if (std::fmod(tNow, 5.0) < dt && tNow > 3.0) sendC.fire = true;
-          break;
-        case 3:  // walk around the parked car
-          rig.mode = CAM_ORBIT;
-          rig.dist = 6.5;
-          rig.pitch = 0.14;
-          rig.yaw = 0.35 + double(shotCount) * PI / 4.0;
-          break;
-        case 7:  // burst of consecutive frames with a fixed camera, to detect render flicker
-          rig.mode = CAM_ORBIT;
-          rig.dist = 5.5;
-          rig.pitch = 0.16;
-          rig.yaw = 0.6;
-          break;
-        case 9:  // x-ray walk around the mechanicals
-          hud.xray = true;
-          rig.mode = CAM_ORBIT;
-          rig.dist = 4.2;
-          rig.pitch = 0.42;
-          rig.yaw = 0.5 + double(shotCount) * PI / 3.0;
-          break;
-        case 12:  // lay rubber: launch, then a hard turn with the handbrake on
-          rig.mode = CAM_ORBIT;
-          rig.dist = 16.0;
-          rig.pitch = 0.75;
-          rig.yaw = 2.6;
-          scriptGas = tNow < 6.0 ? 1.0 : 0.7;
-          scriptSteer = tNow < 6.0 ? 0.0 : 0.65;
-          G.input.c.handbrake = 0;
-          scriptHand = tNow > 6.0 && tNow < 8.0;
-          break;
-        case 14:
-        case 13:  // scrape the left flank along a wall, then show it
-          rig.mode = CAM_ORBIT;
-          rig.dist = 4.6;
-          rig.pitch = 0.10;
-          rig.yaw = 1.75;
-          scriptGas = scriptMode == 14 ? 0.0 : (view.speedKmh < 40 && view.carCog.x < 93 ? 0.6 : 0.0);
-          scriptSteer = view.carCog.x < 91 ? 0.012 : 0.0;
-          scriptBrake = scriptMode == 14 || view.carCog.x > 93 ? 1.0 : 0.0;
-          break;
-        case 15: {  // flat out along the country road, with the sound recorded
-          const auto& pts = G.world.roads()[0].pts;
-          size_t best = 0;
-          double bd = 1e18;
-          for (size_t i = 0; i < pts.size(); i++) {
-            const double dd = std::hypot(pts[i].x - view.carCog.x, pts[i].y - view.carCog.y);
-            if (dd < bd) {
-              bd = dd;
-              best = i;
-            }
-          }
-          const double look = 12.0 + std::fabs(view.speedKmh) * 0.22;
-          const RoadPoint& t = pts[(best + size_t(look / 1.4)) % pts.size()];
-          const double want = std::atan2(t.y - view.carCog.y, t.x - view.carCog.x);
-          double err = want - std::atan2(view.carFwd.y, view.carFwd.x);
-          while (err > PI) err -= 2 * PI;
-          while (err < -PI) err += 2 * PI;
-          scriptSteer = clampd(err * 1.6, -0.35, 0.35);
-          scriptGas = tNow < 2.0 ? 0.0 : (std::fabs(err) > 0.12 ? 0.4 : 1.0);
-          scriptBrake = view.speedKmh > 175 ? 0.3 : 0.0;
-          break;
-        }
-        case 20:  // Leopard: drive, pivot, lay the gun and fire
-          scriptGas = tNow > 2.0 && tNow < 9.0 ? 1.0 : 0.0;
-          scriptSteer = tNow > 6.0 && tNow < 8.0 ? 0.6 : 0.0;
-          scriptBrake = tNow > 9.0 && tNow < 11.0 ? 1.0 : 0.0;
-          rig.mode = shotCount >= 17 ? CAM_HOOD : CAM_CHASE;
-          rig.yaw = PI + 0.5 + 0.03 * tNow;
-          rig.pitch = 0.08;
-          if (tNow > 11.5 && std::fmod(tNow, 3.0) < dt) sendC.fire = true;
-          break;
-        case 27: {  // through the gauntlet and over the kerbs, watching the wing
-          const double head = std::atan2(view.carFwd.y, view.carFwd.x);
-          scriptGas = view.speedKmh < 70.0 ? 0.8 : 0.15;
-          scriptSteer = clampd(-0.05 * view.carCog.y - 0.7 * head, -0.25, 0.25);
-          break;
-        }
-        case 28:  // the wing comes off while driving: does it leave cleanly?
-          scriptGas = view.speedKmh < 50.0 ? 0.6 : 0.1;
-          if (tNow > 3.0 && !repairDone) {
-            G.debugWing = true;
-            repairDone = true;
-          }
-          break;
-        case 29:  // through the fence and the wall, then back to the start: the wreckage must stay
-          scriptGas = tNow < 7.0 ? 0.9 : 0.0;
-          if (tNow > 8.0 && !repairDone) {
-            doReset = true;
-            repairDone = true;
-          }
-          scriptBrake = tNow > 8.0 ? 1.0 : 0.0;
-          rig.mode = CAM_ORBIT;
-          rig.dist = 9.0;
-          rig.pitch = 0.35;
-          rig.yaw = PI + 0.3;
-          break;
-        case 30:
-          scriptGas = view.speedKmh < 55.0 ? 0.8 : 0.1;
-          scriptSteer = tNow > 3.0 ? 0.5 : 0.0;
-          break;
-        case 32:  // the start points, as the menu sets them: foot of the mountain, then the summit
-          rig.mode = CAM_CHASE;
-          if (tNow > 3.0 && startPlace == 0) {
-            startPlace = 1;
-            doReset = true;
-          }
-          if (tNow > 9.0 && startPlace == 1) {
-            startPlace = 2;
-            doReset = true;
-          }
-          scriptGas = tNow > 5.0 && tNow < 9.0 ? 0.6 : 0.0;
-          break;
-        case 33: {  // wreck the gauntlet, blow up on the way, change vehicle: all of it must still be there
-          if (kind == VK_XANTIA) {
-            const double head = std::atan2(view.carFwd.y, view.carFwd.x);
-            scriptGas = 0.9;
-            scriptSteer = clampd(-0.05 * view.carCog.y - 0.7 * head, -0.25, 0.25);
-            if (view.carCog.x > 30 && !repairDone) {
-              sendC.fire = true;
-              repairDone = true;
-            }
-            if (tNow > 9.0) {
-              nextVehicle = VK_HUMMER;
-              quit = true;
-            }
-          } else {
-            rig.mode = CAM_ORBIT;
-            rig.dist = 60.0;
-            rig.pitch = 0.35;
-            rig.yaw = PI + 0.1;
-          }
-          break;
-        }
-        case 23:  // switches vehicle in mid-game, as the menu does, and back out
-          if (tNow > 4.0) {
-            nextVehicle = kind == VK_XANTIA ? VK_LEOPARD : -1;
-            quit = true;
-          }
-          break;
-        case 24:  // the Activa's bomb on the road, then a fixed look at what it left
-          if (tNow > 3.0 && !repairDone) {
-            sendC.fire = true;
-            repairDone = true;
-          }
-          break;
-        case 21:  // the vehicle menu, then the settings
-          panelKind = shotCount < 1 ? PANEL_MAIN : (shotCount < 2 ? PANEL_VEHICLE : (shotCount < 3 ? PANEL_CAR : (shotCount < 4 ? PANEL_GAME : PANEL_KEYS)));
-          break;
-        case 19:
-          rig.mode = CAM_ORBIT;
-          rig.dist = 14.0;
-          rig.pitch = 0.32;
-          rig.yaw = 2.3;
-          scriptGas = view.speedKmh < treeSpeed && tNow > 2.0 ? 1.0 : 0.0;
-          scriptSteer = 0;
-          break;
-        case 18:  // straight up the road, then the bomb goes off
-          rig.mode = CAM_ORBIT;
-          rig.dist = 13.0;
-          rig.pitch = 0.2;
-          rig.yaw = 0.9;
-          scriptGas = tNow < 4.0 ? 0.5 : 0.0;
-          scriptBrake = tNow > 4.5 ? 1.0 : 0.0;
-          if (tNow > 6.0 && !repairDone) {
-            sendC.fire = true;
-            repairDone = true;
-          }
-          break;
-        case 16:  // the steering wheel from the back seat, turning
-          scriptSteer = std::sin(tNow * 1.2) * 0.7;
-          break;
-        case 10:  // close look at a tyre going flat and a dented rim
-          rig.mode = CAM_ORBIT;
-          rig.dist = 2.6;
-          rig.pitch = 0.08;
-          rig.yaw = -1.25 + 0.0;
-          G.debugWheel = true;
-          break;
-        case 8:  // burst while driving steadily, chase camera
-          scriptGas = view.speedKmh < 50 ? 0.5 : 0.12;
-          scriptSteer = clampd(-0.05 * view.carCog.y - 0.7 * std::atan2(view.carFwd.y, view.carFwd.x), -0.2, 0.2);
-          break;
-        case 5: {  // end-to-end controller test: throttle, steer, brake, reverse, repair
-          const auto ax = [&](SDL_GamepadAxis a, double v) { SDL_SetJoystickVirtualAxis(vpad, a, Sint16(v * 32767.0)); };
-          ax(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, tNow > 2 && tNow < 6 ? 1.0 : -1.0);
-          ax(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, tNow > 6 && tNow < 14 ? 1.0 : -1.0);
-          ax(SDL_GAMEPAD_AXIS_LEFTX, tNow > 4 && tNow < 5.5 ? 0.6 : 0.0);
-          SDL_SetJoystickVirtualButton(vpad, SDL_GAMEPAD_BUTTON_EAST, tNow > 15 && tNow < 15.2);
-          break;
-        }
-        default:
-          break;
+    // Scripted runs, for trying out the real thing without anyone at the controls.
+    if (scriptMode == 41 && netState == Game::NET_IN) {
+      if (phase == Duel::CHOOSING && tNow > 1.0 && !pickReady) {
+        pickItems[IT_REPAIR] = 1;
+        pickItems[IT_AR] = 2;
+        pickItems[IT_SMALL_AMMO] = 6;
+        pickReady = true;
+        panelKind = PANEL_NONE;
       }
-      // Mouse grabber test: pull the roof upwards for a moment.
-      if (scriptMode == 3 && shotCount >= 10 && shotCount < 13) {
-        grabNode = int(G.simStart.objs[0].nodeStart + 16 * 11 + 8);
-        grabTarget = view.carCog + V3{0, 0, 2.2};
-      } else if (scriptMode == 3) {
-        grabNode = -1;
-      }
-      if (scriptMode == 4 && tNow > 18.5 && !repairDone) {
-        doRepair = true;
-        repairDone = true;
+      if (inMatch) {
+        gas = 0.5;
+        if (std::fmod(tNow, 3.0) < dt) sendC.fire = true;
       }
     }
 
     {
       std::lock_guard<std::mutex> lock(G.inputMutex);
       Controls& c = G.input.c;
-      c.steer = scripted && !scriptPad ? scriptSteer : steer;
-      c.throttle = scripted && !scriptPad ? scriptGas : gas;
-      c.brake = scripted && !scriptPad ? scriptBrake : brake;
-      c.handbrake = scriptHand ? 1.0 : hb;
+      c.steer = steer;
+      c.throttle = gas;
+      c.brake = brake;
+      c.handbrake = hb;
       c.shiftUp |= sendC.shiftUp;
       c.shiftDown |= sendC.shiftDown;
       c.toggleAuto |= sendC.toggleAuto;
-      c.toggleSport |= sendC.toggleSport;
-      c.cycleHeight |= sendC.cycleHeight;
-      c.toggleIgnition |= sendC.toggleIgnition;
-      c.toggleActiva |= sendC.toggleActiva;
       c.fire |= sendC.fire;
-      c.requestGear = sendC.requestGear;
-      G.input.reset |= doReset;
-      G.input.repair |= doRepair;
-      G.input.resetWorld |= doResetWorld;
-      G.input.startPlace = startPlace;
-      G.input.paused = paused || (menuPause && !menuSpin);
-      G.input.timeScale = timeScale;
-      G.input.grabNode = grabNode;
-      G.input.grabTarget = grabTarget;
-      G.input.tuning = tuning;
-      G.input.tankReload = tankReload;
-      if (rig.tank && scriptMode != 22) {
+      c.launch |= sendC.launch;
+      c.repair |= sendC.repair;
+      if (sendC.requestGear != 99) c.requestGear = sendC.requestGear;
+      G.input.turret = u8(pickTurret);
+      G.input.ready = pickReady;
+      for (int i = 0; i < IT_COUNT; i++) G.input.items[i] = pickItems[i];
+      c.indirect = false;
+      if (view.missileLive) {
+        // The camera flies with the missile, and where it looks is where it goes.
+        const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+        c.aimPoint = view.missileP - back * 2000.0;
+      } else if (hasMark) {
+        c.aimPoint = markPoint;
+        c.indirect = true;
+      } else {
         // Whatever is under the crosshair is what the gun lays on.
         const V3 f = norm(cam.target - cam.eye);
         V3 p = cam.eye + f * 14.0;
@@ -1952,18 +1486,12 @@ static int playSession(int kind, bool openMenu) {
           p += f * 3.0;
         }
         c.aimPoint = p;
-        if (scriptMode == 39) c.aimPoint = V3{tNow < 8.0 ? -79.0 : -65.0, -13.0, 1.5};
-        if (scriptMode == 38) {
-          // Twice at the tank, once at each of the others.
-          const double x[5] = {-65.0, -65.0, -79.0, -90.0, -101.0};
-          c.aimPoint = V3{x[std::min(int(tNow / 5.0), 4)], -13.0, 1.5};
-        }
       }
-    }
-    if (doReset || doRepair) renderer.resetDamage();
-    if (doResetWorld) {
-      renderer.resetDamage();
-      renderer.clearSkidMarks();
+      if (scriptMode == 41) {
+        std::lock_guard<std::mutex> lock2(G.snapMutex);
+        c.aimPoint = G.snap.enemyCog + V3{0, 0, 1.0};
+        c.indirect = true;
+      }
     }
 
     {
@@ -2053,37 +1581,35 @@ static int playSession(int kind, bool openMenu) {
       view.objectCount = G.snap.objectCount;
       view.splitGeneration = G.snap.splitGeneration;
       view.carResets = G.snap.carResets;
-      view.parkedTrackPath[0] = G.snap.parkedTrackPath[0];
-      view.parkedTrackPath[1] = G.snap.parkedTrackPath[1];
-      view.parkedTrackLeft[0] = G.snap.parkedTrackLeft[0];
-      view.parkedTrackLeft[1] = G.snap.parkedTrackLeft[1];
+      view.tankTracks = G.snap.tankTracks;
+      view.missileLive = G.snap.missileLive;
+      view.missileP = G.snap.missileP;
+      view.missileV = G.snap.missileV;
+      view.missiles = G.snap.missiles;
+      view.repairKits = G.snap.repairKits;
+      view.repairClock = G.snap.repairClock;
       view.trackLeft[0] = G.snap.trackLeft[0];
       view.trackLeft[1] = G.snap.trackLeft[1];
-      for (int i = 0; i < 4; i++) view.parkedScorch[i] = G.snap.parkedScorch[i];
+      for (int i = 0; i < 16; i++) view.parkedScorch[i] = G.snap.parkedScorch[i];
       view.tankArmour = G.snap.tankArmour;
+      view.tankAmmo = G.snap.tankAmmo;
+      view.enemyCog = G.snap.enemyCog;
       view.tankDead = G.snap.tankDead;
       view.nodeObj = G.snap.nodeObj;
       view.paused = G.snap.paused;
       view.timeScale = G.snap.timeScale;
     }
 
-    if (scriptMode == 14) {
-      // Visual test: strokes along the left flank, as if dragged along a wall at two heights.
-      for (double z : {0.62, 0.72, 0.48})
-        for (double xd = -1.2; xd <= 1.2; xd += 0.3)
-          view.scrapes.push_back({kSpawn + V3{xd, 0.87, z}, V3{1, 0, 0}, 1.f});
-    }
-    if (lmb && grabNode >= 0) {
-      int w, h;
-      SDL_GetWindowSizeInPixels(window, &w, &h);
-      grabTarget = renderer.unprojectOnPlane(cam, w, h, mx, my, grabPlane);
-    }
-
     hud.panel.open = panelKind != 0;
     if (hud.panel.open) {
-      static const char* titles[6] = {"", "Fahrzeug wählen", "Fahrzeug-Einstellungen", "Spiel-Einstellungen", "BeanNG", "Steuerung"};
+      static const char* titles[6] = {"", "Spiel-Einstellungen", "BeanNG", "Steuerung", "Online spielen", "Ausrüstung"};
       hud.panel.title = titles[panelKind];
-      hud.panel.foot = panelKind == PANEL_MAIN || panelKind == PANEL_VEHICLE ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
+      if (panelKind == PANEL_LOADOUT) {
+        char b[64];
+        snprintf(b, sizeof b, "Ausrüstung  ·  noch %.0f s", std::max(0.0, Duel::kChooseTime - phaseClock));
+        hud.panel.title = b;
+      }
+      hud.panel.foot = panelKind == PANEL_ONLINE ? "Tippen  ·  Pfeile wählen  ·  ENTER weiter  ·  ESC zurück" : panelKind == PANEL_MAIN ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
       hud.panel.sel = panelSel;
       hud.panel.rows.clear();
       hud.panel.values.clear();
@@ -2094,117 +1620,57 @@ static int playSession(int kind, bool openMenu) {
         hud.panel.fill.push_back(it.fill);
       }
     }
-    hud.mouseSteer = mouseSteer;
+    hud.vehicleHud = inMatch;
+    hud.crosshair = inMatch && !mapOpen && !view.missileLive;
+    hud.map.open = mapOpen && panelKind == 0;
+    hud.map.hasMark = hasMark;
+    hud.map.mark = markPoint;
+    hud.map.me = view.carCog;
+    hud.map.meYaw = std::atan2(view.carFwd.y, view.carFwd.x);
     hud.cameraName = kCamNames[rig.mode];
-    feel.update(view, paused ? 0.0 : dt);
-    if (doReset || doRepair) feel.lastPlastic = 0, feel.valid = false;
+    feel.update(view, dt);
     rig.update(view, dt, cam, G.world, feel, gSet.shake);
     cam.fovY += gSet.fov * PI / 180.0;
+    if (view.missileLive) {
+      const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+      cam.eye = view.missileP + back * 9.0 + V3{0, 0, 2.0};
+      cam.target = view.missileP - back * 30.0;
+      cam.up = {0, 0, 1};
+    }
     hud.motionBlur = gSet.motionBlur;
-    hud.damageView = gSet.damageView;
+    hud.damageView = gSet.damageView && inMatch;
     hud.stats = gSet.stats;
     hud.farShadows = gSet.farShadows;
-    if (scriptMode == 10) {  // close-up of the front left wheel
-      cam.target = view.wheels[0].hub + V3{0, 0, -0.05};
-      cam.eye = cam.target + V3{0.55, 1.15, 0.12};
-    }
-    if (scriptMode == 13 || scriptMode == 14) {  // close look along the left flank
-      cam.target = view.carCog + view.carFwd * -0.2 + view.carUp * 0.05;
-      cam.eye = cam.target + view.carLeft * 2.7 + view.carFwd * 0.5 + view.carUp * 0.25;
-    }
-    if (scriptMode == 16) {
-      cam.eye = view.carCog + view.carFwd * -0.35 + view.carLeft * 0.36 + view.carUp * 0.55;
-      cam.target = view.carCog + view.carFwd * 0.70 + view.carLeft * 0.36 + view.carUp * 0.28;
-      cam.up = view.carUp;
-      cam.fovY = 45.0 * PI / 180.0;
-      cam.inside = true;
-    }
-    if (scriptMode == 17) {  // front arch, from the side
-      cam.target = view.carCog + view.carFwd * 1.25 + view.carLeft * 0.8 + view.carUp * -0.1;
-      cam.eye = cam.target + view.carLeft * 1.7 + view.carFwd * -0.05 + view.carUp * 0.1;
-      cam.up = view.carUp;
-      cam.fovY = 45.0 * PI / 180.0;
-    }
-    if (scriptMode == 22) {  // the Leopard from all round, gun straight ahead
-      const double a = 0.4 + double(shotCount) * PI / 3.0;
-      cam.target = view.carCog + V3{0, 0, 0.8};
-      cam.eye = cam.target + V3{std::cos(a) * 9.5, std::sin(a) * 9.5, 1.9};
-      cam.up = {0, 0, 1};
-      cam.fovY = 55.0 * PI / 180.0;
-    }
-    if (scriptMode == 24) {
-      const V3 at = kSpawn + V3{0, 0, 0.3};
-      cam.target = at;
-      cam.eye = at + V3{-13, 10, 8};
-      cam.up = {0, 0, 1};
-      cam.fovY = 55.0 * PI / 180.0;
-    }
-    if (scriptMode == 30) {  // circles at speed, watching the wing from behind and from the side in turn
-      cam.target = view.carCog + view.carFwd * -1.9 + view.carUp * 0.5;
-      cam.eye = cam.target + view.carFwd * -3.0 + view.carLeft * (shotCount % 2 ? 3.0 : 0.6) + view.carUp * 0.7;
-      cam.up = {0, 0, 1};
-      cam.fovY = 42.0 * PI / 180.0;
-    }
-    if (scriptMode == 31) {  // a tour of the mountain from far away
-      const double a = 0.2 + double(shotCount) * 1.05;
-      const V3 c{620, 620, 90};
-      cam.target = c;
-      cam.eye = c + V3{std::cos(a) * 760.0, std::sin(a) * 760.0, 160.0};
-      cam.up = {0, 0, 1};
-      cam.fovY = 50.0 * PI / 180.0;
-    }
-    if (scriptMode == 25 || scriptMode == 26) {  // the car from outside: walk round it, close to the ground
-      const double a = 0.55 + double(shotCount) * PI / 3.0;
-      cam.target = view.carCog + V3{0, 0, 0.1};
-      cam.eye = cam.target + V3{std::cos(a) * 5.6, std::sin(a) * 5.6, scriptMode == 25 ? 0.55 : 1.8};
-      cam.up = {0, 0, 1};
-      cam.fovY = 50.0 * PI / 180.0;
-    }
-    if (scriptMode == 27 || scriptMode == 28) {  // behind and above, to see the wing against the car
-      cam.target = view.carCog + view.carFwd * -1.8 + view.carUp * 0.6;
-      cam.eye = cam.target + view.carFwd * -4.0 + view.carLeft * 1.8 + view.carUp * 1.5;
-      cam.up = {0, 0, 1};
-      cam.fovY = 45.0 * PI / 180.0;
-    }
-    if (scriptMode == 33 && kind == VK_HUMMER) {  // down the gauntlet, from high up
-      cam.eye = V3{-30, -55, 34};
-      cam.target = V3{55, 0, 0};
+    if (scriptMode == 43) {
+      // A tour of the map, without a server: the yard, the command centre, a bridge, a barrier, and from above.
+      const World::Base& b = G.world.base(0);
+      const V3 bridge = G.world.bridges().empty() ? V3{} : G.world.bridges()[1 % G.world.bridges().size()];
+      const V3 eyes[7][2] = {
+          {b.centre + V3{55, -45, 16}, b.centre + V3{5, 0, 2}},
+          {b.centre + V3{-26 + 30, -18, 8}, b.centre + V3{-26, 0, 4}},
+          {b.slot(1) + V3{14, 12, 4}, b.slot(2) + V3{0, 0, 1.5}},
+          {bridge + V3{-70, 45, 22}, bridge},
+          {V3{380, -30, 40} + V3{-90, -60, 40}, V3{380, 0, 20}},
+          {V3{-600, -200, 420}, V3{0, 0, 10}},
+          {V3{0, -950, 620}, V3{0, 0, 10}},
+      };
+      const int i = std::min(shotCount, 6);
+      cam.eye = eyes[i][0];
+      cam.target = eyes[i][1];
       cam.up = {0, 0, 1};
       cam.fovY = 60.0 * PI / 180.0;
+      panelKind = shotCount == 7 ? int(PANEL_NONE) : int(PANEL_NONE);
+      hud.panel.open = false;
     }
-    if (scriptMode >= 35 && scriptMode <= 39) {  // the row at the start, from where it can all be seen
-      const double a = scriptMode == 35 ? double(shotCount) * 0.8 : 0.5;
-      cam.target = V3{-83, -13, 1.2};
-      cam.eye = cam.target + V3{std::sin(a) * 34.0, -std::cos(a) * 34.0 * (scriptMode == 35 && shotCount % 2 ? -1.0 : 1.0), 12.0};
-      cam.up = {0, 0, 1};
-      cam.fovY = 55.0 * PI / 180.0;
-      if (scriptMode == 35 && shotCount >= 4) {
-        // Close by, one at a time.
-        const double x[4] = {-101.0, -90.0, -79.0, -65.0};
-        cam.target = V3{x[shotCount - 4 < 4 ? shotCount - 4 : 3], -13, 1.0};
-        cam.eye = cam.target + V3{7, -8, 2.5};
-      }
-    }
-    if (scriptMode == 34) {  // the edge of the map from the ground, looking along it and out across it
-      const double x = World::kHalf - 40.0;
-      cam.eye = V3{x, shotCount % 2 ? -30.0 : 200.0, G.world.height(x, 0.0) + 2.0};
-      cam.target = cam.eye + (shotCount % 2 ? V3{300, 200, 0} : V3{200, -300, 0});
-      cam.eye.z = G.world.height(cam.eye.x, cam.eye.y) + 2.2;
-      cam.target.z = cam.eye.z - 0.5;
-      cam.up = {0, 0, 1};
-      cam.fovY = 60.0 * PI / 180.0;
-    }
-    if (scriptMode == 19) {  // a fixed view of the tree
-      const V3 t = G.world.trees()[treeIndex];
-      cam.target = t + V3{0, 0, 3.5};
-      cam.eye = t + V3{-9, -13, 4.5};
-      cam.up = {0, 0, 1};
-      cam.fovY = 62.0 * PI / 180.0;
-    }
-    if (scriptMode == 11) {  // close-up of a rear corner
-      const V3 corner = view.carCog + view.carFwd * -2.25 + view.carLeft * 0.55 + view.carUp * 0.5;
-      cam.target = corner;
-      cam.eye = corner + view.carFwd * (shotCount % 2 ? -1.0 : -1.3) + view.carLeft * (shotCount % 2 ? 1.1 : 0.2) + view.carUp * (shotCount % 3 == 2 ? 0.1 : 0.45);
+    if (scriptMode == 44) {
+      panelKind = PANEL_NONE;
+      hud.panel.open = false;
+      mapOpen = true;
+      hud.map.open = true;
+      hasMark = true;
+      markPoint = V3{500, 100, 0};
+      hud.map.hasMark = true;
+      hud.map.mark = markPoint;
     }
 
     int w, h;
@@ -2220,7 +1686,12 @@ static int playSession(int kind, bool openMenu) {
         sound->synth.render(wavSamples.data() + at, n);
       }
     }
+    const auto drawStart = std::chrono::steady_clock::now();
     if (w > 0 && h > 0) renderer.draw(view, cam, hud, w, h, dt);
+    if (getenv("BEANNG_PROFILE")) {
+      static int n = 0;
+      if (++n % 30 == 0) fprintf(stderr, "draw %.1f ms, before it %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - drawStart).count(), std::chrono::duration<double, std::milli>(drawStart - now).count());
+    }
 
     // Scripted screenshot series.
     if (!shotDir.empty()) {
@@ -2229,14 +1700,11 @@ static int playSession(int kind, bool openMenu) {
         char path[512];
         snprintf(path, sizeof path, "%s/shot_%02d.png", shotDir.c_str(), shotCount++);
         renderer.savePng(path, w, h);
-        printf("fps %.0f ", hud.fps);
-        printf("t=%.1f v=%.0f km/h x=%.1f z=%.2f steer=%+.2f gear=%d gas=%.2f br=%.2f plastic=%.1f kJ awake=%d load=%.0f%% pad=%d\n", tNow, view.speedKmh, view.carCog.x, view.carCog.z, view.steer, view.gear, view.throttle, view.brake, view.plastic / 1e3, view.awake, view.physLoad * 100, hud.gamepad);
-        const bool burst = scriptMode == 7 || scriptMode == 8;
-        nextShot += burst ? 0.0 : 1.0;
-        if (burst && nextShot < 6.0) nextShot = 6.0;
-        if (shotCount >= (burst ? 6 : (scriptMode == 9 || scriptMode == 22 || scriptMode == 25 || scriptMode == 26 || scriptMode == 31 || scriptMode == 34 ? 7 : scriptMode == 35 ? 8 : scriptMode == 38 || scriptMode == 39 ? 30 : scriptMode == 40 ? 14 : (scriptMode == 12 ? 13 : 19)))) quit = true;
-        if (scriptMode == 14 && tNow > 6.0) quit = true;
-        if (scriptMode == 13 && view.carCog.x > 93 && std::fabs(view.speedKmh) < 2) quit = true;
+        printf("fps %.0f t=%.1f v=%.0f km/h pos %.0f %.0f %.1f Phase %d Panzer %d Munition %d Zustand %.0f%%\n", hud.fps, tNow, view.speedKmh, view.carCog.x, view.carCog.y, view.carCog.z, phase, myTank, view.tankAmmo, view.tankArmour * 100.0);
+        fflush(stdout);
+        nextShot += 1.0;
+        const int enough = scriptMode == 43 ? 7 : (scriptMode == 44 ? 2 : 60);
+        if (shotCount >= enough) quit = true;
       }
     }
     if (wantShot) {
@@ -2256,41 +1724,35 @@ static int playSession(int kind, bool openMenu) {
     }
   }
   G.running = false;
-  physics.join();
-  gStartPlace = startPlace;
-  if (nextVehicle >= 0) {
-    gCarried = new CarriedWorld{G.world, G.sim, u32(kind == VK_LEOPARD ? 2 : 1), G.parked, G.parkedTank};
-  }
+  network.join();
   if (gamepad) SDL_CloseGamepad(gamepad);
   SDL_SetWindowRelativeMouseMode(window, false);
   SDL_GL_DestroyContext(ctx);
   delete game;
-  return nextVehicle;
 }
 
 int main(int argc, char** argv) {
   preferDiscreteGpu();
   loadSettings();
-  int vehicle = VK_XANTIA;
+  loadServerAddress();
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--shots") && i + 1 < argc) shotDir = argv[++i];
     if (!strcmp(argv[i], "--script") && i + 1 < argc) scriptMode = atoi(argv[++i]);
     if (!strcmp(argv[i], "--wav") && i + 1 < argc) wavPath = argv[++i];
-    if (!strcmp(argv[i], "--tree") && i + 2 < argc) {
-      treeIndex = size_t(atoi(argv[++i]));
-      treeRun = atof(argv[++i]);
-      if (i + 1 < argc && argv[i + 1][0] != '-') treeSpeed = atof(argv[++i]);
-    }
-    if (!strcmp(argv[i], "--spawn") && i + 2 < argc) {
-      gSpawnBase.x = atof(argv[++i]);
-      gSpawnBase.y = atof(argv[++i]);
-    }
-    if (!strcmp(argv[i], "--vehicle") && i + 1 < argc) {
-      i++;
-      vehicle = !strcmp(argv[i], "leopard") ? VK_LEOPARD : (!strcmp(argv[i], "one1") ? VK_ONE1 : (!strcmp(argv[i], "hummer") ? VK_HUMMER : VK_XANTIA));
+    if (!strcmp(argv[i], "--turret") && i + 1 < argc) gPickTurret = std::clamp(atoi(argv[++i]), 0, int(TK_COUNT) - 1);
+    if (!strcmp(argv[i], "--connect") && i + 1 < argc) {
+      // host:port, or just the host.
+      std::string target = argv[++i];
+      const size_t colon = target.rfind(':');
+      if (colon != std::string::npos) {
+        gServerPort = atoi(target.c_str() + colon + 1);
+        target.resize(colon);
+      }
+      gServerHost = target;
+      gConnectNow = true;
     }
     if (!strcmp(argv[i], "--help")) {
-      printf("beanng [--shots DIR --script N]\n");
+      printf("beanng [--connect HOST:PORT]\n");
       return 0;
     }
   }
@@ -2332,12 +1794,7 @@ int main(int argc, char** argv) {
   }
 
   if (gSet.fullscreen && scriptMode == 0) SDL_SetWindowFullscreen(window, true);
-  bool first = scriptMode == 0;
-  int next = vehicle;
-  while (next >= 0) {
-    next = playSession(next, first);
-    first = false;
-  }
+  runGame();
   if (scriptMode == 0) saveSettings();
   if (!wavPath.empty()) writeWav(wavPath, wavSamples);
   if (audioStream) SDL_DestroyAudioStream(audioStream);

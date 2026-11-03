@@ -467,3 +467,20 @@ void populateWorld(Sim& sim, const World& w) {
     }
   }
 }
+
+void populateArena(Sim& sim, const World& w) {
+  u32 seed = 31337;
+  for (const V3& t : w.trees()) {
+    seed = seed * 2654435761u + 17u;
+    addTree(sim, w, t, seed);
+  }
+  // A wall or a fence by each house site, for something to drive through until the houses stand.
+  int n = 0;
+  for (const V3& h : w.houseSites()) {
+    const double yaw = double(n) * 0.9;
+    const double cy = std::cos(yaw), sy = std::sin(yaw);
+    if (n % 3 == 0) addStoneWall(sim, w, h.x + cy * 8.0, h.y + sy * 8.0, yaw + PI * 0.5, 10, 3);
+    else addFence(sim, w, h.x + cy * 8.0, h.y + sy * 8.0, yaw + PI * 0.5, 5);
+    n++;
+  }
+}

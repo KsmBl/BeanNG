@@ -1,5 +1,6 @@
 // OpenGL 3.3 renderer. Reads a snapshot of node positions, never touches the live simulation.
 #pragma once
+#include <algorithm>
 #include <string>
 #include <vector>
 #include "vehicle.h"
@@ -38,11 +39,23 @@ struct Snapshot {
   u32 headNode = 0;
   u32 splitGeneration = 0;
   u32 carResets = 0;
-  std::vector<V3> parkedTrackPath[2];  // the Leopard that stands about
-  V3 parkedTrackLeft[2];
+  // Every tank on the map draws its own tracks.
+  struct TankTrack {
+    std::vector<V3> path[2];
+    V3 left[2];
+    double phase[2] = {}, speed[2] = {};
+  };
+  std::vector<TankTrack> tankTracks;
   V3 trackLeft[2];
-  float parkedScorch[4] = {};
+  float parkedScorch[16] = {};
+  // The match, as far as the instruments care.
+  bool missileLive = false;
+  V3 missileP, missileV;
+  int missiles = -1, repairKits = 0;
+  double repairClock = 0;
   double tankArmour = 1;
+  int tankAmmo = -1;
+  V3 enemyCog;
   bool tankDead = false;
   std::vector<u16> nodeObj;
   int objectCount = 0;
@@ -105,8 +118,26 @@ inline void panelLayout(int w, int h, size_t rows, float& x, float& y, float& pw
   y = (H - (float(rows) + 3.6f) * rowH) * 0.5f + 2.0f * rowH;
 }
 
+// The map on screen, for the artillery's target and for knowing where one is.
+struct UiMap {
+  bool open = false;
+  bool hasMark = false;
+  V3 mark, me;
+  double meYaw = 0;
+  bool hasEnemy = false;
+  V3 enemy;
+};
+constexpr double kMapHalf = 900.0;
+inline void mapLayout(int w, int h, float& x, float& y, float& size) {
+  size = float(std::min(w, h)) * 0.88f;
+  x = (float(w) - size) * .5f;
+  y = (float(h) - size) * .5f;
+}
+
 struct HudOptions {
   UiPanel panel;
+  UiMap map;
+  bool vehicleHud = true;
   bool crosshair = false;
   bool damageView = true;
   bool xray = false, debugBeams = false, mouseSteer = false, gamepad = false;

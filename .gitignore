@@ -3,3 +3,4 @@ build/
 assets/*.mesh
 __pycache__/
 settings.cfg
+server.cfg

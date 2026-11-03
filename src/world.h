@@ -51,7 +51,26 @@ class World {
   static constexpr int N = 2049;          // heightfield vertices per side
   static constexpr double kHalf = 1024.0;  // metres from centre to edge, 1 m grid
 
-  void build();
+  void build();        // the test ground of the benches
+  void buildArena();   // the map of the duel
+
+  // Each side's home in the duel: a levelled yard, the vehicles in a row across it, the command centre behind them.
+  struct Base {
+    V3 centre;
+    double facing = 0;  // towards the middle of the map
+    V3 computer;        // the main computer, inside the command centre
+    V3 door;
+    V3 slot(int i) const;  // where vehicle i of the row stands
+  };
+  static constexpr int kBaseSlots = 7;
+  bool isArena() const { return arena_; }
+  bool isWater(double x, double y) const;
+  const Base& base(int side) const { return bases_[side]; }
+  // Places set aside on the map: villages for houses, old wrecks for what can be taken from them.
+  const std::vector<V3>& houseSites() const { return houseSites_; }
+  const std::vector<V3>& wreckSites() const { return wreckSites_; }
+  const std::vector<V3>& bridges() const { return bridges_; }
+  static constexpr double kArenaLimit = 880.0;  // beyond this the rim is too steep for any vehicle
 
   // Physics queries (hot path).
   double height(double x, double y) const;
@@ -96,6 +115,12 @@ class World {
   std::vector<Road> roads_;
   std::vector<V3> trees_;
   bool levelled_ = false;
+  bool arena_ = false;
+  Base bases_[2];
+  std::vector<V3> houseSites_, wreckSites_, bridges_;
+  void addVisualBox(V3 c, V3 half, double yaw, float r, float g, float b);  // seen, but nothing touches it
+  void rasteriseRoads(std::vector<float>& dist, std::vector<float>& roadH, std::vector<u8>& onTrail) const;
+  void addCommandCentre(Base& b);
   std::vector<Place> places_;
   std::vector<Crater> craters_;
   std::vector<StaticBox> boxes0_;

@@ -19,3 +19,5 @@ void addBarrier(Sim& sim, const World& w, double x, double y, double yaw);
 
 // Places the full set: test gauntlet on the pad and furniture along the road.
 void populateWorld(Sim& sim, const World& w);
+// The duel's map: its trees, and the walls and fences of its villages.
+void populateArena(Sim& sim, const World& w);

@@ -1339,7 +1339,7 @@ struct Renderer::Impl {
   void updateTrack(const Snapshot& s) {
     trackVerts.clear();
     trackDriven = 0;
-    if (!s.tank && s.parkedTrackPath[0].empty()) return;
+    if (s.tankTracks.empty()) return;
     if (!trackVao) {
       glGenVertexArrays(1, &trackVao);
       glGenBuffers(1, &trackVbo);
@@ -1349,10 +1349,10 @@ struct Renderer::Impl {
     }
     const MatDef& md = kMats[MM_TRACK];
     constexpr double kPitch = 0.19, kThick = 0.05, kHalfW = 0.275;
-    for (int side = 0; side < 4; side++) {
-      // The driven tank's two tracks, then the two of the one that stands about.
-      if (side == 2) trackDriven = trackVerts.size();
-      const std::vector<V3>& path = side < 2 ? s.trackPath[side] : s.parkedTrackPath[side - 2];
+    for (size_t t2 = 0; t2 < s.tankTracks.size() * 2; t2++) {
+      const Snapshot::TankTrack& tt = s.tankTracks[t2 / 2];
+      const int side = int(t2 & 1);
+      const std::vector<V3>& path = tt.path[side];
       const size_t n = path.size();
       if (n < 3) continue;
       double total = 0;
@@ -1361,10 +1361,10 @@ struct Renderer::Impl {
       const double step = total / links;
       // Above a few m/s single links only strobe at 60 frames a second, as a wagon wheel does. To the
       // eye a fast track is a smooth blur, so here the links close up into one belt.
-      const double closeUp = side < 2 ? clampd((std::fabs(s.trackSpeed[side]) - 2.5) / 3.0, 0, 1) : 0.0;
+      const double closeUp = clampd((std::fabs(tt.speed[side]) - 2.5) / 3.0, 0, 1);
       const double kLen = lerpd(step * 0.86, step * 1.04, closeUp);
       // In the blur the pattern stands still instead of crawling or running backwards.
-      double along = closeUp >= 1.0 ? 0.0 : std::fmod(side < 2 ? s.trackPhase[side] : 0.0, step);
+      double along = closeUp >= 1.0 ? 0.0 : std::fmod(tt.phase[side], step);
       if (along < 0) along += step;
       size_t seg = 0;
       double segStart = 0;
@@ -1380,7 +1380,7 @@ struct Renderer::Impl {
         const double L = std::max(len(b - a), 1e-6);
         const V3 t = (b - a) / L;
         const V3 c = a + t * (d - segStart);
-        const V3 w = side < 2 ? s.trackLeft[side] : s.parkedTrackLeft[side - 2];
+        const V3 w = tt.left[side];
         const V3 o = norm(cross(t, w));  // out of the track's plane
         const V3 lf = t * (kLen * 0.5), wd = w * kHalfW, up = o * (kThick * 0.5);
         const V3 corner[8] = {c - lf - wd - up, c + lf - wd - up, c + lf + wd - up, c - lf + wd - up, c - lf - wd + up, c + lf - wd + up, c + lf + wd + up, c - lf + wd + up};
@@ -2172,6 +2172,7 @@ struct Renderer::Impl {
   }
   enum { IC_WATER = 0xE000, IC_OIL, IC_FUEL, IC_WRENCH, IC_ENGINE, IC_TYRE, IC_WARN, IC_BRAKE, IC_SKID, IC_CAMERA, IC_CLOCK, IC_SHELL, IC_TURRET, IC_PAD };
 
+  std::vector<Col> mapColors;
   void buildHud(const Snapshot& s, const HudOptions& o, int w, int h) {
     hudVerts.clear();
     const float W = float(w), H = float(h);
@@ -2181,6 +2182,7 @@ struct Renderer::Impl {
     const Col amber{1.f, .72f, .18f, 1}, red{1.f, .27f, .22f, 1}, green{.36f, .86f, .50f, 1}, teal{.35f, .85f, .95f, 1};
     const float kPi2 = 6.28319f;
 
+    if (o.vehicleHud) {
     // ---- Lower right: the round instrument, revs around the speed.
     {
       const float R = 118 * u, cx = W - R - 26 * u, cy = H - R - 26 * u;
@@ -2245,12 +2247,18 @@ struct Renderer::Impl {
         row(IC_FUEL, "Tank", float(s.fuel / (s.conventional ? 80.0 : 55.0)), s.fuel < 6 ? red : green, buf);
       } else {
         if (s.reload > 0) snprintf(buf, sizeof buf, "%.1f s", s.reload);
+        else if (s.tankAmmo >= 0) snprintf(buf, sizeof buf, s.tankAmmo ? "bereit · %d" : "leer", s.tankAmmo);
         else snprintf(buf, sizeof buf, "bereit");
         row(IC_SHELL, "Kanone", s.reload > 0 ? float(1.0 - s.reload / std::max(s.reloadTime, 0.1)) : 1.f, s.reload > 0 ? amber : green, buf);
         snprintf(buf, sizeof buf, "%+.0f°", s.gunPitch * 57.3);
         row(IC_TURRET, "Rohr", float((s.gunPitch * 57.3 + 9.0) / 29.0), teal, buf);
-        snprintf(buf, sizeof buf, "%.0f L", s.fuel);
-        row(IC_FUEL, "Tank", float(s.fuel / 1160.0), green, buf);
+        if (s.missiles > 0 || s.missileLive) {
+          snprintf(buf, sizeof buf, s.missileLive ? "%d + fliegt" : "%d", s.missiles);
+          row(IC_SHELL, "Raketen", float(s.missiles) / 8.f, teal, buf);
+        } else {
+          snprintf(buf, sizeof buf, "%.0f L", s.fuel);
+          row(IC_FUEL, "Tank", float(s.fuel / 1160.0), green, buf);
+        }
         if (s.tankDead) snprintf(buf, sizeof buf, "zerstört");
         else snprintf(buf, sizeof buf, "%.0f %%", s.tankArmour * 100.0);
         row(IC_ENGINE, "Zustand", float(s.tankArmour), s.tankDead || s.tankArmour < 0.34 ? red : (s.tankArmour < 0.67 ? amber : green), buf);
@@ -2312,6 +2320,7 @@ struct Renderer::Impl {
       }
     }
 
+    }
     // ---- Upper left: warnings, as pills with a symbol.
     {
       float ty = 20 * u;
@@ -2425,6 +2434,75 @@ struct Renderer::Impl {
         arc(sx, sy, 14 * u, 2.f * u, 0, kPi2, {1, 1, 1, .22f});
         arc(sx, sy, 14 * u, 2.f * u, -1.5708f, -1.5708f + kPi2 * fr, ready ? green : amber);
       }
+    }
+
+    // ---- The map.
+    if (o.map.open) {
+      float mx0, my0, ms;
+      mapLayout(w, h, mx0, my0, ms);
+      constexpr int kCells = 110;
+      if (mapColors.empty()) {
+        mapColors.resize(size_t(kCells) * kCells);
+        for (int iy = 0; iy < kCells; iy++)
+          for (int ix = 0; ix < kCells; ix++) {
+            const double wx = -kMapHalf + (ix + .5) * 2.0 * kMapHalf / kCells, wy = -kMapHalf + (iy + .5) * 2.0 * kMapHalf / kCells;
+            const double z = world->height(wx, wy);
+            const double shade = 0.8 + 0.2 * clampd((world->height(wx - 10, wy + 10) - z) * 0.12 + 0.5, 0, 1) * 2.0 - 0.2;
+            Col c{.30f, .43f, .24f, 1};
+            const u8 sf = world->surfaceAt(wx, wy);
+            if (world->isWater(wx, wy)) c = {.16f, .34f, .44f, 1};
+            else if (sf == SURF_CONCRETE) c = {.52f, .52f, .5f, 1};
+            else if (sf == SURF_ROCK) c = {.44f, .42f, .39f, 1};
+            else if (sf == SURF_SNOW) c = {.85f, .87f, .9f, 1};
+            else c = {.30f + float(z) * .0012f, .43f + float(z) * .0006f, .24f, 1};
+            c.r *= float(shade);
+            c.g *= float(shade);
+            c.b *= float(shade);
+            mapColors[size_t(iy) * kCells + ix] = c;
+          }
+      }
+      const auto toMap = [&](double x, double y, float& sx, float& sy) {
+        sx = mx0 + float((x + kMapHalf) / (2.0 * kMapHalf)) * ms;
+        sy = my0 + float((kMapHalf - y) / (2.0 * kMapHalf)) * ms;
+      };
+      const float cell = ms / kCells;
+      for (int iy = 0; iy < kCells; iy++)
+        for (int ix = 0; ix < kCells; ix++) rrect(mx0 + ix * cell, my0 + ms - (iy + 1) * cell, cell + .5f, cell + .5f, 0, mapColors[size_t(iy) * kCells + ix]);
+      for (const Road& road : world->roads())
+        for (size_t i = 0; i < road.pts.size(); i += 12) {
+          float sx, sy;
+          toMap(road.pts[i].x, road.pts[i].y, sx, sy);
+          rrect(sx - 1 * u, sy - 1 * u, 2 * u, 2 * u, 0, road.trail ? Col{.62f, .54f, .38f, 1} : Col{.86f, .84f, .78f, 1});
+        }
+      for (const StaticBox& b : world->boxes()) {
+        // What stands in the way of a gun: barriers, bridges and the command centres.
+        if (b.surface != SURF_CONCRETE) continue;
+        float sx, sy;
+        toMap(b.c.x, b.c.y, sx, sy);
+        const float bw = std::max(float((std::fabs(b.ax[0].x) * b.h.x + std::fabs(b.ax[1].x) * b.h.y) * 2.0 / (2.0 * kMapHalf)) * ms, 2 * u), bh = std::max(float((std::fabs(b.ax[0].y) * b.h.x + std::fabs(b.ax[1].y) * b.h.y) * 2.0 / (2.0 * kMapHalf)) * ms, 2 * u);
+        rrect(sx - bw * .5f, sy - bh * .5f, bw, bh, 0, {.12f, .12f, .13f, 1});
+      }
+      const auto dot2 = [&](V3 p, float r, Col c) {
+        float sx, sy;
+        toMap(p.x, p.y, sx, sy);
+        circle(sx, sy, r, c);
+      };
+      for (int side = 0; side < 2; side++) dot2(world->base(side).centre, 7 * u, {.95f, .95f, .95f, .9f});
+      if (o.map.hasEnemy) dot2(o.map.enemy, 7 * u, {.95f, .25f, .2f, 1});
+      if (o.map.hasMark) {
+        float sx, sy;
+        toMap(o.map.mark.x, o.map.mark.y, sx, sy);
+        arc(sx, sy, 11 * u, 2.f * u, 0, kPi2, {1, .55f, .15f, 1});
+        rrect(sx - 16 * u, sy - .75f * u, 32 * u, 1.5f * u, 0, {1, .55f, .15f, 1});
+        rrect(sx - .75f * u, sy - 16 * u, 1.5f * u, 32 * u, 0, {1, .55f, .15f, 1});
+      }
+      dot2(o.map.me, 6 * u, {.35f, .85f, .95f, 1});
+      {
+        float sx, sy;
+        toMap(o.map.me.x, o.map.me.y, sx, sy);
+        rrect(sx + float(std::cos(o.map.meYaw)) * 9 * u - 2 * u, sy - float(std::sin(o.map.meYaw)) * 9 * u - 2 * u, 4 * u, 4 * u, 2 * u, {.35f, .85f, .95f, 1});
+      }
+      label(mx0 + 14 * u, my0 + ms - 18 * u, "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }
 
     // ---- Lists: the vehicle menu and the settings.
@@ -2776,7 +2854,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
       size_t first = 0;
       for (size_t k = 0; k < D.parkedLists.size(); k++) {
         const size_t count = D.parkedLists[k][0].size();
-        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 4 ? s.parkedScorch[k] : 0.f);
+        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 16 ? s.parkedScorch[k] : 0.f);
         if (count) glDrawElements(GL_TRIANGLES, GLsizei(count), GL_UNSIGNED_INT, (void*)(first * sizeof(u32)));
         first += count;
       }

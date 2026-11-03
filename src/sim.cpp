@@ -382,12 +382,20 @@ void Sim::explode(V3 c, double impulse, double radius) {
   lastBlast = c;
   lastBlastRadius = radius;
   lastBlastImpulse = impulse;
+  if (logBlasts) blastLog.push_back({c, impulse, radius});
   if (craterWorld) {
     // Only what goes off close to the ground digs into it.
     const double above = c.z - craterWorld->height(c.x, c.y);
     if (above < 3.0) craterWorld->addCrater(c.x, c.y, radius * 0.18, radius * 0.05 * (1.0 - std::max(above, 0.0) / 3.0));
     // Boulders crack apart.
-    for (const auto& hit : craterWorld->breakRocks(c, radius * 0.42)) event(EV_ROCK, hit.first, V3{}, float(hit.second));
+    // On a player's machine the server has already sent the dust.
+    for (const auto& hit : craterWorld->breakRocks(c, radius * 0.42))
+      if (!mirror) event(EV_ROCK, hit.first, V3{}, float(hit.second));
+  }
+  if (mirror) {
+    blasts.clear();
+    event(EV_BLAST, c, V3{}, float(radius));
+    return;
   }
   // Stones of a wall right beside it are simply pulverised: their nodes leave the world, deep under the ground,
   // and what shows is the dust and rubble. Further out the blast only throws them.

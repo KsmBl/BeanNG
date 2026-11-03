@@ -1,7 +1,6 @@
 # BeanNG
 
-Soft-Body-Fahrsimulation im Stil von BeamNG, in C++20 mit SDL3 und OpenGL 3.3.
-Fahrzeug: Citroën Xantia Activa (3.0 V6).
+Online-Panzerduell mit Soft-Body-Physik im Stil von BeamNG, in C++20 mit SDL3 und OpenGL 3.3.
 
 ## Fahrzeuge
 
@@ -38,32 +37,38 @@ Auf Laptops mit zwei GPUs nutzt das Spiel automatisch die dedizierte Karte. Mit 
 
 Abhängigkeiten: SDL3, libepoxy, CMake, ein C++20-Compiler, Python 3 mit numpy, scipy und shapely.
 
+## Online-Duell
+
+Zwei Spieler auf einer eigenen Karte: je eine Basis im Westen und im Osten, dazwischen Dörfer, ein Fluss mit drei Brücken und zwei hohe Sperrmauern, über die nur die Artillerie schießen kann. Die Physik läuft allein auf dem Server, die Spieler schicken nur ihre Eingaben.
+
+```sh
+./run.sh --help                 # baut auch den Server
+build/beanng-server 27015       # auf dem Rechner, den beide erreichen können
+```
+
+Im Spiel: **Online spielen**, Adresse und Port eintragen, **Verbinden**. Oder direkt mit `./run.sh --connect 1.2.3.4:27015`. Der Port ist UDP und muss von außen erreichbar sein. Sind beide da, wählt jeder Turm und Ausrüstung (20 Slots, 60 Sekunden Zeit). Wessen Panzer zerstört wird, verliert; nach 8 Sekunden geht es von vorn los.
+
+| Turm | Waffe | Besonderheit |
+|---|---|---|
+| 105-mm-Kanone | 8 Granaten | fünf Volltreffer bis zur Zerstörung |
+| Leichte Kanone | 120 Schuss, schnell | leicht, wenig Schaden pro Schuss |
+| Artillerie | 8 Granaten, Steilfeuer | schießt auf den Punkt auf der Karte, schwer und langsam |
+| Lenkraketen | 8 Raketen und ein schwaches Geschütz | Rakete wird mit der Maus über die ganze Karte geflogen |
+
 ## Steuerung
 
 | Aktion | Tastatur/Maus | Controller |
 |---|---|---|
-| Gas / Bremse | W / S oder Pfeiltasten | RT / LT |
-| Lenken | A / D oder Pfeiltasten, M: Mauslenkung | linker Stick |
-| Rückwärts (Automatik) | S im Stand halten | LT im Stand halten |
-| Handbremse | Leertaste | A |
-| Gang runter / hoch | Q / E | LB / RB |
-| Automatik / manuell | T | – |
-| Hydractive Sport | G | X |
-| Niveau | H | Steuerkreuz hoch |
-| Activa an/aus | V | Steuerkreuz runter |
-| Zündung | I | – |
-| Kamera | C, rechte Maustaste ziehen, Mausrad | Y, rechter Stick |
-| Auto packen | linke Maustaste ziehen | – |
-| Reparieren / Neustart | F5 / R | B / Back |
-| Pause / Zeitlupe | P / `[` `]` | Start / Steuerkreuz links, rechts |
-| Beam-Ansicht, Röntgen-Ansicht, Hilfe, Screenshot | F2, F3, F1, F12 | – |
-
-## Teststrecke
-
-Du startest bei x = -90 und blickst auf die Hindernisspur: Schilder, Holzzaun, Pylonen,
-Steinmauer, Leitplanke, Betonblöcke, Endwand. Daneben liegen Crashwand (Spur y = -30),
-Sprungschanze (y = 40, ab etwa 80 km/h), Elchtest-Gasse (y = -60), Kopfsteinpflaster, Waschbrett
-und Bordsteine (y = 70 bis 100) sowie die Landstraße rund um die Fläche.
+| Gas / Bremse, im Stand rückwärts | W / S | RT / LT |
+| Lenken | A / D | linker Stick |
+| Bremse | Leertaste | A |
+| Gang runter / hoch, Automatik | Q / E, T | LB / RB |
+| Zielen, Kamera | Maus, C, Mausrad | rechter Stick, Y |
+| Feuer | linke Maustaste, F | – |
+| Rakete starten, Feuer sprengt sie | G | – |
+| Reparaturset, im Stand | R | – |
+| Karte: Klick markiert das Ziel | K | – |
+| Screenshot | F12 | – |
 
 ## Aufbau
 

@@ -22,7 +22,10 @@ struct Controls {
   bool toggleActiva = false;
   int requestGear = 99;  // 99 = no request; used by the automatic's drive/reverse selection
   bool fire = false;     // edge-triggered: detonates the car bomb, or fires the tank's gun
-  V3 aimPoint;           // where the turret should point, world space
+  V3 aimPoint;           // where the turret should point, world space; a guided missile flies towards it
+  bool indirect = false;  // lob the shell over whatever is in between: artillery firing at a point on the map
+  bool launch = false;    // edge-triggered: sends off a guided missile
+  bool repair = false;    // edge-triggered: starts on the repair kit
 };
 
 // What makes one car's powertrain and tyres different from another's. Defaults: the Xantia.

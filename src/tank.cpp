@@ -42,8 +42,28 @@ void tetWeights(const V3 n[4], V3 point, double w[4]) {
 }
 }  // namespace
 
-Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig) {
+const TurretSpec& turretSpec(TurretKind k) {
+  //                       name               mesh                       mass power  gun   recoil  force   reload ammo speed  blast  radius life  pitch      yaw pitch missiles
+  static const TurretSpec table[TK_COUNT] = {
+      {"105-mm-Kanone", "assets/leopard.mesh", 1.00, 1.00, 5.45, 0.34, 200e3, 4.0, 8, 1100.0, 2200.0, 15.0, 8.0, -9, 20, 40, 22, 0},
+      {"Leichte Kanone", "assets/leopard_light.mesh", 0.40, 1.00, 2.90, 0.06, 12e3, 0.3, 120, 1300.0, 170.0, 4.0, 6.0, -8, 35, 70, 45, 0},
+      // Slow enough that the whole map lies inside the high arc: half a minute in the air from end to end.
+      {"Artillerie", "assets/leopard_arty.mesh", 1.80, 0.70, 6.40, 0.50, 260e3, 12.0, 8, 160.0, 5000.0, 26.0, 60.0, -3, 78, 14, 10, 0},
+      {"Lenkraketen", "assets/leopard_missile.mesh", 0.85, 0.95, 2.20, 0.05, 8e3, 3.0, 20, 700.0, 260.0, 5.0, 6.0, -6, 20, 40, 30, 8},
+  };
+  return table[k];
+}
+
+Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind) {
   Tank T;
+  T.kind = kind;
+  const TurretSpec& spec = turretSpec(kind);
+  T.reloadTime = spec.reload;
+  T.missiles = spec.missiles;
+  // A lighter turret has softer beams as well: the fastest thing in it sets the limit on the time step.
+  const double stiff = std::min(spec.massScale, 1.0);
+  const Mat mCastT{mCast.k * stiff, mCast.c * stiff, 0, 0, 0, 0, 0};
+  const Mat mGunT{mGun.k * stiff, mGun.c * stiff, 0, 0, 0, 0, 0};
   std::vector<u32> hull;
   T.hullObj = sim.beginObj(OBJ_CAR, true);
 
@@ -169,7 +189,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig) {
   const double tcx = 2.90, tcz = 1.34;  // the ring's centre, design coordinates
   T.turretAxis = V3{kNoseX - tcx, 0, tcz};
   auto addTurretNode = [&](double f, double l, double z, double m) {
-    const u32 n = sim.addNode(spawn + T.turretAxis + V3{f, l, z}, m, NF_COLLIDE, 0.5f);
+    const u32 n = sim.addNode(spawn + T.turretAxis + V3{f, l, z}, m * spec.massScale, NF_COLLIDE, 0.5f);
     T.turretNodes.push_back(n);
     T.turretRest.push_back(V3{f, l, z});
     return n;
@@ -188,7 +208,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig) {
   tn.push_back(addTurretNode(-1.72, -0.48, 0.40, 300));
   tn.push_back(addTurretNode(-1.55, 0, 0.84, 240));
   for (size_t a = 0; a < tn.size(); a++)
-    for (size_t b = a + 1; b < tn.size(); b++) sim.addBeam(tn[a], tn[b], mCast);
+    for (size_t b = a + 1; b < tn.size(); b++) sim.addBeam(tn[a], tn[b], mCastT);
   const V3 tCentre = spawn + T.turretAxis + V3{0, 0, 0.45};
   auto tface = [&](u32 a, u32 b, u32 c) {
     const V3 n = cross(sim.pos[b] - sim.pos[a], sim.pos[c] - sim.pos[a]);
@@ -206,7 +226,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig) {
   T.trunnion = V3{0.92, 0, 0.56};
   auto addGunNode = [&](double f, double l, double z, double m) {
     const V3 local{f, l, z};
-    const u32 n = sim.addNode(spawn + T.turretAxis + T.trunnion + local, m, 0, 0.5f);
+    const u32 n = sim.addNode(spawn + T.turretAxis + T.trunnion + local, m * spec.massScale, 0, 0.5f);
     T.gunNodes.push_back(n);
     T.gunRest.push_back(local);
     return n;
@@ -216,10 +236,10 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig) {
   const u32 g2 = addGunNode(-0.8, 0, 0.16, 280);
   const u32 g3 = addGunNode(0.45, 0.10, 0, 400);
   const u32 g4 = addGunNode(0.45, -0.10, 0, 400);
-  const u32 g5 = addGunNode(5.45, 0, 0, 180);
+  const u32 g5 = addGunNode(spec.gunLen, 0, 0, 180);
   const u32 gn[6] = {g0, g1, g2, g3, g4, g5};
   for (int a = 0; a < 6; a++)
-    for (int b = a + 1; b < 6; b++) sim.addBeam(gn[a], gn[b], mGun);
+    for (int b = a + 1; b < 6; b++) sim.addBeam(gn[a], gn[b], mGunT);
   sim.endObj();
 
   double total = 0;
@@ -227,7 +247,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig) {
     const Obj& o = sim.objs[oi];
     for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) total += sim.mass[i];
   }
-  printf("Leopard 1: %.1f t\n", total / 1000.0);
+  printf("Leopard 1, %s: %.1f t\n", spec.name, total / 1000.0);
 
   if (rig) {
     rig->noseX = kNoseX;
@@ -331,19 +351,34 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   const double cy0 = std::cos(turretYaw), sy0 = std::sin(turretYaw);
   const V3 tF = fwd * cy0 + left * sy0, tL = left * cy0 - fwd * sy0;
   const V3 ring = hullToWorld(ringLocal);
+  ring_ = ring;
+  const TurretSpec& sp_ = spec();
   const V3 tp0 = ring + tF * trunnion.x + tL * trunnion.y + up * trunnion.z;
-  if (len2(in.aimPoint) > 1.0) {
+  // While a missile is in the air the same hand is flying it.
+  if (len2(in.aimPoint) > 1.0 && !missileLive) {
     const V3 to = in.aimPoint - tp0;
-    const double wantYaw = std::atan2(dot(to, left), dot(to, fwd));
+    // The arc that lands on the point, worked out against the true vertical: on a high lob a hull leaning by one
+    // degree would otherwise put the shell a hundred metres off. High over the top if asked for and possible.
+    const double v2 = sp_.shellSpeed * sp_.shellSpeed, range = std::max(std::hypot(to.x, to.y), 1.0), rise = to.z;
+    const double disc = v2 * v2 - 9.81 * (9.81 * range * range + 2.0 * rise * v2);
+    double solved = 45.0 * PI / 180.0;  // out of reach: as far as it will go
+    if (disc >= 0) {
+      const double high = std::atan2(v2 + std::sqrt(disc), 9.81 * range), low = std::atan2(v2 - std::sqrt(disc), 9.81 * range);
+      solved = in.indirect && high <= sp_.pitchMax * PI / 180.0 ? high : low;
+    }
+    const V3 away = V3{to.x, to.y, 0} / range;
+    const V3 lay = away * std::cos(solved) + V3{0, 0, 1} * std::sin(solved);
+    const double wantYaw = std::atan2(dot(lay, left), dot(lay, fwd));
     double e = wantYaw - turretYaw;
     while (e > PI) e -= 2 * PI;
     while (e < -PI) e += 2 * PI;
-    constexpr double kYawRate = 40.0 * PI / 180.0, kPitchRate = 22.0 * PI / 180.0;
+    // A damaged ring turns slowly, and one that is gone does not turn at all.
+    const double kYawRate = sp_.yawRate * PI / 180.0 * (mod[TM_RING] <= 0 ? 0.0 : lerpd(0.4, 1.0, mod[TM_RING]));
+    const double kPitchRate = sp_.pitchRate * PI / 180.0;
     turretYaw += clampd(e * 6.0, -kYawRate, kYawRate) * dt;
     if (turretYaw > PI) turretYaw -= 2 * PI;
     if (turretYaw < -PI) turretYaw += 2 * PI;
-    const double horiz = dot(to, tF);
-    const double wantPitch = clampd(std::atan2(dot(to, up), std::max(horiz, 1.0)), -9.0 * PI / 180.0, 20.0 * PI / 180.0);
+    const double wantPitch = clampd(std::asin(clampd(dot(lay, up), -1, 1)), sp_.pitchMin * PI / 180.0, sp_.pitchMax * PI / 180.0);
     gunPitch += clampd((wantPitch - gunPitch) * 6.0, -kPitchRate, kPitchRate) * dt;
   }
 
@@ -352,13 +387,13 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   const double cp = std::cos(gunPitch), sp = std::sin(gunPitch);
   const V3 gF = eF * cp + up * sp, gU = up * cp - eF * sp;
   const V3 trun = ring + eF * trunnion.x + eL * trunnion.y + up * trunnion.z;
-  muzzle = trun + gF * 5.45;
+  muzzle = trun + gF * sp_.gunLen;
   gunDir = gF;
   sight = ring + eF * 0.25 + eL * 0.45 + up * 1.15;
 
   // ---- The gun runs back in its cradle and returns.
   recoilTime += dt;
-  recoil = recoilTime < 0.05 ? 0.34 * recoilTime / 0.05 : 0.34 * std::max(0.0, 1.0 - (recoilTime - 0.05) / 0.9);
+  recoil = recoilTime < 0.05 ? sp_.recoilLen * recoilTime / 0.05 : sp_.recoilLen * std::max(0.0, 1.0 - (recoilTime - 0.05) / 0.9);
 
   // ---- The turret ring: every node pulled to its place, the reaction into the hull.
   constexpr double kOmega = 95.0, kZeta = 0.9;
@@ -379,19 +414,23 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
 
   // ---- Fire.
   reload -= dt;
-  if (in.fire && reload <= 0) {
-    reload = reloadTime;
+  if (in.fire && missileLive) {
+    sim.explode(missileP, 5000.0, 20.0);
+    missileLive = false;
+  } else if (in.fire && reload <= 0 && ammo != 0 && mod[TM_GUN] > 0) {
+    if (ammo > 0) ammo--;
+    reload = reloadTime * lerpd(1.5, 1.0, mod[TM_GUN]);
     recoilTime = 0;
     shotsFired += 1;
     Shell s;
     s.p = muzzle + gF * 0.2;
-    s.v = gF * 1100.0 + vCog;
+    s.v = gF * sp_.shellSpeed + vCog;
     shells.push_back(s);
     sim.event(EV_MUZZLE, muzzle, gF, 1.f);
   }
   if (recoilTime < 0.09) {
     // The recoil system stretches the blow of about 18 kN s out over 90 milliseconds.
-    addToHull(sim, trun, gF * -200e3);
+    addToHull(sim, trun, gF * -sp_.recoilForce);
   }
 }
 
@@ -439,7 +478,9 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   if (throttleAct < 0.03 && absV < 0.7) Tconv = 0;
   const double speedRatio = engineOmega > 1.0 ? clampd(inputOmega / engineOmega, 0, 1) : 0;
   const double multiply = lerpd(2.2, 1.0, std::min(speedRatio / 0.85, 1.0));
-  const double Te = loadNow * engineTorque(rpmNow) - 80.0 - engineOmega * 0.8;
+  // What is left of the engine, and a heavy turret takes its share of what it can do.
+  const double power = spec().powerScale * (mod[TM_ENGINE] <= 0 ? 0.0 : lerpd(0.35, 1.0, mod[TM_ENGINE]));
+  const double Te = loadNow * engineTorque(rpmNow) * power - 80.0 - engineOmega * 0.8;
   engineOmega += (Te - Tconv) * dt / 7.0;
   engineOmega = clampd(engineOmega, 0.0, 270.0);
 
@@ -532,30 +573,16 @@ void Tank::updateShells(Sim& sim, double dt) {
     if (sim.world->contact(s.p, c)) {
       hit = true;
     } else {
-      // Anything but the tank itself, within half a metre of this step's path.
-      const V3 d = s.p - a;
-      const double dl2 = std::max(len2(d), 1e-9);
-      const u32 firstOther = sim.objs[turretObj].nodeStart + sim.objs[turretObj].nodeCount;
-      const u32 n = u32(sim.pos.size());
-      for (u32 k = firstOther; k < n; k++) {
-        const V3 r = sim.pos[k] - a;
-        const double t = clampd(dot(r, d) / dl2, 0, 1);
-        const V3 q = r - d * t;
-        if (len2(q) < 0.25) {
-          hit = true;
-          at = a + d * t;
-          break;
-        }
-      }
+      hit = pathHit(sim, a, s.p, true, at);
     }
     if (hit) {
-      // A high-explosive round, about the 2.3 kg of filler of a 105 mm HESH shell.
-      sim.explode(at, 2200.0, 15.0);
+      // The 105 mm: a high-explosive round, about the 2.3 kg of filler of a HESH shell.
+      sim.explode(at, spec().blastImpulse, spec().blastRadius);
       shells[i] = shells.back();
       shells.pop_back();
       continue;
     }
-    if (s.age > 8.0) {
+    if (s.age > spec().shellLife) {
       shells[i] = shells.back();
       shells.pop_back();
       continue;
@@ -563,6 +590,87 @@ void Tank::updateShells(Sim& sim, double dt) {
     if ((sim.stepCount & 7) == 0) sim.event(EV_TRACER, s.p, s.v, 1.f);
     i++;
   }
+}
+
+// Anything within half a metre of the way from a to b; the tank's own nodes only if it asks for them. Hull and
+// turret lie side by side in the arrays, and whatever else is there can be hit whether built before or after.
+bool Tank::pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at) const {
+  const V3 d = b - a;
+  const double dl2 = std::max(len2(d), 1e-9);
+  const u32 ownFirst = sim.objs[hullObj].nodeStart;
+  const u32 ownEnd = sim.objs[turretObj].nodeStart + sim.objs[turretObj].nodeCount;
+  const u32 n = u32(sim.pos.size());
+  for (u32 k = 0; k < n; k++) {
+    if (skipOwn && k == ownFirst) {
+      k = ownEnd - 1;
+      continue;
+    }
+    const V3 r = sim.pos[k] - a;
+    const double t = clampd(dot(r, d) / dl2, 0, 1);
+    if (len2(r - d * t) < 0.25) {
+      at = a + d * t;
+      return true;
+    }
+  }
+  return false;
+}
+
+void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
+  if (in.launch && !missileLive && missiles > 0) {
+    missiles--;
+    missileLive = true;
+    missileAge = 0;
+    const double cy = std::cos(turretYaw), sy = std::sin(turretYaw);
+    const V3 eF = fwd * cy + left * sy;
+    missileP = ring_ + up * 1.4;
+    missileV = eF * 25.0 + up * 18.0 + vCog;
+    sim.event(EV_MUZZLE, missileP, up, 0.6f);
+  }
+  if (!missileLive) return;
+  missileAge += dt;
+  // It climbs clear of the launcher first; after that it goes where it is told, as fast as its fins will turn it.
+  constexpr double kCruise = 95.0, kAccel = 40.0, kTurn = 1.15;
+  const double sp = std::max(len(missileV), 1.0);
+  V3 dir = missileV / sp;
+  if (missileAge > 0.8 && len2(in.aimPoint) > 1.0) {
+    const V3 want = norm(in.aimPoint - missileP);
+    const double cosA = clampd(dot(dir, want), -1, 1);
+    const double angle = std::acos(cosA);
+    if (angle > 1e-5) dir = norm(dir + (want - dir * cosA) * (std::min(kTurn * dt, angle) / std::max(std::sin(angle), 1e-3)));
+  }
+  const double newSpeed = std::min(sp + kAccel * dt, kCruise);
+  missileV = dir * newSpeed;
+  const V3 from = missileP;
+  missileP += missileV * dt;
+  if ((sim.stepCount & 7) == 0) sim.event(EV_TRACER, missileP, missileV, 1.f);
+  bool hit = false;
+  V3 at = missileP;
+  Contact c;
+  if (sim.world->contact(missileP, c)) hit = true;
+  else hit = pathHit(sim, from, missileP, missileAge < 1.5, at);
+  // Enough fuel for the whole map and back; then it comes down wherever it is.
+  if (hit || missileAge > 60.0) {
+    sim.explode(at, 5000.0, 20.0);
+    missileLive = false;
+  }
+}
+
+void Tank::updateRepair(Sim& sim, const Controls& in, double dt) {
+  if (in.repair && repairClock <= 0 && repairKits > 0 && std::fabs(speed) < 1.0) repairClock = kRepairTime;
+  if (repairClock <= 0) return;
+  // Only a tank that stands still can be worked on.
+  if (std::fabs(speed) > 1.5) {
+    repairClock = 0;
+    return;
+  }
+  repairClock -= dt;
+  if (repairClock > 0) return;
+  repairClock = 0;
+  repairKits--;
+  for (double& m : mod) m = std::max(m, 0.6);
+  trackOff[0] = trackOff[1] = false;
+  damage = std::max(0.0, damage - 0.15);
+  sim.event(EV_SPARK, cog + up * 1.5, up, 0.5f);
 }
 
 void Tank::throwTrack(Sim& sim, int side) {
@@ -598,6 +706,33 @@ void Tank::takeHit(Sim& sim, double hit, V3 at) {
   if (damage >= 1.0) destroy(sim);
 }
 
+// Every part has its place on the tank and suffers by how close the blast was to it.
+void Tank::damageModules(Sim& sim, V3 c, double impulse) {
+  const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
+  const auto toSegment = [&](V3 a, V3 b) {
+    const V3 d = b - a;
+    const double t = clampd(dot(c - a, d) / std::max(len2(d), 1e-9), 0, 1);
+    return len(a + d * t - c);
+  };
+  const V3 trackL = O + left * 1.35 - up * 0.75, trackR = O - left * 1.35 - up * 0.75;
+  const double dist[TM_COUNT] = {
+      len(O - fwd * 2.6 - up * 0.25 - c),
+      len(ring_ + up * 0.05 - c),
+      toSegment(ring_ + up * 0.56, muzzle),
+      len(ring_ - up * 0.35 - c),
+      toSegment(trackL + fwd * 2.7, trackL - fwd * 3.5),
+      toSegment(trackR + fwd * 2.7, trackR - fwd * 3.5),
+  };
+  static constexpr double kReach[TM_COUNT] = {1.8, 1.7, 0.9, 1.2, 1.3, 1.3};
+  for (int i = 0; i < TM_COUNT; i++) {
+    if (dist[i] >= kReach[i]) continue;
+    mod[i] = std::max(0.0, mod[i] - (impulse / 2200.0) * 1.1 * (1.0 - dist[i] / kReach[i]));
+  }
+  if (mod[TM_TRACK_L] <= 0) throwTrack(sim, 0);
+  if (mod[TM_TRACK_R] <= 0) throwTrack(sim, 1);
+  if (mod[TM_AMMO] <= 0) destroy(sim);
+}
+
 void Tank::checkDamage(Sim& sim, double dt) {
   // A blast: what counts is how close it got.
   if (sim.blastCount != blastSeen_) {
@@ -608,14 +743,11 @@ void Tank::checkDamage(Sim& sim, double dt) {
       for (u32 n : sim.objs[oi].nodes) dmin = std::min(dmin, len(sim.pos[n] - c));
     if (sim.lastBlastRadius > 0 && dmin < sim.lastBlastRadius) {
       const double reach = std::min(1.3 / std::max(dmin, 0.3), 1.0);
-      const double hit = 0.55 * (sim.lastBlastImpulse / 2200.0) * reach * reach;
-      if (hit > 0.01) {
-        // Low down beside it, it is the running gear that takes it.
-        const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
-        const double ground = sim.world->height(c.x, c.y);
-        if (hit >= 0.15 && c.z - ground < 1.1) throwTrack(sim, dot(c - O, left) > 0 ? 0 : 1);
-        takeHit(sim, hit, c);
-      }
+      // The armour takes several: five direct hits from the 105 mm. What gets hit on the outside is another matter.
+      const double hit = 0.20 * (sim.lastBlastImpulse / 2200.0) * reach * reach;
+      if (reach > 0.2) damageModules(sim, c, sim.lastBlastImpulse);
+      if (destroyed) return;
+      if (hit > 0.003) takeHit(sim, hit, c);
     }
   }
   // A crash: a sudden change in speed, against what the hull was doing a moment ago.
@@ -640,6 +772,7 @@ void Tank::destroy(Sim& sim) {
   burnTime = 0;
   engineOmega = 0;
   loadNow = throttleAct = 0;
+  missileLive = false;
   throwTrack(sim, 0);
   throwTrack(sim, 1);
   const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
@@ -696,11 +829,21 @@ void Tank::update(Sim& sim, const Controls& in, double dt) {
   tickFire(sim, dt);
   if (destroyed) {
     updateShells(sim, dt);
+    updateMissile(sim, in, dt);
     return;
   }
   checkDamage(sim, dt);
   if (destroyed) return;
   dampHull(sim, dt);
+  updateWheelLift(sim, dt);
+  updateTurret(sim, in, dt);
+  updateDrive(sim, in, dt);
+  updateShells(sim, dt);
+  updateMissile(sim, in, dt);
+  updateRepair(sim, in, dt);
+}
+
+void Tank::updateWheelLift(const Sim& sim, double dt) {
   // The reference nodes do not lie level on the hull: this is what was straight up when it was built.
   const V3 restFwd = norm(sim.rest[refFL] + sim.rest[refFR] - sim.rest[refRL] - sim.rest[refRR]);
   const V3 restUp = norm(cross(restFwd, sim.rest[refFL] + sim.rest[refRL] - sim.rest[refFR] - sim.rest[refRR]));
@@ -711,9 +854,88 @@ void Tank::update(Sim& sim, const Controls& in, double dt) {
     const double lift = clampd(dot(hub - sim.pos[idler[wheels[i].left ? 0 : 1][0]], levelUp) - (kWheelR - kIdlerZ), -0.22, 0.30);
     wheelLift_[i] += (lift - wheelLift_[i]) * clampd(dt / 0.02, 0, 1);
   }
-  updateTurret(sim, in, dt);
-  updateDrive(sim, in, dt);
-  updateShells(sim, dt);
+}
+
+Tank::NetState Tank::netState() const {
+  NetState n;
+  n.vel = vCog;
+  n.muzzle = muzzle;
+  n.gunDir = gunDir;
+  n.sight = sight;
+  n.turretYaw = float(turretYaw);
+  n.gunPitch = float(gunPitch);
+  n.reload = float(reload);
+  n.reloadTime = float(reloadTime);
+  n.damage = float(damage);
+  n.burnTime = float(burnTime);
+  for (int i = 0; i < 2; i++) {
+    n.trackPhase[i] = float(trackPhase[i]);
+    n.trackOmega[i] = float(trackOmega[i]);
+    n.trackOff[i] = trackOff[i];
+  }
+  n.engineOmega = float(engineOmega);
+  n.throttle = float(throttleAct);
+  n.brake = float(brakeAct);
+  n.steer = float(steerAct);
+  n.speed = float(speed);
+  n.latAcc = float(latAcc);
+  n.lonAcc = float(lonAcc);
+  n.fuel = float(fuel);
+  n.load = float(loadNow);
+  n.gear = gear;
+  n.ammo = ammo;
+  n.destroyed = destroyed;
+  n.autoBox = autoBox;
+  for (int i = 0; i < TM_COUNT; i++) n.mod[i] = float(mod[i]);
+  n.missiles = missiles;
+  n.repairKits = repairKits;
+  n.repairClock = float(repairClock);
+  n.missileLive = missileLive;
+  n.missileP = missileP;
+  n.missileV = missileV;
+  return n;
+}
+
+void Tank::applyNetState(Sim& sim, const NetState& n, double dt) {
+  updateFrame(sim, dt);
+  updateWheelLift(sim, dt);
+  vCog = n.vel;
+  muzzle = n.muzzle;
+  gunDir = n.gunDir;
+  sight = n.sight;
+  turretYaw = n.turretYaw;
+  gunPitch = n.gunPitch;
+  reload = n.reload;
+  reloadTime = n.reloadTime;
+  damage = n.damage;
+  burnTime = n.burnTime;
+  for (int i = 0; i < 2; i++) {
+    trackPhase[i] = n.trackPhase[i];
+    trackOmega[i] = n.trackOmega[i];
+    // Either it just came off, and this frame sees where it lies; or a new match has put it back.
+    if (n.trackOff[i]) throwTrack(sim, i);
+    else trackOff[i] = false;
+  }
+  engineOmega = n.engineOmega;
+  throttleAct = n.throttle;
+  brakeAct = n.brake;
+  steerAct = n.steer;
+  speed = n.speed;
+  latAcc = n.latAcc;
+  lonAcc = n.lonAcc;
+  fuel = n.fuel;
+  loadNow = n.load;
+  gear = n.gear;
+  ammo = n.ammo;
+  destroyed = n.destroyed;
+  autoBox = n.autoBox;
+  for (int i = 0; i < TM_COUNT; i++) mod[i] = n.mod[i];
+  missiles = n.missiles;
+  repairKits = n.repairKits;
+  repairClock = n.repairClock;
+  missileLive = n.missileLive;
+  missileP = n.missileP;
+  missileV = n.missileV;
 }
 
 void Tank::shiftIndices(long dn, long, long dobj) {

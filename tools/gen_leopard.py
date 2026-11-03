@@ -177,6 +177,8 @@ for k in range(4):
     box(H, "track", (0.34, -0.55 + k * 0.30, 0.97), (0.34, 0.26, 0.02))
 H.finish("hull")
 
+VARIANT = sys.argv[2] if len(sys.argv) > 2 else "std"  # std, light, arty or missile: the hull stays the same
+
 # ---- Turret. Local frame of the hull at yaw zero: ring centre at design (2.90, 0, 1.34).
 T = Group("turret")
 C = np.array([2.90, 0.0, 1.34])
@@ -196,6 +198,7 @@ def turret_outline(scale_x, scale_y, bustle):
     return fn
 
 
+TS = {"std": 1.0, "light": 0.74, "arty": 1.0, "missile": 0.86}[VARIANT]  # how big the cast body is
 sections = [
     (C[2] + 0.04, turret_outline(0.98, 0.98, 0.1)),
     (C[2] + 0.14, turret_outline(1.02, 1.02, 0.28)),
@@ -205,51 +208,89 @@ sections = [
     (C[2] + 0.84, turret_outline(0.68, 0.68, 0.32)),
     (C[2] + 0.90, turret_outline(0.56, 0.56, 0.26)),
 ]
-loft(T, "olive", sections)
-# Optical rangefinder heads, sticking out of both turret sides: the mark of a Leopard 1.
-for sg in (-1, 1):
-    cyl(T, "olive2", (C[0] + 0.05, sg * 1.05, C[2] + 0.56), (C[0] + 0.05, sg * 1.44, C[2] + 0.53), 0.09, 20)
-    cyl(T, "dark", (C[0] + 0.05, sg * 1.44, C[2] + 0.53), (C[0] + 0.05, sg * 1.47, C[2] + 0.53), 0.065, 20)
-    # Smoke dischargers, in fours.
-    for k in range(4):
-        y = sg * (0.95 + 0.09 * k)
-        cyl(T, "dark", (C[0] - 0.12, y, C[2] + 0.72), (C[0] - 0.42, y + sg * 0.05, C[2] + 0.80), 0.042, 12)
-# Commander's cupola with periscopes, loader's hatch and his MG3.
-cc = C + [0.45, -0.46, 0.88]
-lathe(T, "olive2", cc, cc + [0, 0, 0.26], [(0.02, 0.36), (0.55, 0.33), (0.98, 0.30)], 36)
-for k in range(8):
-    q = 2 * math.pi * k / 8
-    box(T, "glass", cc + [0.33 * math.cos(q), 0.33 * math.sin(q), 0.14], (0.07, 0.07, 0.04))
-lc = C + [0.45, 0.48, 0.88]
-cyl(T, "olive2", lc, lc + [0, 0, 0.09], 0.34, 32)
-cyl(T, "dark", lc + [-0.25, 0.0, 0.22], lc + [-1.02, 0.0, 0.24], 0.013, 10)
-cyl(T, "dark", lc + [-0.25, 0.0, 0.09], lc + [-0.25, 0.0, 0.22], 0.016, 10)
-box(T, "dark", lc + [-0.12, 0.0, 0.24], (0.34, 0.06, 0.09))
-# Gunner's sight head and radio antennas.
-box(T, "olive2", C + [-0.32, -0.46, 0.92], (0.30, 0.28, 0.17))
-for y in (0.25, -0.25):
-    cyl(T, "dark", C + [0.95, y, 0.74], C + [1.00, y, 2.65], 0.007, 6)
-# Stowage basket at the rear of the bustle.
-for y in (-0.65, -0.3, 0.05, 0.4, 0.7):
-    box(T, "dark", C + [1.92, y, 0.56], (0.34, 0.018, 0.26))
-box(T, "dark", C + [2.08, 0.03, 0.56], (0.018, 1.42, 0.26))
-box(T, "olive2", C + [1.86, 0.03, 0.56], (0.22, 1.2, 0.2))
+if VARIANT == "arty":
+    # A tall plated casemate: this gun does not hide, it stands well back and lobs.
+    solid(T, "olive", [C + [x, y, z] for x in (-1.25, 1.9) for y in (-1.3, 1.3) for z in (0.04, 1.35)])
+    box(T, "olive2", C + [0.3, 0, 1.42], (2.6, 2.2, 0.14))
+    for sg in (-1, 1):
+        box(T, "olive2", C + [0.3, sg * 1.33, 0.7], (2.6, 0.06, 1.0))
+else:
+    h = 0.9 if VARIANT != "light" else 0.62
+    loft(T, "olive", [(C[2] + z * h / 0.9, lambda a, fn=fn: (C[0] + (fn(a)[0] - C[0]) * TS, fn(a)[1] * TS)) for z, fn in [(q[0] - C[2], q[1]) for q in sections]])
+if VARIANT == "missile":
+    # Eight launch tubes on the turret's flanks, four and four, tilted up.
+    for sg in (-1, 1):
+        for row in range(2):
+            for col in range(2):
+                y = sg * (1.12 + col * 0.34)
+                z = 0.40 + row * 0.34
+                cyl(T, "olive2", C + [1.0, y, z], C + [-1.1, y, z + 0.28], 0.15, 16)
+                cyl(T, "dark", C + [-1.1, y, z + 0.28], C + [-1.12, y, z + 0.283], 0.12, 16)
+        box(T, "olive", C + [0.0, sg * 1.0, 0.42], (0.9, 0.22, 0.34))
+if VARIANT == "std":
+    # Optical rangefinder heads, sticking out of both turret sides: the mark of a Leopard 1.
+    for sg in (-1, 1):
+        cyl(T, "olive2", (C[0] + 0.05, sg * 1.05, C[2] + 0.56), (C[0] + 0.05, sg * 1.44, C[2] + 0.53), 0.09, 20)
+        cyl(T, "dark", (C[0] + 0.05, sg * 1.44, C[2] + 0.53), (C[0] + 0.05, sg * 1.47, C[2] + 0.53), 0.065, 20)
+        # Smoke dischargers, in fours.
+        for k in range(4):
+            y = sg * (0.95 + 0.09 * k)
+            cyl(T, "dark", (C[0] - 0.12, y, C[2] + 0.72), (C[0] - 0.42, y + sg * 0.05, C[2] + 0.80), 0.042, 12)
+    # Commander's cupola with periscopes, loader's hatch and his MG3.
+    cc = C + [0.45, -0.46, 0.88]
+    lathe(T, "olive2", cc, cc + [0, 0, 0.26], [(0.02, 0.36), (0.55, 0.33), (0.98, 0.30)], 36)
+    for k in range(8):
+        q = 2 * math.pi * k / 8
+        box(T, "glass", cc + [0.33 * math.cos(q), 0.33 * math.sin(q), 0.14], (0.07, 0.07, 0.04))
+    lc = C + [0.45, 0.48, 0.88]
+    cyl(T, "olive2", lc, lc + [0, 0, 0.09], 0.34, 32)
+    cyl(T, "dark", lc + [-0.25, 0.0, 0.22], lc + [-1.02, 0.0, 0.24], 0.013, 10)
+    cyl(T, "dark", lc + [-0.25, 0.0, 0.09], lc + [-0.25, 0.0, 0.22], 0.016, 10)
+    box(T, "dark", lc + [-0.12, 0.0, 0.24], (0.34, 0.06, 0.09))
+    # Gunner's sight head and radio antennas.
+    box(T, "olive2", C + [-0.32, -0.46, 0.92], (0.30, 0.28, 0.17))
+    for y in (0.25, -0.25):
+        cyl(T, "dark", C + [0.95, y, 0.74], C + [1.00, y, 2.65], 0.007, 6)
+    # Stowage basket at the rear of the bustle.
+    for y in (-0.65, -0.3, 0.05, 0.4, 0.7):
+        box(T, "dark", C + [1.92, y, 0.56], (0.34, 0.018, 0.26))
+    box(T, "dark", C + [2.08, 0.03, 0.56], (0.018, 1.42, 0.26))
+    box(T, "olive2", C + [1.86, 0.03, 0.56], (0.22, 1.2, 0.2))
+else:
+    # A hatch and a pair of antennas are what they all have.
+    lc = C + [0.35, 0.40, (0.62 if VARIANT == "light" else (1.49 if VARIANT == "arty" else 0.78))]
+    cyl(T, "olive2", lc, lc + [0, 0, 0.09], 0.30, 28)
+    for y in (0.25, -0.25):
+        cyl(T, "dark", lc + [0.6, y - 0.40, 0.0], lc + [0.65, y - 0.40, 1.8], 0.007, 6)
 T.finish("turret")
 
 # ---- Gun: L7 105 mm in its mantlet. Trunnions at 0.92 ahead of the ring centre, 0.56 above it.
 G = Group("gun")
 tr = C + [-0.92, 0.0, 0.56]
 # The barrel runs in -x, the direction the turret faces at yaw zero.
-muzzle = tr + [-5.45, 0, 0]
-lathe(G, "olive", tr + [0.08, 0, 0], tr + [-0.74, 0, 0], [(0.02, 0.27), (0.45, 0.26), (0.80, 0.20), (0.98, 0.16)], 36)
-barrel = [
-    (0.01, 0.105), (0.34, 0.098), (0.35, 0.115), (0.42, 0.115), (0.43, 0.092),
-    (0.60, 0.088), (0.61, 0.145), (0.72, 0.145), (0.73, 0.085), (0.92, 0.078),
-    (0.925, 0.092), (0.995, 0.09),
-]
-lathe(G, "olive2", tr + [-0.6, 0, 0], muzzle, barrel, 28)
-cyl(G, "black", muzzle, muzzle + [-0.003, 0, 0], 0.055, 20)
-box(G, "olive2", tr + [-0.42, 0.34, 0.12], (0.3, 0.1, 0.1))
+GL = {"std": 5.45, "light": 2.90, "arty": 6.40, "missile": 2.20}[VARIANT]
+muzzle = tr + [-GL, 0, 0]
+if VARIANT == "std":
+    lathe(G, "olive", tr + [0.08, 0, 0], tr + [-0.74, 0, 0], [(0.02, 0.27), (0.45, 0.26), (0.80, 0.20), (0.98, 0.16)], 36)
+    barrel = [
+        (0.01, 0.105), (0.34, 0.098), (0.35, 0.115), (0.42, 0.115), (0.43, 0.092),
+        (0.60, 0.088), (0.61, 0.145), (0.72, 0.145), (0.73, 0.085), (0.92, 0.078),
+        (0.925, 0.092), (0.995, 0.09),
+    ]
+    lathe(G, "olive2", tr + [-0.6, 0, 0], muzzle, barrel, 28)
+    cyl(G, "black", muzzle, muzzle + [-0.003, 0, 0], 0.055, 20)
+    box(G, "olive2", tr + [-0.42, 0.34, 0.12], (0.3, 0.1, 0.1))
+
+elif VARIANT == "arty":
+    lathe(G, "olive", tr + [0.3, 0, 0], tr + [-1.0, 0, 0], [(0.02, 0.36), (0.5, 0.34), (0.98, 0.24)], 32)
+    lathe(G, "olive2", tr + [-0.8, 0, 0], muzzle, [(0.01, 0.17), (0.5, 0.15), (0.91, 0.13), (0.915, 0.2), (0.995, 0.2)], 28)
+    cyl(G, "black", muzzle, muzzle + [-0.003, 0, 0], 0.1, 20)
+else:
+    # A small gun in a small mount, thin as a broom handle beside the 105.
+    lathe(G, "olive", tr + [0.05, 0, 0], tr + [-0.5, 0, 0], [(0.02, 0.17), (0.98, 0.1)], 24)
+    r = 0.045 if VARIANT == "light" else 0.038
+    cyl(G, "olive2", tr + [-0.4, 0, 0], muzzle, r, 16)
+    cyl(G, "dark", muzzle + [0.25, 0, 0], muzzle, r * 1.5, 16)
 G.finish("gun")
 
 

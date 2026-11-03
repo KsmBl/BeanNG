@@ -17,11 +17,15 @@ find_package(Threads REQUIRED)
 
 # Physics core: no graphics dependency, so the headless test bench links only this.
 add_library(core STATIC
-  src/sim.cpp src/world.cpp src/vehicle.cpp src/xantia.cpp src/one1.cpp src/hummer.cpp src/tank.cpp src/props.cpp src/carmesh.cpp)
+  src/sim.cpp src/world.cpp src/vehicle.cpp src/xantia.cpp src/one1.cpp src/hummer.cpp src/tank.cpp src/props.cpp src/carmesh.cpp src/net.cpp src/duel.cpp)
 target_link_libraries(core PUBLIC Threads::Threads)
 
 add_executable(beanng-test src/tests.cpp)
 target_link_libraries(beanng-test PRIVATE core)
+
+# The duel server: physics and network, nothing else, so it runs on a machine without a screen.
+add_executable(beanng-server src/server.cpp)
+target_link_libraries(beanng-server PRIVATE core)
 
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
   add_executable(beanng src/main.cpp src/render.cpp src/audio.cpp)

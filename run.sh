@@ -7,7 +7,7 @@ cd "$(dirname "$(readlink -f "$0")")"
 if [[ ! -f build/build.ninja ]]; then
   cmake -S . -B build -G Ninja
 fi
-cmake --build build --target beanng
+cmake --build build --target beanng beanng-server
 
 # The car mesh is generated, and only rebuilt when the generator has changed.
 if [[ ! -f assets/xantia.mesh || tools/gen_xantia.py -nt assets/xantia.mesh ]]; then
@@ -18,6 +18,11 @@ fi
 if [[ ! -f assets/leopard.mesh || tools/gen_leopard.py -nt assets/leopard.mesh ]]; then
   python3 tools/gen_leopard.py assets/leopard.mesh
 fi
+for v in light arty missile; do
+  if [[ ! -f assets/leopard_$v.mesh || tools/gen_leopard.py -nt assets/leopard_$v.mesh ]]; then
+    python3 tools/gen_leopard.py assets/leopard_$v.mesh $v
+  fi
+done
 
 if [[ ! -f assets/one1.mesh || tools/gen_one1.py -nt assets/one1.mesh ]]; then
   python3 tools/gen_one1.py assets/one1.mesh

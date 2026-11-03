@@ -36,11 +36,54 @@ double baseTerrain(double x, double y) {
 constexpr double kPadR = 165.0;
 double padBlend(double x, double y) { return smoothstepd(kPadR, kPadR + 70.0, std::hypot(x, y)); }
 
+
+// ---- The duel's map. Two kilometres across, a valley running west to east between the bases, hills to hide behind,
+// and a rim of mountains all round that nothing can climb. The land is the same beyond the grid's edge.
+constexpr double kBaseX = 730.0, kYardHalfX = 42.0, kYardHalfY = 62.0, kYardZ = 16.0;
+// The river runs north to south through the middle, in a gully too steep to climb out of: the bridges are the only
+// way across. Far out it dies away into the rim.
+constexpr double kWaterZ = 2.5, kBedZ = -1.5, kRiverHalf = 13.0, kBankOuter = 21.0;
+double riverX(double y) { return 34.0 * std::sin(y / 170.0 + 0.6) + 12.0 * std::sin(y / 61.0); }
+double riverCut(double x, double y) {
+  // 1 in the water, 0 up on the land.
+  return (1.0 - smoothstepd(kRiverHalf, kBankOuter, std::fabs(x - riverX(y)))) * (1.0 - smoothstepd(790.0, 840.0, std::fabs(y)));
+}
+// Concrete barriers either side of the middle, higher than any gun can look over: past them only artillery reaches,
+// or whoever goes round by one of the gates.
+constexpr double kBarrierX = 380.0, kBarrierHigh = 10.0, kBarrierSection = 16.0;
+double yardBlend(double x, double y) {
+  // 1 on the yards, falling off to nothing over the ground around them.
+  double out = 0;
+  for (double bx : {-kBaseX, kBaseX}) {
+    const double dx = std::max(std::fabs(x - bx) - kYardHalfX, 0.0), dy = std::max(std::fabs(y) - kYardHalfY, 0.0);
+    out = std::max(out, 1.0 - smoothstepd(0.0, 45.0, std::hypot(dx, dy)));
+  }
+  return out;
+}
+double arenaTerrain(double x, double y) {
+  // Long rolling ground, and a few real hills between the bases.
+  double h = 19.0 + 13.0 * vnoise(x / 260.0 + 3.1, y / 260.0 - 7.7) + 4.5 * vnoise(x / 90.0, y / 90.0 + 11.0) + 0.5 * vnoise(x / 23.0 + 5.0, y / 23.0);
+  static constexpr double kHills[6][4] = {{-210, 300, 190, 46}, {240, -310, 210, 52}, {-40, -60, 130, 22}, {430, 330, 170, 38}, {-470, -330, 180, 40}, {60, 560, 200, 34}};
+  for (const auto& hill : kHills) {
+    const double d = std::hypot(x - hill[0], y - hill[1]) / hill[2];
+    if (d < 1.0) h += hill[3] * std::pow(1.0 - d * d, 2.0);
+  }
+  // The rim. It starts gently, so that it looks like land, and ends far too steep to drive.
+  const double out = std::max({std::fabs(x), std::fabs(y)}) - 820.0;
+  if (out > 0) {
+    const double t = out / 200.0;
+    h += 300.0 * t * t * (1.0 + 0.15 * vnoise(x / 70.0, y / 70.0));
+  }
+  const double yard = yardBlend(x, y);
+  return lerpd(h, kYardZ, yard);
+}
+
 constexpr double kPaveX0 = -130, kPaveX1 = -60, kPaveY0 = 70, kPaveY1 = 82;
 constexpr double kWashX0 = -130, kWashX1 = -60, kWashY0 = 90, kWashY1 = 102;
 }  // namespace
 
 double World::micro(double x, double y) const {
+  if (arena_) return 0.0;
   // Rough test surfaces are analytic because they are far finer than the 1 m grid.
   if (y > kPaveY0 && y < kPaveY1 && x > kPaveX0 && x < kPaveX1) {
     // Belgian pave: irregular cobbles about 30 cm across, up to 2.5 cm high.
@@ -54,7 +97,10 @@ double World::micro(double x, double y) const {
   return 0.0;
 }
 
-double World::outerHeight(double x, double y) const { return levelled_ ? 0.0 : baseTerrain(x, y); }
+double World::outerHeight(double x, double y) const {
+  if (arena_) return arenaTerrain(x, y);
+  return levelled_ ? 0.0 : baseTerrain(x, y);
+}
 
 double World::height(double x, double y) const {
   // The grid ends at exactly these hills, so the two meet without a step.
@@ -252,6 +298,54 @@ void World::addBox(V3 c, V3 half, double yaw, double pitch, u8 surf, float r, fl
     for (int x = x0; x <= x1; x++) boxGrid_[size_t(y) * kBoxGrid + x].push_back(id);
 }
 
+void World::rasteriseRoads(std::vector<float>& dist, std::vector<float>& roadH, std::vector<u8>& onTrail) const {
+  const auto wx = [](int i) { return double(i) - kHalf; };
+  for (const Road& r : roads_) {
+    const size_t cnt = r.pts.size();
+    const size_t segs = r.closed ? cnt : cnt - 1;
+    for (size_t s = 0; s < segs; s++) {
+      const RoadPoint& a = r.pts[s];
+      const RoadPoint& b = r.pts[(s + 1) % cnt];
+      const double margin = r.halfWidth + 16.0;
+      const int x0 = std::max(0, int(std::min(a.x, b.x) - margin + kHalf));
+      const int x1 = std::min(N - 1, int(std::max(a.x, b.x) + margin + kHalf));
+      const int y0 = std::max(0, int(std::min(a.y, b.y) - margin + kHalf));
+      const int y1 = std::min(N - 1, int(std::max(a.y, b.y) + margin + kHalf));
+      const double dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+      for (int iy = y0; iy <= y1; iy++)
+        for (int ix = x0; ix <= x1; ix++) {
+          const double px = wx(ix) - a.x, py = wx(iy) - a.y;
+          const double t = clampd((px * dx + py * dy) / l2, 0, 1);
+          const double d = std::hypot(px - t * dx, py - t * dy) - r.halfWidth;
+          const size_t id = size_t(iy) * N + ix;
+          if (d < dist[id]) {
+            dist[id] = float(d);
+            // Signed distance to the left of the road's centre line, levelling off beyond the shoulder.
+            const double tl = std::sqrt(l2);
+            const double side = clampd((-dy * px + dx * py) / tl, -(r.halfWidth + 2.0), r.halfWidth + 2.0);
+            roadH[id] = float(lerpd(a.z, b.z, t) + side * lerpd(a.bank, b.bank, t));
+            onTrail[id] = r.trail ? 1 : 0;
+          }
+        }
+    }
+  }
+}
+
+void World::addVisualBox(V3 c, V3 half, double yaw, float r, float g, float b) {
+  StaticBox s;
+  s.c = c;
+  s.h = half;
+  s.surface = SURF_GRAVEL;
+  s.r = r;
+  s.g = g;
+  s.b = b;
+  const double cy = std::cos(yaw), sy = std::sin(yaw);
+  s.ax[0] = {cy, sy, 0};
+  s.ax[1] = {-sy, cy, 0};
+  s.ax[2] = {0, 0, 1};
+  boxes_.push_back(s);
+}
+
 void World::build() {
   h_.assign(size_t(N) * N, 0.f);
   surf_.assign(size_t(N) * N, SURF_GRASS);
@@ -419,35 +513,7 @@ void World::build() {
 
   // Rasterise roads into the distance/height fields.
   std::vector<u8> onTrail(size_t(N) * N, 0);
-  for (const Road& r : roads_) {
-    const size_t cnt = r.pts.size();
-    const size_t segs = r.closed ? cnt : cnt - 1;
-    for (size_t s = 0; s < segs; s++) {
-      const RoadPoint& a = r.pts[s];
-      const RoadPoint& b = r.pts[(s + 1) % cnt];
-      const double margin = r.halfWidth + 16.0;
-      const int x0 = std::max(0, int(std::min(a.x, b.x) - margin + kHalf));
-      const int x1 = std::min(N - 1, int(std::max(a.x, b.x) + margin + kHalf));
-      const int y0 = std::max(0, int(std::min(a.y, b.y) - margin + kHalf));
-      const int y1 = std::min(N - 1, int(std::max(a.y, b.y) + margin + kHalf));
-      const double dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-      for (int iy = y0; iy <= y1; iy++)
-        for (int ix = x0; ix <= x1; ix++) {
-          const double px = wx(ix) - a.x, py = wx(iy) - a.y;
-          const double t = clampd((px * dx + py * dy) / l2, 0, 1);
-          const double d = std::hypot(px - t * dx, py - t * dy) - r.halfWidth;
-          const size_t id = size_t(iy) * N + ix;
-          if (d < dist[id]) {
-            dist[id] = float(d);
-            // Signed distance to the left of the road's centre line, levelling off beyond the shoulder.
-            const double tl = std::sqrt(l2);
-            const double side = clampd((-dy * px + dx * py) / tl, -(r.halfWidth + 2.0), r.halfWidth + 2.0);
-            roadH[id] = float(lerpd(a.z, b.z, t) + side * lerpd(a.bank, b.bank, t));
-            onTrail[id] = r.trail ? 1 : 0;
-          }
-        }
-    }
-  }
+  rasteriseRoads(dist, roadH, onTrail);
 
   for (int iy = 0; iy < N; iy++)
     for (int ix = 0; ix < N; ix++) {
@@ -556,4 +622,245 @@ void World::build() {
     addBox({-40.0 + i * 9.0, 70, 0.03}, {0.25, 4.5, 0.09}, 0, 0, SURF_CONCRETE, .8f, .75f, .2f);
   for (int i = 0; i < 14; i++)
     addBox({-40.0 + i * 3.0, 95, 0.0}, {1.45, 0.25, 0.11}, 0, 0, SURF_CONCRETE, .75f, .75f, .75f);
+}
+
+V3 World::Base::slot(int i) const {
+  // Across the yard in a row, the guns towards the enemy, wide enough apart to drive out between them.
+  const double along = (double(i) - double(kBaseSlots - 1) * 0.5) * 13.0;
+  const double cx = std::cos(facing), sx = std::sin(facing);
+  return centre + V3{cx * 14.0 - sx * along, sx * 14.0 + cx * along, 0};
+}
+
+void World::addCommandCentre(Base& b) {
+  // Metre-thick concrete, with one way in: the door on the side towards the yard. What is drawn is what stops you.
+  const double cx = std::cos(b.facing), sx = std::sin(b.facing);
+  const V3 at = V3{b.centre.x, b.centre.y, 0} - V3{cx, sx, 0} * 26.0;
+  const auto place = [&](double fwd, double side, double z, double hf, double hs, double hz, float r, float g, float bl) {
+    addBox(at + V3{cx * fwd - sx * side, sx * fwd + cx * side, z}, {hf, hs, hz}, b.facing, 0, SURF_CONCRETE, r, g, bl);
+  };
+  constexpr double kF = 9.0, kS = 13.0, kH = 3.2, kWall = 0.6, kDoor = 1.6;
+  constexpr float wr = .46f, wg = .47f, wb = .45f;
+  place(0, 0, kYardZ + 2 * kH + kWall, kF + kWall, kS + kWall, kWall, wr * 0.9f, wg * 0.9f, wb * 0.9f);  // the roof
+  place(-kF, 0, kYardZ + kH, kWall, kS, kH, wr, wg, wb);                                                // the back
+  place(0, kS, kYardZ + kH, kF, kWall, kH, wr, wg, wb);                                                 // the sides
+  place(0, -kS, kYardZ + kH, kF, kWall, kH, wr, wg, wb);
+  const double piece = (kS - kDoor) * 0.5;
+  place(kF, kDoor + piece, kYardZ + kH, kWall, piece, kH, wr, wg, wb);                                  // the front, either side of the door
+  place(kF, -kDoor - piece, kYardZ + kH, kWall, piece, kH, wr, wg, wb);
+  place(kF, 0, kYardZ + kH + 2.4, kWall, kDoor, kH - 2.4, wr, wg, wb);                                  // above the door
+  // The main computer against the back wall, and the blast walls that keep a shell from flying straight in.
+  place(-kF + 1.4, 0, kYardZ + 1.0, 0.7, 2.6, 1.0, .18f, .2f, .24f);
+  place(kF + 5.0, 0, kYardZ + 1.4, 0.5, 4.0, 1.4, wr, wg, wb);
+  b.door = at + V3{cx, sx, 0} * (kF + 2.0) + V3{0, 0, kYardZ};
+  b.computer = at - V3{cx, sx, 0} * (kF - 2.6) + V3{0, 0, kYardZ + 1.0};
+}
+
+bool World::isWater(double x, double y) const {
+  return arena_ && std::fabs(x - riverX(y)) < kRiverHalf + 3.0 && std::fabs(y) < 830.0 && height(x, y) < kWaterZ;
+}
+
+void World::buildArena() {
+  arena_ = true;
+  h_.assign(size_t(N) * N, 0.f);
+  surf_.assign(size_t(N) * N, SURF_GRASS);
+  boxGrid_.assign(size_t(kBoxGrid) * kBoxGrid, {});
+  boxes_.reserve(62000);
+  std::vector<float> dist(size_t(N) * N, 1e9f), roadH(size_t(N) * N, 0.f);
+  std::vector<u8> onTrail(size_t(N) * N, 0);
+  const auto wx = [](int i) { return double(i) - kHalf; };
+
+  bases_[0].centre = {-kBaseX, 0, kYardZ};
+  bases_[0].facing = 0.0;
+  bases_[1].centre = {kBaseX, 0, kYardZ};
+  bases_[1].facing = PI;
+
+  // The ways between the bases: one road down the valley through the middle, and a dirt track round each flank.
+  const auto way = [&](std::initializer_list<std::pair<double, double>> via, double halfWidth, bool trail) {
+    const std::vector<std::pair<double, double>> v(via);
+    std::vector<RoadPoint> pts;
+    // A smooth line through the points (Catmull-Rom), about a metre and a half to the step.
+    for (size_t i = 0; i + 1 < v.size(); i++) {
+      const auto& p0 = v[i > 0 ? i - 1 : i];
+      const auto& p1 = v[i];
+      const auto& p2 = v[i + 1];
+      const auto& p3 = v[i + 2 < v.size() ? i + 2 : i + 1];
+      const int steps = std::max(2, int(std::hypot(p2.first - p1.first, p2.second - p1.second) / 1.5));
+      for (int k = 0; k < steps; k++) {
+        const double t = double(k) / steps, t2 = t * t, t3 = t2 * t;
+        const double x = 0.5 * (2 * p1.first + (p2.first - p0.first) * t + (2 * p0.first - 5 * p1.first + 4 * p2.first - p3.first) * t2 + (3 * p1.first - p0.first - 3 * p2.first + p3.first) * t3);
+        const double y = 0.5 * (2 * p1.second + (p2.second - p0.second) * t + (2 * p0.second - 5 * p1.second + 4 * p2.second - p3.second) * t2 + (3 * p1.second - p0.second - 3 * p2.second + p3.second) * t3);
+        pts.push_back({x, y, arenaTerrain(x, y)});
+      }
+    }
+    // Graded: smoothed along the way and never steeper than a tank likes.
+    Road r;
+    r.halfWidth = halfWidth;
+    r.trail = trail;
+    const int n = int(pts.size());
+    std::vector<double> z(static_cast<size_t>(n));
+    for (int i = 0; i < n; i++) {
+      double sum = 0;
+      for (int j = -30; j <= 30; j++) sum += pts[size_t(std::clamp(i + j, 0, n - 1))].z;
+      z[size_t(i)] = sum / 61.0;
+    }
+    constexpr double kGrade = 0.18 * 1.5;
+    for (int pass = 0; pass < 3; pass++) {
+      for (int i = 1; i < n; i++) z[size_t(i)] = clampd(z[size_t(i)], z[size_t(i - 1)] - kGrade, z[size_t(i - 1)] + kGrade);
+      for (int i = n - 2; i >= 0; i--) z[size_t(i)] = clampd(z[size_t(i)], z[size_t(i + 1)] - kGrade, z[size_t(i + 1)] + kGrade);
+    }
+    // Over a river the way runs dead level, from bank to bank and a little beyond, well clear of the water.
+    for (int i = 1; i < n; i++) {
+      const double a = pts[size_t(i - 1)].x - riverX(pts[size_t(i - 1)].y), b = pts[size_t(i)].x - riverX(pts[size_t(i)].y);
+      if ((a < 0) == (b < 0)) continue;
+      constexpr int kFlat = 32, kRamp = 40;
+      const double deck = std::max(z[size_t(i)], kWaterZ + 5.0);
+      for (int j = -kFlat - kRamp; j <= kFlat + kRamp; j++) {
+        if (i + j < 0 || i + j >= n) continue;
+        const double t = clampd((std::abs(j) - double(kFlat)) / kRamp, 0, 1);
+        z[size_t(i + j)] = lerpd(deck, z[size_t(i + j)], smooth01(t));
+      }
+    }
+    for (int i = 0; i < n; i++) r.pts.push_back({pts[size_t(i)].x, pts[size_t(i)].y, z[size_t(i)]});
+    roads_.push_back(r);
+  };
+  const double gate = kBaseX - kYardHalfX;
+  way({{-gate, 0}, {-520, 30}, {-330, -40}, {-140, 60}, {60, 90}, {250, 20}, {430, -30}, {600, 15}, {gate, 0}}, 4.0, false);
+  way({{-gate, 30}, {-610, 240}, {-420, 450}, {-210, 610}, {30, 660}, {270, 590}, {480, 430}, {620, 220}, {gate, 30}}, 3.0, true);
+  way({{-gate, -30}, {-610, -240}, {-470, -520}, {-180, -620}, {60, -560}, {290, -610}, {520, -450}, {620, -220}, {gate, -30}}, 3.0, true);
+  way({{-140, 60}, {-110, 240}, {-210, 610}}, 3.0, true);
+  way({{250, 20}, {280, -220}, {290, -610}}, 3.0, true);
+  rasteriseRoads(dist, roadH, onTrail);
+
+  for (int iy = 0; iy < N; iy++)
+    for (int ix = 0; ix < N; ix++) {
+      const double x = wx(ix), y = wx(iy);
+      const size_t id = size_t(iy) * N + ix;
+      const double d = dist[id];
+      const double blend = 1.0 - smoothstepd(0.0, 13.0, d);
+      const double yard = yardBlend(x, y);
+      h_[id] = float(lerpd(lerpd(arenaTerrain(x, y), double(roadH[id]), blend), kYardZ, yard > 0.98 ? 1.0 : yard * yard));
+      const bool flatYard = (std::fabs(std::fabs(x) - kBaseX) < kYardHalfX && std::fabs(y) < kYardHalfY);
+      if (flatYard) surf_[id] = SURF_CONCRETE;
+      else if (onTrail[id] && d < 1.6) surf_[id] = SURF_GRAVEL;
+      else if (!onTrail[id] && d < 0.3) surf_[id] = SURF_ASPHALT;
+      else if (d < 2.0) surf_[id] = SURF_GRAVEL;
+      else surf_[id] = h_[id] > 95.0 + vnoise(x / 31.0, y / 31.0) * 22.0 ? SURF_ROCK : SURF_GRASS;
+      if (h_[id] > 215.0 + vnoise(x / 31.0, y / 31.0 + 8.0) * 20.0) surf_[id] = SURF_SNOW;
+    }
+
+  // The river is cut last, through whatever land and roads lie in its way. Where a road crosses it stands a bridge.
+  for (int iy = 0; iy < N; iy++)
+    for (int ix = 0; ix < N; ix++) {
+      const double x = wx(ix), y = wx(iy);
+      const double cut = riverCut(x, y);
+      if (cut <= 0) continue;
+      const size_t id = size_t(iy) * N + ix;
+      h_[id] = float(lerpd(double(h_[id]), kBedZ, cut));
+      if (cut > 0.5) surf_[id] = SURF_GRAVEL;
+    }
+  addCommandCentre(bases_[0]);
+  addCommandCentre(bases_[1]);
+  // The water: flat, drawn, and nothing that holds anything up.
+  for (double y = -830.0; y < 830.0; y += 8.0) {
+    const double x0 = riverX(y), x1 = riverX(y + 8.0);
+    const double yaw = std::atan2(8.0, x1 - x0) - PI * 0.5;
+    addVisualBox({(x0 + x1) * 0.5, y + 4.0, kWaterZ - 0.5}, {kRiverHalf + 5.0, 4.6, 0.5}, yaw, .13f, .29f, .36f);
+  }
+  for (const Road& r : roads_) {
+    for (size_t i = 1; i < r.pts.size(); i++) {
+      const double a = r.pts[i - 1].x - riverX(r.pts[i - 1].y), b = r.pts[i].x - riverX(r.pts[i].y);
+      if ((a < 0) == (b < 0)) continue;
+      const RoadPoint& p = r.pts[i];
+      const double yaw = std::atan2(p.y - r.pts[i - 1].y, p.x - r.pts[i - 1].x);
+      const double cy = std::cos(yaw), sy = std::sin(yaw);
+      const double half = kBankOuter + 9.0, w = r.halfWidth + 2.0;
+      const double z = p.z;
+      addBox({p.x, p.y, z - 0.6}, {half, w, 0.6}, yaw, 0, SURF_CONCRETE, .55f, .53f, .5f);
+      for (double sg : {-1.0, 1.0})
+        addBox({p.x - sy * sg * w, p.y + cy * sg * w, z + 0.55}, {half, 0.25, 0.55}, yaw, 0, SURF_CONCRETE, .48f, .46f, .43f);
+      for (double along : {-kRiverHalf, 0.0, kRiverHalf})
+        addBox({p.x + cy * along, p.y + sy * along, (z + kBedZ) * 0.5 - 0.6}, {1.2, w - 0.5, (z - kBedZ) * 0.5}, yaw, 0, SURF_CONCRETE, .44f, .42f, .4f);
+      bridges_.push_back({p.x, p.y, z});
+    }
+  }
+
+  u32 seed = 271828;
+  const auto rnd = [&](double a, double b) {
+    seed = seed * 1664525u + 1013904223u;
+    return a + (b - a) * double(seed >> 16) / 65535.0;
+  };
+  const auto nearRoad = [&](double x, double y, double margin) {
+    for (const Road& r : roads_)
+      for (size_t k = 0; k < r.pts.size(); k += 3)
+        if (std::hypot(r.pts[k].x - x, r.pts[k].y - y) < r.halfWidth + margin) return true;
+    return false;
+  };
+  const auto nearBase = [&](double x, double y, double margin) {
+    return yardBlend(x, y) > 0.0 || std::hypot(std::fabs(x) - kBaseX, y) < margin;
+  };
+  const auto inTheWay = [&](double x, double y, double margin) {
+    return std::fabs(x - riverX(y)) < kBankOuter + margin || std::fabs(std::fabs(x) - kBarrierX) < margin;
+  };
+
+  // The barriers, section by section, following the lie of the land, with a gate wherever a road goes through.
+  for (double side : {-1.0, 1.0})
+    for (double y = -812.0; y < 812.0; y += kBarrierSection) {
+      const double x = side * kBarrierX, yc = y + kBarrierSection * 0.5;
+      if (nearRoad(x, yc, 14.0)) continue;
+      const double z = std::max({height(x, y), height(x, yc), height(x, y + kBarrierSection)});
+      addBox({x, yc, z + kBarrierHigh * 0.5 - 2.0}, {1.2, kBarrierSection * 0.5, kBarrierHigh * 0.5 + 2.0}, 0, 0, SURF_CONCRETE, .5f, .5f, .47f);
+    }
+
+  // Four villages on the ways, and the ground around their houses kept clear. The houses themselves come later.
+  const double villages[5][2] = {{-335, -30}, {62, 92}, {430, -30}, {-420, 450}, {290, -610}};
+  std::vector<std::pair<double, double>> sites;
+  for (const auto& v : villages) {
+    for (int n = 0; n < 7; n++) {
+      for (int tries = 0; tries < 30; tries++) {
+        const double a = rnd(0, 6.283), r = rnd(14.0, 62.0);
+        const double x = v[0] + std::cos(a) * r, y = v[1] + std::sin(a) * r;
+        if (nearRoad(x, y, 7.0) || inTheWay(x, y, 14.0)) continue;
+        bool free = true;
+        for (const auto& s2 : sites)
+          if (std::hypot(s2.first - x, s2.second - y) < 18.0) free = false;
+        if (!free) continue;
+        sites.push_back({x, y});
+        houseSites_.push_back({x, y, height(x, y)});
+        break;
+      }
+    }
+  }
+  const auto nearSite = [&](double x, double y, double margin) {
+    for (const auto& s2 : sites)
+      if (std::hypot(s2.first - x, s2.second - y) < margin) return true;
+    return false;
+  };
+
+  // Old tank wrecks from some earlier battle, out in the open and on the hills.
+  const double wrecks[7][2] = {{-560, 130}, {-250, -210}, {-30, 290}, {130, -180}, {330, 200}, {560, -130}, {-100, -420}};
+  for (const auto& w : wrecks) wreckSites_.push_back({w[0], w[1], height(w[0], w[1])});
+
+  // Woods in clumps, the only cover there is besides the hills. Each tree is a soft body, so there are not too many.
+  constexpr int kClumps = 26;
+  for (int c = 0; c < kClumps; c++) {
+    const double cx = rnd(-790, 790), cy = rnd(-790, 790), radius = rnd(25, 75);
+    const int count = int(radius * 0.32);
+    for (int n = 0; n < count; n++) {
+      const double a = rnd(0, 6.283), r = radius * std::sqrt(rnd(0, 1));
+      const double x = cx + std::cos(a) * r, y = cy + std::sin(a) * r;
+      if (std::max(std::fabs(x), std::fabs(y)) > 830.0 || nearRoad(x, y, 5.0) || nearBase(x, y, 70.0) || nearSite(x, y, 14.0) || inTheWay(x, y, 5.0)) continue;
+      trees_.push_back({x, y, height(x, y)});
+    }
+  }
+
+  // Boulders, thicker towards the rim.
+  for (int n = 0; n < 420; n++) {
+    const double x = rnd(-960, 960), y = rnd(-960, 960);
+    const double edge = std::max(std::fabs(x), std::fabs(y));
+    if (edge < 500.0 && rnd(0, 1) < 0.7) continue;
+    const double size = 0.4 + std::pow(rnd(0, 1), 2.5) * 3.4;
+    if (nearRoad(x, y, 2.0 + size) || nearBase(x, y, 70.0) || nearSite(x, y, 10.0) || inTheWay(x, y, 3.0 + size)) continue;
+    const float g = float(rnd(0.28, 0.46));
+    addBox({x, y, height(x, y) + size * 0.25}, {size * rnd(0.7, 1.3), size * rnd(0.7, 1.2), size * rnd(0.5, 0.9)}, rnd(0, 3.1), rnd(-0.3, 0.3), SURF_ROCK, g, g * 0.97f, g * 0.92f);
+  }
 }

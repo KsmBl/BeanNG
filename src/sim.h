@@ -138,6 +138,16 @@ class Sim {
   u32 blastCount = 0;   // for whoever wants to know what just went off
   V3 lastBlast;
   double lastBlastRadius = 0, lastBlastImpulse = 0;
+  // For the duel server: what went off, for the players' machines to set off as well.
+  struct BlastRecord {
+    V3 c;
+    double impulse, radius;
+  };
+  bool logBlasts = false;
+  std::vector<BlastRecord> blastLog;
+  // A player's copy of the world, which is never stepped: a blast digs its crater and cracks its rocks here,
+  // because those are the same everywhere, and all that moves comes from the server.
+  bool mirror = false;
   u32 firstSceneryNode = 0;  // what comes before is drawn as vehicles, what comes after from its triangles
   u32 splitGeneration = 0;  // goes up whenever an object tears into pieces
   u64 clampedSteps = 0;  // times the per-step velocity guard had to act: should stay at zero
