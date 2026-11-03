@@ -69,6 +69,7 @@ Im Spiel: **Online spielen**, Adresse und Port eintragen, **Verbinden**. Oder di
 | Rennen, springen | Umschalt, Leertaste | – |
 | Reparaturset, zu Fuß neben dem Fahrzeug | R | – |
 | Karte: Klick markiert das Ziel | K | – |
+| Chat | Enter | – |
 | Screenshot | F12 | – |
 
 ## Aufbau

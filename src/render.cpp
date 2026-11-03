@@ -2517,6 +2517,23 @@ struct Renderer::Impl {
       label(mx0 + 14 * u, my0 + ms - 18 * u, "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }
 
+    // ---- The chat, above the instruments.
+    if (!s.chat.empty() || s.chatOpen) {
+      const float cx0 = 24 * u;
+      float cy1 = H - 310 * u;
+      if (s.chatOpen) {
+        const std::string line = "> " + s.chatInput + "_";
+        rrect(cx0 - 6 * u, cy1 - 14 * u, std::max(textWidth(line.c_str(), 16 * u) + 16 * u, 420 * u), 28 * u, 8 * u, {.03f, .03f, .04f, .78f});
+        label(cx0 + 2 * u, cy1 + 6 * u, line.c_str(), 16 * u, white);
+      }
+      for (size_t i = s.chat.size(); i-- > 0;) {
+        cy1 -= 24 * u;
+        const float tw = textWidth(s.chat[i].c_str(), 15 * u);
+        rrect(cx0 - 6 * u, cy1 - 12 * u, tw + 16 * u, 23 * u, 6 * u, {.03f, .03f, .04f, .5f});
+        label(cx0 + 2 * u, cy1 + 5 * u, s.chat[i].c_str(), 15 * u, white);
+      }
+    }
+
     // ---- Lists: the vehicle menu and the settings.
     if (o.panel.open) {
       const UiPanel& P = o.panel;

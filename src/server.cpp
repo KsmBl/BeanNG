@@ -26,6 +26,7 @@ struct Client {
   InputMsg in;
   bool haveInput = false;
   char name[kNameBytes] = {};
+  u32 chatSeq = 0;  // the last line of theirs that has gone in the log
   // One-shot controls, each seen once however many packets carry the same count.
   bool fire = false, launch = false, repair = false, use = false;
   // Scenery that has moved, as far as this player has been told, and where the slow sweep has got to.
@@ -58,6 +59,11 @@ int main(int argc, char** argv) {
   fflush(stdout);
 
   Client clients[2];
+  struct ChatLine {
+    int who;
+    std::string text;
+  };
+  std::vector<ChatLine> chat;
   std::random_device entropy;
   using Clock = std::chrono::steady_clock;
   const auto t0 = Clock::now();
@@ -148,6 +154,25 @@ int main(int argc, char** argv) {
           for (int k = 0; k < IT_COUNT; k++) items[k] = m.items[k];
           duel->choose(slot, items, m.ready != 0);
         }
+      } else if (slot >= 0 && kind == P_CHAT) {
+        u32 token = 0, seq = 0;
+        u8 length = 0;
+        r.get(token);
+        r.get(seq);
+        r.get(length);
+        Client& c = clients[slot];
+        if (!r.ok() || token != c.token || length > kChatBytes || int32_t(seq - c.chatSeq) <= 0) continue;
+        std::string text;
+        for (int k = 0; k < length; k++) {
+          char ch = 0;
+          r.get(ch);
+          text += static_cast<unsigned char>(ch) < 32 ? ' ' : ch;
+        }
+        if (!r.ok()) continue;
+        c.chatSeq = seq;
+        chat.push_back({slot, text});
+        printf("<%s> %s\n", c.name, text.c_str());
+        fflush(stdout);
       } else if (slot >= 0 && kind == P_BYE) {
         u32 token = 0;
         r.get(token);
@@ -393,6 +418,23 @@ int main(int argc, char** argv) {
         Client& c = clients[i];
         if (!c.used) continue;
         sendMeta(c, i);
+        if (tick % 6 == 0 && (!chat.empty() || c.chatSeq)) {
+          // The last few lines, again and again: whatever one missed comes round in the next one.
+          Writer w(P_CHATLOG);
+          w.put(tick);
+          w.put(duel->matchId);
+          w.put(c.chatSeq);
+          const u32 total = u32(chat.size());
+          const u32 from = total > 5 ? total - 5 : 0;
+          w.put(from);
+          w.put(u8(total - from));
+          for (u32 k = from; k < total; k++) {
+            w.put(u8(chat[k].who));
+            w.put(u8(chat[k].text.size()));
+            for (char ch : chat[k].text) w.put(ch);
+          }
+          sock.send(w.data(), w.size(), c.addr);
+        }
         if (tick % 15 == 0) {
           Writer w(P_NAMES);
           w.put(tick);

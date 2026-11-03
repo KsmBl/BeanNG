@@ -487,6 +487,7 @@ struct SharedInput {
   bool ready = false;
   bool sprint = false;
   double yaw = 0, pitch = 0;
+  std::string chatOut;  // the next line to say; cleared here once it is on its way
   u8 items[IT_COUNT] = {};
 };
 
@@ -653,6 +654,12 @@ struct Game {
     };
     std::deque<Past> past;
     double walkDebt = 0;
+    // A line of chat is sent again and again until the server's log says it has it.
+    std::string saying;
+    u32 chatSeq = 0, chatAcked = 0;
+    double nextChat = 0;
+    std::vector<std::pair<int, std::string>> chatLog;
+    u32 chatLogFirst = 0;
     u8 carrying[IT_COUNT] = {};
     double repairNow = 0;
     u32 ackedInput = 0;
@@ -731,8 +738,23 @@ struct Game {
       {
         std::lock_guard<std::mutex> lock(inputMutex);
         in = input;
+        input.chatOut.clear();
         input.c.requestGear = 99;
         input.c.fire = input.c.launch = input.c.repair = input.c.use = false;
+      }
+      if (!in.chatOut.empty() && state == NET_IN) {
+        saying = in.chatOut;
+        chatSeq++;
+        nextChat = 0;
+      }
+      if (state == NET_IN && !saying.empty() && now >= nextChat) {
+        nextChat = now + 0.25;
+        net::Writer w(net::P_CHAT);
+        w.put(token);
+        w.put(chatSeq);
+        w.put(u8(saying.size()));
+        for (char ch : saying) w.put(ch);
+        sock->send(w.data(), w.size(), server);
       }
       if (in.c.fire) out.fireCount++;
       if (in.c.launch) out.launchCount++;
@@ -901,6 +923,40 @@ struct Game {
             if (!r.ok() || evKind > EV_ROCK) break;
             sim.event(EventKind(evKind), p, v, strength);
           }
+        } else if (kind == net::P_CHATLOG) {
+          u32 ack = 0, from = 0;
+          u8 count = 0;
+          r.get(ack);
+          r.get(from);
+          r.get(count);
+          if (!r.ok()) continue;
+          chatAcked = ack;
+          if (int32_t(chatAcked - chatSeq) >= 0) saying.clear();
+          for (u32 i = from; i < from + count; i++) {
+            u8 who = 0, length = 0;
+            r.get(who);
+            r.get(length);
+            std::string text;
+            for (int k = 0; k < length; k++) {
+              char ch = 0;
+              r.get(ch);
+              text += ch;
+            }
+            if (!r.ok() || who > 1) break;
+            const u32 have = chatLogFirst + u32(chatLog.size());
+            if (chatLog.empty()) chatLogFirst = from;
+            if (i == chatLogFirst + u32(chatLog.size()) || (have <= i && chatLog.empty())) chatLog.push_back({who, text});
+            else if (i > have) {
+              // Gone past the window of what comes round: start again from here.
+              chatLog.clear();
+              chatLogFirst = i;
+              chatLog.push_back({who, text});
+            }
+          }
+          std::lock_guard<std::mutex> lock(snapMutex);
+          snap.chat.clear();
+          const size_t show = std::min<size_t>(chatLog.size(), 8);
+          for (size_t i = chatLog.size() - show; i < chatLog.size(); i++) snap.chat.push_back(names[chatLog[i].first] + ": " + chatLog[i].second);
         } else if (kind == net::P_NAMES) {
           std::lock_guard<std::mutex> lock(snapMutex);
           for (int i = 0; i < 2; i++) {
@@ -1242,6 +1298,8 @@ static void runGame() {
   u8 pickItems[IT_COUNT] = {};
   bool pickReady = false;
   int lastPhase = -1;
+  bool chatting = false;
+  std::string chatText;
   // The map, and the point on it the artillery lays on.
   bool mapOpen = false;
   bool hasMark = false;
@@ -1395,6 +1453,7 @@ static void runGame() {
       key("Rennen, springen", "Umschalt, Leertaste");
       key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
       key("Karte, Ziel für die Artillerie", "K");
+      key("Chat", "Enter");
       key("Kamera", "C");
       key("Screenshot", "F12");
     }
@@ -1429,7 +1488,7 @@ static void runGame() {
     };
 
     // Typing goes to the address fields, and nowhere else.
-    const bool wantText = panelKind == PANEL_ONLINE && panelSel < 3;
+    const bool wantText = chatting || (panelKind == PANEL_ONLINE && panelSel < 3);
     if (wantText != textEntry) {
       textEntry = wantText;
       if (wantText) SDL_StartTextInput(window);
@@ -1438,6 +1497,30 @@ static void runGame() {
 
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+      if (chatting && e.type == SDL_EVENT_TEXT_INPUT) {
+        for (const char* t = e.text.text; *t; t++)
+          if (chatText.size() < size_t(net::kChatBytes)) chatText += *t;
+        continue;
+      }
+      if (chatting && e.type == SDL_EVENT_KEY_DOWN) {
+        const SDL_Keycode k = e.key.key;
+        if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+          if (!chatText.empty()) {
+            std::lock_guard<std::mutex> lock(G.inputMutex);
+            G.input.chatOut = chatText;
+          }
+          chatText.clear();
+          chatting = false;
+        } else if (k == SDLK_ESCAPE) {
+          chatText.clear();
+          chatting = false;
+        } else if (k == SDLK_BACKSPACE && !chatText.empty()) {
+          while (chatText.size() > 1 && (static_cast<unsigned char>(chatText.back()) & 0xC0) == 0x80) chatText.pop_back();
+          chatText.pop_back();
+        }
+        continue;
+      }
+      if (chatting && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) continue;
       if (wantText && e.type == SDL_EVENT_TEXT_INPUT) {
         std::lock_guard<std::mutex> lock(G.inputMutex);
         for (const char* t = e.text.text; *t; t++) {
@@ -1561,6 +1644,9 @@ static void runGame() {
             case SDLK_G: edges.launch = true; break;
             case SDLK_K: mapOpen = !mapOpen; break;
             case SDLK_C: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.pitch = 0.22; break;
+            case SDLK_RETURN: case SDLK_KP_ENTER:
+              if (netState == Game::NET_IN) chatting = true;
+              break;
             case SDLK_F: edges.fire = true; break;
             case SDLK_E: edges.use = true; break;
             case SDLK_F12: wantShot = true; break;
@@ -1624,7 +1710,7 @@ static void runGame() {
     }
 
     // While a panel is open the pedals rest: its keys are the same ones.
-    if (panelKind != 0) gas = brake = steer = hb = 0;
+    if (panelKind != 0 || chatting) gas = brake = steer = hb = 0;
     {
       const bool wantRelative = panelKind == 0 && !mapOpen && scriptMode == 0;
       if (wantRelative != relativeMouse) {
@@ -1637,6 +1723,15 @@ static void runGame() {
 
     // Scripted runs, for trying out the real thing without anyone at the controls.
     if (scriptMode == 41 && netState == Game::NET_IN) {
+      {
+        // Says something once, to see it arrive on both screens.
+        static bool said = false;
+        if (!said && tNow > 3.0) {
+          said = true;
+          std::lock_guard<std::mutex> lock(G.inputMutex);
+          G.input.chatOut = "Hallo von " + gUserName + " äöü";
+        }
+      }
       if (phase == Duel::CHOOSING && tNow > 1.0 && !pickReady) {
         pickItems[IT_REPAIR] = 1;
         pickItems[IT_AR] = 2;
@@ -1797,6 +1892,7 @@ static void runGame() {
       view.splitGeneration = G.snap.splitGeneration;
       view.carResets = G.snap.carResets;
       view.tankTracks = G.snap.tankTracks;
+      view.chat = G.snap.chat;
       view.foot = G.snap.foot;
       view.missileLive = G.snap.missileLive;
       view.missileP = G.snap.missileP;
@@ -1835,6 +1931,8 @@ static void runGame() {
         hud.panel.fill.push_back(it.fill);
       }
     }
+    view.chatOpen = chatting;
+    view.chatInput = chatText;
     hud.vehicleHud = inVehicle;
     hud.crosshair = inMatch && !mapOpen && !view.missileLive && !view.foot.inCar;
     hud.map.open = mapOpen && panelKind == 0;

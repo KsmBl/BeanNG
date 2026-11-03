@@ -48,6 +48,9 @@ struct Snapshot {
   std::vector<TankTrack> tankTracks;
   V3 trackLeft[2];
   float parkedScorch[16] = {};
+  std::vector<std::string> chat;  // the last lines, oldest first
+  std::string chatInput;
+  bool chatOpen = false;
   // The one playing, when not inside a tank.
   struct Foot {
     bool onFoot = false, inCar = false;
