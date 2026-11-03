@@ -108,6 +108,8 @@ class World {
   static constexpr int kBoxGrid = 256;
   std::vector<std::vector<u16>> boxGrid_;
 
+ public:
   void addBox(V3 c, V3 half, double yaw, double pitch, u8 surf, float r, float g, float b);
+ private:
   double micro(double x, double y) const;
 };

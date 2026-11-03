@@ -82,6 +82,9 @@ struct Wheel {
   static constexpr int kDentBins = 24;
   float dent[kDentBins] = {};  // radial dent depth [m] around the rim
   float runoutX = 0, runoutZ = 0;  // lateral bend of the rim, as a cosine and sine amplitude [m]
+  // The steering stop: lower and upper ball joint, the steering arm's end and where its rod starts.
+  u32 stopKl = 0, stopKu = 0, stopKs = 0, stopRack = 0;
+  double stopLimit = 0;  // radians from straight ahead; 0 means none
   u32 spoke[6][2] = {};        // beams from each ring node to the two axle nodes
   double spokeSeen[6][2] = {}; // plastic shortening already turned into rim damage
 
@@ -236,6 +239,7 @@ class Vehicle {
   void updateBodyFrame(Sim& sim, double dt);
   void updateHydraulics(Sim& sim, double dt);
   void updateDrivetrain(Sim& sim, const Controls& in, double dt);
+  void applySteerStops(Sim& sim, double dt);
   void applyBlockTorque(Sim& sim, const std::vector<u32>& nodes, double torque);
   void drawAccumulator(double volume, bool returnsToTank = true);
   void updateWheel(Sim& sim, Wheel& w, double dt);

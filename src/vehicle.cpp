@@ -89,6 +89,38 @@ void Vehicle::updateRimDamage(Sim& sim, Wheel& w) {
   }
 }
 
+// A knuckle turns on its ball joints, held by nothing but its tie rod. Rod and arm form a toggle: past the point
+// where they line up the wheel has found a second resting place, turned a hundred degrees, with no part any the
+// worse for it. Real ones have steering stops, so that it can never get that far.
+void Vehicle::applySteerStops(Sim& sim, double) {
+  const V3 f0 = norm(sim.rest[refFrontL] + sim.rest[refFrontR] - sim.rest[refRearL] - sim.rest[refRearR]);
+  const V3 side0 = sim.rest[refFrontL] + sim.rest[refRearL] - sim.rest[refFrontR] - sim.rest[refRearR];
+  const V3 u0 = norm(cross(f0, side0));
+  const V3 l0 = cross(u0, f0);
+  for (Wheel& w : wheels) {
+    if (w.stopLimit <= 0) continue;
+    const V3 axisV = sim.pos[w.stopKu] - sim.pos[w.stopKl];
+    const V3 armV = sim.pos[w.stopKs] - sim.pos[w.stopKl];
+    const V3 arm0 = sim.rest[w.stopKs] - sim.rest[w.stopKl];
+    // Torn apart there is nothing left to stop.
+    if (len2(axisV) > 1.5 * len2(sim.rest[w.stopKu] - sim.rest[w.stopKl]) || len2(armV) > 1.5 * len2(arm0)) continue;
+    const V3 e = norm(axisV);
+    const V3 arm = armV - e * dot(armV, e);
+    const V3 straight = fwd * dot(arm0, f0) + left * dot(arm0, l0) + up * dot(arm0, u0);
+    const V3 ref = straight - e * dot(straight, e);
+    const double ang = std::atan2(dot(e, cross(ref, arm)), dot(ref, arm));
+    const double over = std::fabs(ang) - w.stopLimit;
+    if (over <= 0) continue;
+    const double L = std::max(len(arm), 1e-3);
+    // Pushes the arm's end back along its arc, as stiff as the rod itself, and into the body at the rod's start.
+    const V3 back = cross(e, arm) * (-std::copysign(1.0, ang) / L);
+    const double vOut = -dot(sim.vel[w.stopKs] - sim.vel[w.stopRack], back);
+    const double F = clampd(3.0e6 * over * L + 500.0 * std::max(vOut, 0.0), 0.0, 400e3);
+    sim.force[w.stopKs] += back * F;
+    sim.force[w.stopRack] -= back * F;
+  }
+}
+
 void Vehicle::shiftIndices(long dn, long db, long dobj) {
   const auto N = [&](u32& i) { i = u32(long(i) + dn); };
   const auto B = [&](u32& i) { i = u32(long(i) + db); };
@@ -97,6 +129,10 @@ void Vehicle::shiftIndices(long dn, long db, long dobj) {
     N(w.axIn);
     N(w.axOut);
     for (u32& r : w.ring) N(r);
+    N(w.stopKl);
+    N(w.stopKu);
+    N(w.stopKs);
+    N(w.stopRack);
     for (auto& s : w.spoke)
       for (u32& e : s) B(e);
   }
@@ -1259,6 +1295,7 @@ void Vehicle::update(Sim& sim, const Controls& in, double dt) {
     if (!(tr.flags & BF_BROKEN)) tr.L0 += delta - rackPrev_;
     rackPrev_ = delta;
   }
+  applySteerStops(sim, dt);
   updateStability(in, dt);
   throttleAct += clampd(in.throttle * espThrottle_ * tcsThrottle_ - throttleAct, -14.0 * dt, 14.0 * dt);
   // The Citroen brake is powered and has almost no pedal travel: it bites at once.

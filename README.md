@@ -19,7 +19,7 @@ Spiel-Einstellungen bleiben in `settings.cfg` gespeichert.
 
 `tools/gen_xantia.py`, `tools/gen_leopard.py`, `tools/gen_one1.py` und `tools/gen_ui.py` erzeugen die Modelle und die
 Schrift unter `assets/`. Das macht `./run.sh` von selbst (braucht numpy, scipy, shapely und Pillow).
-Testläufe: `beanng-test buckle`, `tree`, `bomb`, `tank`, `tankcrash`, `one1`, `esp`.
+Testläufe: `beanng-test buckle`, `tree`, `bomb`, `tank`, `tankcrash`, `tankkill`, `rocks`, `one1`, `esp`, `hummersteer`.
 
 Am Spawn steht von jedem Modell eines. Sie schlafen, bis etwas sie trifft, und lassen sich anfahren und
 beschießen; ein Wrack bleibt auch beim Fahrzeugwechsel eines.

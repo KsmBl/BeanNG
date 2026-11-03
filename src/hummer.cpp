@@ -364,6 +364,11 @@ Vehicle buildHummer(Sim& sim, V3 spawn, CarRig* rig) {
     beam(kl, p.lr, mArm);
     beam(ku, p.uf, mArm);
     beam(ku, p.ur, mArm);
+    w.stopKl = kl;
+    w.stopKu = ku;
+    w.stopKs = ks;
+    w.stopRack = p.rack;
+    w.stopLimit = (front ? 34.0 : 8.0) * PI / 180.0;
     const u32 tie = sim.addBeam(ks, p.rack, mTie);
     if (front) veh.tieBeam[side] = tie;
     addLink(ks, p.rack, 0.011f, MM_METAL);

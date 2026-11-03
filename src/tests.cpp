@@ -1964,6 +1964,181 @@ int main(int argc, char** argv) {
     report("durch die Hindernisse");
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "hummerbrake")) {
+    // Frame by frame through the full stop where the front wheels fold.
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    s->world = w;
+    const double brakeIn = argc > 2 ? atof(argv[2]) : 1.0;
+    const bool flat = argc > 3 && atoi(argv[3]) != 0;
+    const int every = argc > 4 ? atoi(argv[4]) : 200;
+    const double secs = argc > 5 ? atof(argv[5]) : 6.0;
+    if (flat) w->flatten();
+    Vehicle c = buildHummer(*s, {-200, 0, 0}, &r);
+    s->finalize();
+    settleVehicle(*s, c, 3.0);
+    const Obj o = s->objs[0];
+    for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) s->vel[i] = V3{100 / 3.6, 0, 0};
+    c.presetRolling(100 / 3.6, 2);
+    Controls ct;
+    ct.brake = brakeIn;
+    const u32 first = c.wheels[0].axIn;
+    const char* names[19] = {"axIn", "axOut", "ring0", "ring1", "ring2", "ring3", "ring4", "ring5", "kl", "ku", "ks", "kf", "lf", "lr", "uf", "ur", "rack", "", ""};
+    V3 rest0[17];
+    for (int i = 0; i < 17; i++) {
+      const V3 q = s->pos[first + u32(i)] - c.cog;
+      rest0[i] = V3{dot(q, c.fwd), dot(q, c.left), dot(q, c.up)};
+    }
+    for (int k = 0; k < int(2000 * secs); k++) {
+      s->forces(kDt);
+      c.update(*s, ct, kDt);
+      s->finish(kDt);
+      if (k % every == 0) {
+        const Wheel& W = c.wheels[0];
+        const V3 ax = norm(s->pos[W.axOut] - s->pos[W.axIn]);
+        const V3 hub = (s->pos[W.axIn] + s->pos[W.axOut]) * 0.5 - c.cog;
+        const Beam& t = s->beams[c.tieBeam[0]];
+        printf("t %.1f v %5.1f  fwd %+.2f %+.2f %+.2f left %+.2f %+.2f %+.2f | achse welt %+.2f %+.2f %+.2f | Nabe %+.2f %+.2f %+.2f | Spurst %.3f/%.3f F %5.1f kN | Fz %5.0f Fx %6.0f om %5.1f brems %d\n", k * kDt, c.speed * 3.6, c.fwd.x, c.fwd.y, c.fwd.z, c.left.x, c.left.y, c.left.z, ax.x, ax.y, ax.z, dot(hub, c.fwd), dot(hub, c.left), dot(hub, c.up), len(s->pos[t.a] - s->pos[t.b]), t.L0, t.force / 1e3, W.Fz, W.Fx, W.omega, int(c.absActive));
+      }
+    }
+    for (int i = 0; i < 17; i++) {
+      const V3 q = s->pos[first + u32(i)] - c.cog;
+      printf("%-6s Start %+.3f %+.3f %+.3f  jetzt %+.3f %+.3f %+.3f\n", names[i], rest0[i].x, rest0[i].y, rest0[i].z, dot(q, c.fwd), dot(q, c.left), dot(q, c.up));
+    }
+    // The beams that hold the wheel nodes: how far from their length are they now?
+    for (u32 bi = o.beamStart; bi < o.beamStart + o.beamCount; bi++) {
+      const Beam& b = s->beams[bi];
+      if (b.a < first || b.a >= first + 17 || b.b < first || b.b >= first + 17) continue;
+      if (b.a < first + 8 && b.b < first + 8) continue;
+      const double L = len(s->pos[b.a] - s->pos[b.b]);
+      if (std::fabs(L - b.L0) / b.L0 > 0.01 || std::fabs(b.L0 - b.Lorig) / b.Lorig > 0.005 || (b.flags & BF_BROKEN))
+        printf(" Balken %-6s-%-6s L %.3f L0 %.3f Lorig %.3f %s\n", names[b.a - first], names[b.b - first], L, b.L0, b.Lorig, (b.flags & BF_BROKEN) ? "GEBROCHEN" : "");
+    }
+    return 0;
+  }
+  if (argc > 1 && (!strcmp(argv[1], "hummersteer") || !strcmp(argv[1], "xantiasteer") || !strcmp(argv[1], "one1steer"))) {
+    // What bends the steering? Bent tie rods, as a change of toe that stays once the wheel is straight again.
+    const bool xan = !strcmp(argv[1], "xantiasteer"), one = !strcmp(argv[1], "one1steer");
+    printf("== Lenkung: bleibende Verstellung (Spurstange), Lastspitze ==\n");
+    struct B {
+      World w;
+      Sim s;
+      Vehicle c;
+      CarRig r;
+    };
+    bool rockAt = false;
+    auto make = [xan, one, &rockAt](V3 at) {
+      B* b = new B();
+      b->w.build();
+      if (rockAt) {
+        at.z = b->w.height(at.x, at.y);
+        b->w.addBox({at.x + 7.0, at.y + 0.91, at.z + 0.25}, {0.5, 0.45, 0.5}, 0, 0, SURF_ROCK, .5f, .5f, .5f);
+      }
+      b->s.world = &b->w;
+      b->c = xan ? buildXantia(b->s, at, 0.0, &b->r) : (one ? buildOne1(b->s, at, &b->r) : buildHummer(b->s, at, &b->r));
+      b->s.finalize();
+      settleVehicle(b->s, b->c, 3.0);
+      return b;
+    };
+    auto pose = [](B* b, double* toe, double* camber, V3* hub) {
+      for (int i = 0; i < 2; i++) {
+        const Wheel& w = b->c.wheels[size_t(i)];
+        const V3 ax = norm(b->s.pos[w.axOut] - b->s.pos[w.axIn]) * (w.left ? 1.0 : -1.0);
+        toe[i] = std::atan2(dot(ax, b->c.fwd), dot(ax, b->c.left)) * 57.3;
+        camber[i] = std::asin(clampd(dot(ax, b->c.up), -1, 1)) * 57.3;
+        const V3 r = (b->s.pos[w.axIn] + b->s.pos[w.axOut]) * 0.5 - b->c.cog;
+        hub[i] = V3{dot(r, b->c.fwd), dot(r, b->c.left), dot(r, b->c.up)};
+      }
+    };
+    auto scenario = [&](const char* name, V3 at, double kmh, V3 dir, std::function<void(double, Controls&)> fn, double sec) {
+      B* b = make(at);
+      const Obj o = b->s.objs[0];
+      double t0[2], c0[2];
+      V3 h0[2];
+      pose(b, t0, c0, h0);
+      if (kmh > 0) {
+        for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) b->s.vel[i] = dir * (kmh / 3.6);
+        b->c.presetRolling(kmh / 3.6, 2);
+      }
+      double peak[2] = {};
+      Controls c;
+      for (int k = 0, n = int(sec / kDt); k < n; k++) {
+        fn(k * kDt, c);
+        b->s.forces(kDt);
+        b->c.update(b->s, c, kDt);
+        b->s.finish(kDt);
+        for (int i = 0; i < 2; i++) peak[i] = std::max(peak[i], double(std::fabs(b->s.beams[b->c.tieBeam[i]].force)));
+      }
+      Controls off;
+      for (int k = 0; k < 4000; k++) {
+        off.brake = 1;
+        b->s.forces(kDt);
+        b->c.update(b->s, off, kDt);
+        b->s.finish(kDt);
+      }
+      double t1[2], c1[2];
+      V3 h1[2];
+      pose(b, t1, c1, h1);
+      // Which beams gave way, grouped by what they are.
+      std::map<std::pair<int, int>, std::pair<int, double>> gave;
+      for (u32 bi = o.beamStart; bi < o.beamStart + o.beamCount; bi++) {
+        const Beam& q = b->s.beams[bi];
+        const double strain = std::fabs(q.L0 - q.Lorig) / q.Lorig;
+        if (strain > 0.002 && (bi != b->c.tieBeam[0] && bi != b->c.tieBeam[1])) {
+          // Only what touches the front suspension.
+          const V3 mid = (b->s.rest[q.a] + b->s.rest[q.b]) * 0.5;
+          if (std::fabs(mid.x - b->s.rest[b->c.wheels[0].axIn].x) > 0.6) continue;
+          auto& g = gave[{int(q.yC / 1e3), int(q.k / 1e4)}];
+          g.first++;
+          g.second = std::max(g.second, strain);
+        }
+      }
+      double rearToe[2];
+      for (int i = 0; i < 2; i++) {
+        const Wheel& w = b->c.wheels[size_t(i) + 2];
+        const V3 ax = norm(b->s.pos[w.axOut] - b->s.pos[w.axIn]) * (w.left ? 1.0 : -1.0);
+        rearToe[i] = std::atan2(dot(ax, b->c.fwd), dot(ax, b->c.left)) * 57.3;
+      }
+      printf("  %-34s hinten %+5.1f %+5.1f  Spur %+5.1f %+5.1f  Sturz %+5.1f %+5.1f Grad  Rad weg %4.0f %4.0f mm  Spurstange %3.0f %3.0f kN %d%d  v %3.0f", name, rearToe[0], rearToe[1], t1[0] - t0[0], t1[1] - t0[1], c1[0] - c0[0], c1[1] - c0[1], len(h1[0] - h0[0]) * 1e3, len(h1[1] - h0[1]) * 1e3, peak[0] / 1e3, peak[1] / 1e3, int((b->s.beams[b->c.tieBeam[0]].flags & BF_BROKEN) != 0), int((b->s.beams[b->c.tieBeam[1]].flags & BF_BROKEN) != 0), b->c.speed * 3.6);
+      for (const auto& g : gave) printf("  [%dkN x%d %.0f%%]", g.first.first, g.second.first, g.second.second * 100);
+      printf("\n");
+      delete b;
+    };
+    const V3 X{1, 0, 0};
+    const auto none = [](double, Controls&) {};
+    scenario("im Stand voll einschlagen", {-90, 0, 0}, 0, X, [](double t, Controls& c) { c.steer = std::sin(t * 2.0); }, 6.0);
+    scenario("10 km/h Vollausschlag hin und her", {-90, 0, 0}, 10, X, [](double t, Controls& c) { c.throttle = .2; c.steer = std::sin(t * 2.5) > 0 ? 1 : -1; }, 6.0);
+    scenario("60 km/h Slalom", {-120, 0, 0}, 60, X, [](double t, Controls& c) { c.throttle = .3; c.steer = std::sin(t * 2.5); }, 5.0);
+    scenario("100 km/h Vollbremsung", {-200, 0, 0}, 100, X, [](double, Controls& c) { c.brake = 1; }, 5.0);
+    const double wallY = -35.0;
+    for (double kmh : {10.0, 20.0, 30.0, 45.0, 60.0}) {
+      char nm[64];
+      snprintf(nm, sizeof nm, "linkes Rad gegen Wand %2.0f km/h", kmh);
+      scenario(nm, {110.0 - 12.0, wallY - 0.91 + 0.05, 0}, kmh, X, none, 2.5);
+    }
+    for (double kmh : {15.0, 30.0, 60.0}) {
+      char nm[64];
+      snprintf(nm, sizeof nm, "seitlich in Bordstein %2.0f km/h", kmh);
+      scenario(nm, {-20, 92, 0}, kmh, V3{0, 1, 0}, none, 1.5);
+    }
+    for (double kmh : {30.0, 60.0, 90.0}) {
+      char nm[64];
+      snprintf(nm, sizeof nm, "schraeg ueber Bordstein %2.0f km/h", kmh);
+      scenario(nm, {-46, 91, 0}, kmh, V3{std::cos(0.45), std::sin(0.45), 0}, none, 2.0);
+    }
+    // A block in the way of the left front wheel alone, about as high as a boulder on the trail.
+    for (double kmh : {15.0, 25.0, 40.0, 60.0}) {
+      char nm[64];
+      snprintf(nm, sizeof nm, "Fels vor linkem Rad %2.0f km/h", kmh);
+      rockAt = true;
+      scenario(nm, {-300, 400, 0}, kmh, X, none, 2.5);
+      rockAt = false;
+    }
+    scenario("eingeschlagen in Bordstein 25 km/h", {-46, 91, 0}, 25, V3{std::cos(0.45), std::sin(0.45), 0}, [](double, Controls& c) { c.steer = 1; }, 2.0);
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "hummerbuckle")) {
     printf("== Hummer: wie leicht knicken die Raeder? (bleibende Aenderung) ==\n");
     struct B {
