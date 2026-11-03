@@ -34,7 +34,7 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Ablauf:** Sind beide da, wählt jeder seine Ausrüstung (20 Slots, 60 Sekunden): Tretmine 2 Slots, Panzermine 5, Reparaturset 10, Sturmgewehr 2, 60 Schuss Kleinmunition 1. Du startest zu Fuß mit Pistole und Messer in deiner Basis. Wer stirbt, verliert; nach 8 Sekunden geht es von vorn los. Ausrüstung und Beute gelten für ein Match.
 
-**Karte:** 2 km groß, ringsum Berge. Dazwischen Dörfer, Hügel, Wälder, Hecken, Erdwälle, Felsgruppen, alte Panzerwracks, ein Fluss mit drei Brücken und zwei 10 m hohe Sperrmauern, über die nur die Artillerie schießt.
+**Karte:** 2 km groß, ringsum Berge. Dazwischen Dörfer, Hügel, Wälder, Hecken, Erdwälle, Felsgruppen, alte Panzerwracks, ein Fluss mit drei Brücken zwei flache Furten und zwei 10 m hohe Sperrmauern, über die nur die Artillerie schießt.
 
 ![Die Karte von oben](docs/screenshots/karte-von-oben.jpg)
 

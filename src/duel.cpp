@@ -523,7 +523,8 @@ void Duel::walk(Soldier& s, const WalkInput& in, double dt) const {
   V3 want = ahead * in.forward + side * in.strafe;
   const double wl = len(want);
   if (wl > 1.0) want = want / wl;
-  const double top = in.sprint ? 8.5 : 5.0;
+  // Wading is hard going.
+  const double top = (in.sprint ? 8.5 : 5.0) * (world.isWater(s.p.x, s.p.y) ? 0.45 : 1.0);
   const double rate = s.grounded ? 40.0 : 6.0;
   const V3 flat{s.v.x, s.v.y, 0};
   V3 dv = want * top - flat;
@@ -1435,6 +1436,15 @@ void Duel::step(const Intent in[2]) {
         driven = in[p].c;
       }
     if (sim.objs[v.obj].awake) v.update(sim, driven, kDt);
+  }
+  // Water holds back whatever goes through it. A tank just grinds on; a car, with less weight on it, hardly at all.
+  for (int v = 0; v < kVehicles; v++) {
+    const VehicleFrame& f = frames[v];
+    if (!world.isWater(f.cog.x, f.cog.y)) continue;
+    const double k = v < kTanks ? 9.0 : 7.0;
+    const u16 a = v < kTanks ? tanks[v].hullObj : cars[size_t(v - kTanks)].obj;
+    if (!sim.objs[a].awake) continue;
+    for (u32 n : sim.objs[a].nodes) sim.force[n] -= sim.vel[n] * (sim.mass[n] * k);
   }
   sim.finish(kDt);
   updateFrames();

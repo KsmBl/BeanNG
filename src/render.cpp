@@ -3077,6 +3077,7 @@ void Renderer::clearSkidMarks() {
   d->markNext = d->markCount = 0;
   gMarkNext = gMarkCount = 0;
   for (auto& t : d->trail) t.valid = false;
+  for (auto& t : d->groundTrail) t.valid = false;
 }
 
 void Renderer::resetDamage() {

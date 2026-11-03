@@ -65,6 +65,7 @@ class World {
   static constexpr int kBaseSlots = 7;
   bool isArena() const { return arena_; }
   bool isWater(double x, double y) const;
+  static V3 fordPoint(int i);  // the middle of a ford, without its height
   const Base& base(int side) const { return bases_[side]; }
   // Places set aside on the map: villages for houses, old wrecks for what can be taken from them.
   const std::vector<V3>& houseSites() const { return houseSites_; }

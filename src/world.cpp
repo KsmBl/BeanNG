@@ -44,9 +44,18 @@ constexpr double kBaseX = 730.0, kYardHalfX = 42.0, kYardHalfY = 62.0, kYardZ = 
 // way across. Far out it dies away into the rim.
 constexpr double kWaterZ = 2.5, kBedZ = -1.5, kRiverHalf = 13.0, kBankOuter = 21.0;
 double riverX(double y) { return 34.0 * std::sin(y / 170.0 + 0.6) + 12.0 * std::sin(y / 61.0); }
+// Two places where the banks lie flat and the water is shallow: anything can cross here, slowly, and in plain sight.
+constexpr double kFords[2] = {-330.0, 345.0};
+double fordAt(double y) {
+  double f = 0;
+  for (double yf : kFords) f = std::max(f, 1.0 - smoothstepd(16.0, 34.0, std::fabs(y - yf)));
+  return f;
+}
+double riverBedAt(double y) { return lerpd(kBedZ, kWaterZ - 0.75, fordAt(y)); }
 double riverCut(double x, double y) {
   // 1 in the water, 0 up on the land.
-  return (1.0 - smoothstepd(kRiverHalf, kBankOuter, std::fabs(x - riverX(y)))) * (1.0 - smoothstepd(790.0, 840.0, std::fabs(y)));
+  const double outer = lerpd(kBankOuter, 70.0, fordAt(y));
+  return (1.0 - smoothstepd(kRiverHalf, outer, std::fabs(x - riverX(y)))) * (1.0 - smoothstepd(790.0, 840.0, std::fabs(y)));
 }
 // Concrete barriers either side of the middle, higher than any gun can look over: past them only artillery reaches,
 // or whoever goes round by one of the gates.
@@ -677,6 +686,8 @@ void World::addCommandCentre(Base& b) {
   b.computer = at - V3{cx, sx, 0} * (kF - 2.6) + V3{0, 0, kYardZ + 1.0};
 }
 
+V3 World::fordPoint(int i) { return V3{riverX(kFords[i]), kFords[i], 0}; }
+
 bool World::isWater(double x, double y) const {
   return arena_ && std::fabs(x - riverX(y)) < kRiverHalf + 3.0 && std::fabs(y) < 830.0 && height(x, y) < kWaterZ;
 }
@@ -782,7 +793,7 @@ void World::buildArena() {
       const double cut = riverCut(x, y);
       if (cut <= 0) continue;
       const size_t id = size_t(iy) * N + ix;
-      h_[id] = float(lerpd(double(h_[id]), kBedZ, cut));
+      h_[id] = float(lerpd(double(h_[id]), riverBedAt(y), cut));
       if (cut > 0.5) surf_[id] = SURF_GRAVEL;
     }
   addCommandCentre(bases_[0]);
@@ -826,7 +837,7 @@ void World::buildArena() {
     return yardBlend(x, y) > 0.0 || std::hypot(std::fabs(x) - kBaseX, y) < margin;
   };
   const auto inTheWay = [&](double x, double y, double margin) {
-    return std::fabs(x - riverX(y)) < kBankOuter + margin || std::fabs(std::fabs(x) - kBarrierX) < margin;
+    return std::fabs(x - riverX(y)) < lerpd(kBankOuter, 70.0, fordAt(y)) + margin || std::fabs(std::fabs(x) - kBarrierX) < margin;
   };
 
   // The barriers, section by section, following the lie of the land, with a gate wherever a road goes through.
