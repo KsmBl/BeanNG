@@ -138,6 +138,11 @@ class Duel {
   double yaw[kVehicles] = {};
   u32 tankFirst[kTanks] = {}, tankNodes = 0, tanksEnd = 0, carsEnd = 0;
   u32 carFirst[kCars] = {};
+  // Where the parts of each car lie, by the nodes that carry them.
+  struct CarParts {
+    std::vector<u32> engine, radiator, tank, gearbox;
+  };
+  CarParts carParts[kCars];
   VehicleFrame frames[kVehicles];
   // Which never touch anything and only get drawn: a soldier is not part of the soft body world. A small cube of
   // nodes to each rigid part of the body, as the mesh's binding wants, and each weapon counts as a part.
@@ -260,6 +265,8 @@ class Duel {
   void boardVehicle(int p, int v);
   void fireWeapon(int p, const Intent& in);
   void stepBullets(double dt);
+  // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
+  bool bulletInCar(int k, V3 from, V3 dir, int kind);
   void placeMine(int p, int kind);
   void callStrike(int p, V3 at);
   void stepMines(double dt);

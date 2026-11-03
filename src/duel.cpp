@@ -159,6 +159,13 @@ void Duel::build() {
   for (int i = 0; i < kWrecks; i++) wrecksStart[i] = wrecks[i];
   carsStart = cars;
   for (const Crate& c : crates) moveMarker(sim, c.marker, c.p);
+  for (int k = 0; k < kCars; k++)
+    for (const NodeGroup& g : rigs[kTanks + k].groups) {
+      if (g.name == "engine") carParts[k].engine = g.nodes;
+      if (g.name == "radiator") carParts[k].radiator = g.nodes;
+      if (g.name == "tank") carParts[k].tank = g.nodes;
+      if (g.name == "gearbox") carParts[k].gearbox = g.nodes;
+    }
   rollLoot();
   updateFrames();
   updateFrames();
@@ -797,6 +804,80 @@ void Duel::fireWeapon(int p, const Intent& in) {
   }
 }
 
+bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind) {
+  Vehicle& car = cars[size_t(k)];
+  const VehicleFrame& f = frames[kTanks + k];
+  const auto middle = [&](const std::vector<u32>& nodes, V3 fallback) {
+    if (nodes.empty()) return fallback;
+    V3 sum{};
+    for (u32 n : nodes) sum += sim.pos[n];
+    return sum / double(nodes.size());
+  };
+  enum Part { ENGINE, OILPAN, RADIATOR, TANK, GEARBOX, DRIVER, WHEEL0 };
+  struct Spot {
+    int part;
+    V3 at;
+    double radius;
+  };
+  std::vector<Spot> spots;
+  const CarParts& parts = carParts[k];
+  const V3 engine = middle(parts.engine, f.cog + f.fwd * 1.3);
+  spots.push_back({ENGINE, engine, 0.3});
+  spots.push_back({OILPAN, engine - f.up * 0.3, 0.2});                                    // under the engine: it takes a good shot, or a low one
+  spots.push_back({RADIATOR, middle(parts.radiator, f.cog + f.fwd * 1.9), 0.32});
+  spots.push_back({TANK, middle(parts.tank, f.cog - f.fwd * 1.4 - f.up * 0.25), 0.34});
+  spots.push_back({GEARBOX, middle(parts.gearbox, engine + f.left * 0.3), 0.2});
+  spots.push_back({DRIVER, f.cog + f.left * 0.36 + f.up * 0.25, 0.28});
+  for (size_t w = 0; w < car.wheels.size(); w++) spots.push_back({WHEEL0 + int(w), (sim.pos[car.wheels[w].axIn] + sim.pos[car.wheels[w].axOut]) * 0.5, 0.33});
+  // The first thing along its way through the car.
+  const Spot* first = nullptr;
+  double firstT = 1e30;
+  constexpr double kThrough = 5.0;  // right across the car
+  for (const Spot& s : spots) {
+    const double t = clampd(dot(s.at - from, dir), 0.0, kThrough);
+    if (len2(from + dir * t - s.at) < s.radius * s.radius && t < firstT) {
+      first = &s;
+      firstT = t;
+    }
+  }
+  if (!first) return false;
+  const bool heavy = kind == WP_SNIPER;
+  // Small arms go for the tyres, and for whoever is sitting there; the big rifle for all of it.
+  if (!heavy && first->part != DRIVER && first->part < WHEEL0) return false;
+  sim.wake(car.obj);
+  sim.event(EV_SPARK, first->at, dir * -2.0, 1.f);
+  switch (first->part) {
+    case ENGINE:
+      car.dmg.seized = true;
+      break;
+    case OILPAN:
+      car.dmg.oilLeak = true;
+      break;
+    case RADIATOR:
+      car.dmg.radiator = true;
+      break;
+    case TANK:
+      car.dmg.tank = true;
+      // Through a full tank a bullet this size leaves a big hole.
+      car.fuelLitres = std::max(0.0, car.fuelLitres - 8.0);
+      break;
+    case GEARBOX:
+      car.dmg.gearbox = true;
+      break;
+    case DRIVER:
+      for (Player& pl : players)
+        if (pl.vehicle == kTanks + k) {
+          pl.soldier.hp -= kWeapons[kind].damage * 0.8;
+          sim.event(EV_BLOOD, first->at, dir * 2.0, 0.7f);
+        }
+      break;
+    default:
+      if (car.wheels[size_t(first->part - WHEEL0)].deflate == 0) car.wheels[size_t(first->part - WHEEL0)].deflate = 0.001;
+      break;
+  }
+  return true;
+}
+
 void Duel::stepBullets(double dt) {
   for (size_t i = 0; i < bullets.size();) {
     Bullet& b = bullets[i];
@@ -816,6 +897,7 @@ void Duel::stepBullets(double dt) {
     b.p += b.v * dt;
     if (b.kind == WP_SNIPER) sim.event(EV_TRACER, b.p, b.v, 2.f);  // bright enough to follow all the way, every few metres
     else if (((b.kind == WP_RPG || b.kind == kKindStrike) && int(b.age * 200.0) % 4 == 0) || (b.kind != WP_RPG && int(b.age * 200.0) % 8 == 0)) sim.event(EV_TRACER, b.p, b.v, 1.f);
+    bool inCar = false;
     bool stop = b.age > (b.kind == kKindStrike ? 20.0 : 6.0);
     V3 at = b.p;
     const V3 seg = b.p - from;
@@ -874,10 +956,19 @@ void Duel::stepBullets(double dt) {
     if (!stop)
       for (int v = 0; v < kVehicles && !stop; v++) {
         const VehicleFrame& f = frames[v];
-        const V3 q = b.p - f.cog;
-        if (std::fabs(dot(q, f.fwd)) < f.halfLength && std::fabs(dot(q, f.left)) < f.halfWidth && std::fabs(dot(q, f.up)) < f.height * 0.5) {
+        if (len2(from - f.cog) > (L + 8.0) * (L + 8.0)) continue;
+        // Half a metre at a time: at this speed a step is longer than a car is wide.
+        const int checks = std::max(1, int(L / 0.5));
+        for (int c = 1; c <= checks && !stop; c++) {
+          const V3 p = from + seg * (double(c) / checks);
+          const V3 q = p - f.cog;
+          if (std::fabs(dot(q, f.fwd)) >= f.halfLength || std::fabs(dot(q, f.left)) >= f.halfWidth || std::fabs(dot(q, f.up)) >= f.height * 0.5) continue;
           stop = true;
-          at = b.p;
+          at = p;
+          if (v >= kTanks && !vehicleDead(v) && b.kind < WP_RPG) {
+            inCar = true;
+            bulletInCar(v - kTanks, p - norm(seg) * 0.5, norm(seg), b.kind);
+          }
         }
       }
     // And the world, every metre of the way.
@@ -907,7 +998,8 @@ void Duel::stepBullets(double dt) {
       else if (b.kind == WP_SNIPER && b.age < 6.0) {
         // A shell of its own, near enough: a hole in the ground, stone gone, a dent in whatever it hits, and whoever
         // stands right beside it feels it too. The dust goes up high, for the shooter to see where it went.
-        sim.explode(at, 650.0, 4.0, 2.4);
+        // In a car it is the part it hit that suffers, not the whole thing.
+        if (!inCar) sim.explode(at, 650.0, 4.0, 2.4);
         sim.event(EV_IMPACT, at, V3{double(b.owner), 0, 0}, 1.f);
       }
       else if (b.age < 6.0) sim.event(EV_SPARK, at, b.v * -0.01, 0.3f);

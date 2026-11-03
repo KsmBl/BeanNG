@@ -388,6 +388,12 @@ int main(int argc, char** argv) {
       for (size_t t = 0; t < 4; t++) w.put(float(t < v.wheels.size() ? v.wheels[t].theta : 0.0));
       w.put(i8(v.gear));
       w.put(u8(v.exploded ? 1 : 0));
+      w.put(u8((v.dmg.seized ? 1 : 0) | (v.dmg.oilLeak ? 2 : 0) | (v.dmg.radiator ? 4 : 0) | (v.dmg.tank ? 8 : 0) | (v.dmg.gearbox ? 16 : 0)));
+      {
+        u8 flat = 0;
+        for (size_t t = 0; t < v.wheels.size() && t < 8; t++) flat |= u8(v.wheels[t].deflate > 0 ? 1 << t : 0);
+        w.put(flat);
+      }
       w.put(at - first);
       w.put(u16(count));
       for (u32 n = at; n < at + count; n++) {

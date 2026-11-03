@@ -687,6 +687,7 @@ struct Game {
       V3 cog, fwd, left, up;
       float speed = 0, rpm = 0, throttle = 0, brake = 0, steer = 0, fuel = 0, coolant = 0, lat = 0, lon = 0;
       float theta[4] = {};
+      u8 hurt = 0, flat = 0;
       int gear = 1;
       bool exploded = false;
       std::vector<i16> offsets;
@@ -727,6 +728,9 @@ struct Game {
     int lastTankWatched = -1;
     std::string alert;
     double alertUntil = 0;
+    u8 carHurt[Duel::kCars] = {}, carFlat[Duel::kCars] = {};
+    u8 seenHurt = 0, seenFlat = 0;
+    int carWatched = -1;
     u32 ackedInput = 0;
     V3 serverP;
     bool freshAnswer = false;
@@ -1111,6 +1115,8 @@ struct Game {
           for (float* v : {&head.speed, &head.rpm, &head.throttle, &head.brake, &head.steer, &head.fuel, &head.coolant, &head.lat, &head.lon, &head.theta[0], &head.theta[1], &head.theta[2], &head.theta[3]}) r.get(*v);
           r.get(gear);
           r.get(exploded);
+          r.get(head.hurt);
+          r.get(head.flat);
           head.gear = gear;
           head.exploded = exploded != 0;
           u32 at = 0;
@@ -1220,6 +1226,8 @@ struct Game {
         v.speed = lerpd(fa.speed, fb.speed, a);
         v.gear = fb.gear;
         v.exploded = fb.exploded;
+        carHurt[k] = fb.hurt;
+        carFlat[k] = fb.flat;
         v.engineOmega = lerpd(fa.rpm, fb.rpm, a) * 2.0 * PI / 60.0;
         v.throttleAct = fb.throttle;
         v.brakeAct = fb.brake;
@@ -1366,6 +1374,27 @@ struct Game {
         lastTankWatched = vehicleNow;
       } else {
         lastTankWatched = -1;
+      }
+      if (vehicleNow >= Duel::kTanks) {
+        // What has just gone wrong with the car one is sitting in.
+        const int k = vehicleNow - Duel::kTanks;
+        if (carWatched == k) {
+          static const char* kCarLost[5] = {"Motor getroffen: er steht", "Ölwanne leck", "Kühler leck", "Tank leck", "Getriebe getroffen"};
+          for (int i = 0; i < 5; i++)
+            if ((carHurt[k] & (1 << i)) && !(seenHurt & (1 << i))) {
+              alert = kCarLost[i];
+              alertUntil = now + 4.0;
+            }
+          if (carFlat[k] & ~seenFlat) {
+            alert = "Reifen platt";
+            alertUntil = now + 4.0;
+          }
+        }
+        carWatched = k;
+        seenHurt = carHurt[k];
+        seenFlat = carFlat[k];
+      } else {
+        carWatched = -1;
       }
       char msg[128] = "";
       if (state == NET_IN && now < alertUntil) {
