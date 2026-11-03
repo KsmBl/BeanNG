@@ -10,6 +10,8 @@ struct WheelView {
   bool left = true;
   double deflate = 0;
   double skid = 0;
+  double omega = 0;
+  double fz = 0;
   u8 surface = 0;
   V3 patch;
   V3 groundN{0, 0, -1};     // towards the road, world space
@@ -43,6 +45,9 @@ struct Snapshot {
   double timeScale = 1;
   double realtime = 1;   // simulated seconds per real second
   bool paused = false;
+  // For the sound.
+  double engineLoad = 0, inputRpm = 0, clutchSlip = 0;
+  bool starter = false, shifting = false;
   std::string damageMsg;
   double damageAge = 100;
 };
@@ -50,10 +55,12 @@ struct Snapshot {
 struct Camera {
   V3 eye, target, up{0, 0, 1};
   double fovY = 60.0 * PI / 180.0;
+  bool inside = false;  // looking out through the glass from inside the car
 };
 
 struct HudOptions {
   bool help = false, xray = false, debugBeams = false, mouseSteer = false, gamepad = false;
+  bool motionBlur = true;
   std::string gamepadName, cameraName, gpuName;
   double fps = 0;
 };

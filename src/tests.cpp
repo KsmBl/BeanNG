@@ -881,6 +881,106 @@ void testWheelDamage() {
   }
 }
 
+// How easily the wheels fold: camber and toe of each wheel against the body, before and after abuse.
+void wheelAttitude(const Bench& b, double out[4][2]) {
+  for (int i = 0; i < 4; i++) {
+    const Wheel& w = b.car.wheels[i];
+    const V3 ax = norm(b.sim.pos[w.axOut] - b.sim.pos[w.axIn]);  // towards the outside
+    const double sg = w.left ? 1.0 : -1.0;
+    out[i][0] = std::asin(clampd(dot(ax, b.car.up), -1, 1)) * 57.3 * sg;
+    out[i][1] = std::asin(clampd(dot(ax, b.car.fwd), -1, 1)) * 57.3;
+  }
+}
+void reportBuckle(const char* name, Bench& b, double a0[4][2], double peakFz) {
+  b.run(4.0, [&](double, Controls& c) { c.throttle = 0; c.steer = 0; c.brake = 1; });
+  double a[4][2];
+  wheelAttitude(b, a);
+  double dent = 0, run = 0, dc = 0, dt = 0;
+  int flat = 0;
+  for (int i = 0; i < 4; i++) {
+    const Wheel& w = b.car.wheels[i];
+    for (float d : w.dent) dent = std::max(dent, double(d));
+    run = std::max(run, double(std::hypot(w.runoutX, w.runoutZ)));
+    flat += w.deflate > 0;
+    dc = std::max(dc, std::fabs(a[i][0] - a0[i][0]));
+    dt = std::max(dt, std::fabs(a[i][1] - a0[i][1]));
+  }
+  int yHub = 0, yArm = 0;
+  const Obj& o = b.sim.objs[b.car.obj];
+  for (const Wheel& w : b.car.wheels)
+    for (int i = 0; i < 6; i++)
+      for (int k = 0; k < 2; k++) yHub += std::fabs(b.sim.beams[w.spoke[i][k]].L0 - b.sim.beams[w.spoke[i][k]].Lorig) > 2e-4;
+  (void)o;
+  (void)yArm;
+  printf("  %-26s peak Fz %5.1f kN  dent %5.1f mm  runout %4.1f mm  flat %d  camber +%4.1f  toe +%4.1f deg  yielded spokes %2d  plastic %6.1f kJ\n", name, peakFz / 1e3, dent * 1e3, run * 1e3, flat, dc, dt, yHub, b.sim.plasticEnergy / 1e3);
+}
+void testBuckle() {
+  printf("== How easily do the wheels fold? ==\n");
+  auto peak = [](Bench& b, double& p) { for (const Wheel& w : b.car.wheels) p = std::max(p, w.Fz); };
+  for (double h : {0.3, 0.6, 1.0, 1.5, 2.5}) {
+    Bench b;
+    b.world.clearBoxes();
+    double a0[4][2];
+    wheelAttitude(b, a0);
+    const Obj& o = b.sim.objs[b.car.obj];
+    for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) b.sim.pos[i].z += h;
+    double p = 0;
+    b.run(2.5, [&](double, Controls&) { peak(b, p); });
+    char nm[64];
+    snprintf(nm, sizeof nm, "drop %.1f m", h);
+    reportBuckle(nm, b, a0, p);
+  }
+  // Speed bumps at y = 70, in the main speed range.
+  for (double kmh : {30.0, 60.0, 100.0}) {
+    Bench b({-60, 70, 0}, 0);
+    double a0[4][2];
+    wheelAttitude(b, a0);
+    b.launchAt(kmh / 3.6, kmh > 60 ? 3 : 2);
+    double p = 0;
+    b.run(5.0, [&](double, Controls& c) { c.throttle = 0.25; peak(b, p); });
+    char nm[64];
+    snprintf(nm, sizeof nm, "bars %.0f km/h", kmh);
+    reportBuckle(nm, b, a0, p);
+  }
+  // Long kerb at y = 95, crossed at an angle of about 25 degrees.
+  for (double kmh : {25.0, 50.0, 90.0}) {
+    Bench b({-46, 91.0, 0}, 0.45);
+    double a0[4][2];
+    wheelAttitude(b, a0);
+    b.launchAt(kmh / 3.6, 2);
+    double p = 0;
+    b.run(1.2, [&](double, Controls&) { peak(b, p); });
+    char nm[64];
+    snprintf(nm, sizeof nm, "kerb %.0f km/h, 25 deg", kmh);
+    reportBuckle(nm, b, a0, p);
+  }
+  // Flank slide: the whole car thrown sideways into the kerb, the classic way to bend a wheel.
+  for (double kmh : {10.0, 20.0, 35.0, 60.0}) {
+    Bench b({-20, 92.5, 0}, 0);
+    double a0[4][2];
+    wheelAttitude(b, a0);
+    const Obj& o = b.sim.objs[b.car.obj];
+    for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) b.sim.vel[i] = V3{0, kmh / 3.6, 0};
+    double p = 0;
+    b.run(1.5, [&](double, Controls&) { peak(b, p); });
+    char nm[64];
+    snprintf(nm, sizeof nm, "side into kerb %.0f km/h", kmh);
+    reportBuckle(nm, b, a0, p);
+  }
+  // Hard cornering and braking must not move anything.
+  {
+    Bench b;
+    b.world.clearBoxes();
+    b.world.flatten();
+    double a0[4][2];
+    wheelAttitude(b, a0);
+    b.launchAt(80 / 3.6, 3);
+    double p = 0;
+    b.run(4.0, [&](double t, Controls& c) { c.steer = t < 3 ? 0.3 : -0.5; c.brake = t > 3 ? 1 : 0; peak(b, p); });
+    reportBuckle("hard corner and brake", b, a0, p);
+  }
+}
+
 void testWheelStrike() {
   // Front left wheel driven into the end of a concrete wall, offset so that the wheel takes the hit.
   printf("== Wheel strike against the scrape wall end ==\n");
@@ -1313,6 +1413,39 @@ int main(int argc, char** argv) {
     testJitter("standstill", 0);
     testJitter("60 km/h", 60);
     testJitter("120 km/h", 120);
+  }
+  if (argc > 1 && !strcmp(argv[1], "buckle2")) {
+    for (double kmh : {25.0}) {
+      Bench b({-46, 91.0, 0}, 0.45);
+      b.launchAt(kmh / 3.6, 2);
+      b.run(1.2, [&](double, Controls&) {});
+      b.run(4.0, [&](double, Controls& c) { c.brake = 1; });
+      const Obj& o = b.sim.objs[b.car.obj];
+      struct R { double d; u32 i; };
+      std::vector<R> rs;
+      for (u32 i = o.beamStart; i < o.beamStart + o.beamCount; i++) {
+        const Beam& B = b.sim.beams[i];
+        const double d = B.L0 - B.Lorig;
+        if (std::fabs(d) > 5e-4) rs.push_back({d, i});
+      }
+      std::sort(rs.begin(), rs.end(), [](R a, R c) { return std::fabs(a.d) > std::fabs(c.d); });
+      printf("%zu yielded beams\n", rs.size());
+      const V3 org = b.sim.rest[o.nodeStart];
+      (void)org;
+      for (size_t k = 0; k < rs.size() && k < 30; k++) {
+        const Beam& B = b.sim.beams[rs[k].i];
+        const V3 A = b.sim.rest[B.a], C = b.sim.rest[B.b];
+        const double cs = std::cos(-0.45), sn = std::sin(-0.45);
+        auto loc = [&](V3 p) { p = p - V3{-46, 91, 0}; return V3{cs * p.x - sn * p.y, sn * p.x + cs * p.y, p.z}; };
+        const V3 la = loc(A), lc = loc(C);
+        printf("  %+6.1f mm  yC %3.0f kN  L %.3f  (%.2f %.2f %.2f) - (%.2f %.2f %.2f)\n", rs[k].d * 1e3, B.yC / 1e3, B.Lorig, la.x, la.y, la.z, lc.x, lc.y, lc.z);
+      }
+    }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "buckle")) {
+    testBuckle();
+    return 0;
   }
   if (want("wheel")) {
     testWheelDamage();

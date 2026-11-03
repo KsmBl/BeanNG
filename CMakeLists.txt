@@ -24,6 +24,6 @@ add_executable(beanng-test src/tests.cpp)
 target_link_libraries(beanng-test PRIVATE core)
 
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
-  add_executable(beanng src/main.cpp src/render.cpp)
+  add_executable(beanng src/main.cpp src/render.cpp src/audio.cpp)
   target_link_libraries(beanng PRIVATE core PkgConfig::SDL3 PkgConfig::EPOXY)
 endif()

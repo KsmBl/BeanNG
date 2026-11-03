@@ -104,10 +104,14 @@ const Mat mBulkhead{1.6e6, 280, 30e3, 60e3, 1e5, 0.35, 0};
 const Mat mSubframe{3.0e6, 440, 70e3, 90e3, 2e5, 0.22, 0};
 const Mat mInnerWing{1.8e6, 300, 32e3, 55e3, 1e5, 0.40, 0};
 const Mat mAnchor{3.0e6, 440, 65e3, 85e3, 2e5, 0.20, 0};
-const Mat mArm{4.0e6, 500, 55e3, 75e3, 3e5, 0.22, 0};
-const Mat mHub{2.2e6, 280, 16e3, 26e3, 1.2e5, 0.25, 0};  // a wheel bends long before an arm does
+const Mat mArm{4.0e6, 500, 78e3, 98e3, 3e5, 0.22, 0};  // forged, buckles only in a real blow
+// The rim itself: it gives way locally under a heavy radial hit, which is what leaves a dent.
+const Mat mHub{2.2e6, 280, 22e3, 34e3, 1.2e5, 0.25, 0};
+// Bearing and stub axle between rim and carrier. Forged steel: the wheel must not fold over at the
+// hub, a hard side hit bends an arm or the tie rod first.
+const Mat mKnuckle{2.2e6, 280, 85e3, 110e3, 4e5, 0.25, 0};
 const Mat mCarrier{3.2e6, 420, 90e3, 110e3, 4e5, 0.20, 0};
-const Mat mTie{3.0e6, 360, 26e3, 34e3, 1e5, 0.12, 0};
+const Mat mTie{3.0e6, 360, 40e3, 50e3, 1.5e5, 0.12, 0};
 const Mat mBlock{6e6, 900, 240e3, 240e3, 6e5, 0.0, 0};
 const Mat mMount{4.5e5, 500, 16e3, 18e3, 3e4, 0.45, 0};
 const Mat mCase{5.0e6, 800, 160e3, 160e3, 5e5, 0.0, 0};
@@ -576,7 +580,7 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
       B.beam(kf, ku, mCarrier);
       B.beam(kf, ks, mCarrier);
       for (int i = 0; i < 6; i++)
-        for (u32 c : {kl, ku, ks, kf}) B.beam(w.ring[i], c, mHub);
+        for (u32 c : {kl, ku, ks, kf}) B.beam(w.ring[i], c, mKnuckle);
 
       // Lower wishbone to the two rail pick-ups.
       B.ibeam(kl, B.body[4][1][side], mArm);
@@ -661,7 +665,7 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
       B.beam(kf, po, mArm);
       B.beam(kf, pi, mArm);
       for (int i = 0; i < 6; i++)
-        for (u32 c : {kt, kb, kf, kr}) B.beam(w.ring[i], c, mHub);
+        for (u32 c : {kt, kb, kf, kr}) B.beam(w.ring[i], c, mKnuckle);
       B.beam(po, pi, mSubframe);
       B.anchor(po, 6, mAnchor);
       B.anchor(pi, 6, mAnchor);

@@ -615,6 +615,9 @@ void Sim::collidePairs(double dt) {
   touched.clear();
 }
 
+// Share of the contact frequency for rim nodes: 0.65 means 42 % of the normal stiffness, about 1.3 MN/m.
+static constexpr double kRimCushion = 0.65;
+
 void Sim::collideWorld(double dt) {
   for (u32 oi : active) {
     const Obj& o = objs[oi];
@@ -625,8 +628,10 @@ void Sim::collideWorld(double dt) {
       if (!world->contact(pos[i], c)) continue;
       const double m = mass[i];
       const double vn = dot(vel[i], c.n);
-      const double fn = m * kContactOmega * kContactOmega * std::min(c.depth, kMaxPenWorld) -
-                        2.0 * kContactZeta * m * kContactOmega * vn;
+      // A rim never meets a kerb bare: the crushed tyre is still between them. Without that cushion
+      // the hub takes a hammer blow, and the slightest kerb folds the wheel over.
+      const double omega = (fl & NF_WHEEL) ? kContactOmega * kRimCushion : kContactOmega;
+      const double fn = m * omega * omega * std::min(c.depth, kMaxPenWorld) - 2.0 * kContactZeta * m * omega * vn;
       if (fn <= 0) continue;
       V3 ff;
       const double muv = double(mu[i]) * surfaceFriction(c.surface);

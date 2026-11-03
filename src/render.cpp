@@ -95,30 +95,39 @@ layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
 layout(location=2) in vec4 aCol;
 layout(location=3) in vec3 aRest;
-layout(location=4) in vec4 aScratch;
+layout(location=4) in vec3 aRestN;
 uniform mat4 uVP;
 uniform mat4 uModel;
 uniform mat4 uShadowVP;
-out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow; out vec3 vRest; out vec4 vScratch;
+uniform mat4 uPrevVP;
+uniform mat4 uPrevWorld;  // where this surface was one shutter time ago, relative to where it is now
+out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow; out vec3 vRest; out vec3 vRestN;
+out vec4 vClip; out vec4 vPrevClip;
 void main(){
   vRest = aRest;
-  vScratch = aScratch;
+  vRestN = aRestN;
   vec4 w = uModel * vec4(aPos,1.0);
   vPos = w.xyz;
   vNrm = mat3(uModel) * aNrm;
   vCol = aCol;
   vShadow = uShadowVP * w;
   gl_Position = uVP * w;
+  vClip = gl_Position;
+  vPrevClip = uPrevVP * uPrevWorld * w;
 })";
 
 // aCol.a encodes the material: <0.5 matte, 0.5..0.9 paint with sky reflection, 1 = opaque glossy
 const char* kMeshFS = R"(#version 330 core
-in vec3 vPos; in vec3 vNrm; in vec4 vCol; in vec4 vShadow; in vec3 vRest; in vec4 vScratch;
+in vec3 vPos; in vec3 vNrm; in vec4 vCol; in vec4 vShadow; in vec3 vRest; in vec3 vRestN; in vec4 vClip; in vec4 vPrevClip;
 uniform vec3 uEye;
 uniform vec3 uSun;
 uniform sampler2DShadow uShadow;
 uniform float uAlpha;
-out vec4 frag;
+uniform sampler2DArray uScratchTex;
+uniform sampler2D uDetailTex;
+uniform float uDetail;
+layout(location=0) out vec4 frag;
+layout(location=1) out vec2 velOut;
 vec3 sky(vec3 d){
   float t = clamp(d.z*0.5+0.5,0.0,1.0);
   vec3 c = mix(vec3(0.62,0.60,0.56), vec3(0.32,0.52,0.82), pow(t,0.7));
@@ -126,26 +135,27 @@ vec3 sky(vec3 d){
   c += vec3(1.0,0.9,0.75)*pow(max(dot(d,uSun),0.0),180.0)*2.5;
   return c;
 }
-float hash1(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-// Long thin grooves running along the direction of the scrape, in the car's own coordinates.
-float grooves(vec3 q, vec3 dir, float amount){
-  vec3 d = normalize(dir);
-  vec3 a = normalize(cross(d, vec3(0.31, 0.53, 0.79)));
-  vec3 b = cross(d, a);
-  float along = dot(q, d);
-  float across = dot(q, a) + 0.7*dot(q, b);
-  float result = 0.0;
-  for(int i = 0; i < 3; i++){
-    float f = 160.0 + float(i)*170.0;
-    float line = floor(across*f);
-    float seg = along*(2.5 + float(i)*2.0) + hash1(vec2(line, float(i)))*9.0;
-    float cell = floor(seg);
-    float t = fract(seg);
-    float present = step(1.0 - amount*0.42, hash1(vec2(line, cell + float(i)*17.0)));
-    float taper = smoothstep(0.0, 0.15, t)*(1.0 - smoothstep(0.8, 1.0, t));
-    result = max(result, present*taper*(0.35 + 0.65*hash1(vec2(line*3.1, 7.0))));
+// Scratches live in five flat maps of the car: left, right, top, nose and tail. They are real painted
+// lines with mipmaps, so that from afar they fade out smoothly instead of turning into noise.
+vec2 scratchAt(){
+  if(dot(vRestN,vRestN) < 0.25) return vec2(0.0);
+  vec3 n = abs(vRestN);
+  vec3 dx = dFdx(vRest), dy = dFdy(vRest);
+  vec2 uv, gx, gy; float layer;
+  const vec3 org = vec3(0.1, 1.0, 0.0);
+  const vec3 size = vec3(4.8, 2.0, 1.6);
+  if(n.y >= n.x && n.y >= n.z*0.9){
+    layer = vRestN.y > 0.0 ? 0.0 : 1.0;
+    uv = vec2(vRest.x+org.x, vRest.z)/size.xz; gx = dx.xz/size.xz; gy = dy.xz/size.xz;
+  } else if(n.z >= n.x){
+    if(vRestN.z < 0.0) return vec2(0.0);
+    layer = 2.0;
+    uv = vec2(vRest.x+org.x, vRest.y+org.y)/size.xy; gx = dx.xy/size.xy; gy = dy.xy/size.xy;
+  } else {
+    layer = vRestN.x < 0.0 ? 3.0 : 4.0;
+    uv = vec2(vRest.y+org.y, vRest.z)/size.yz; gx = dx.yz/size.yz; gy = dy.yz/size.yz;
   }
-  return result;
+  return textureGrad(uScratchTex, vec3(uv, layer), gx, gy).rg;
 }
 float shadow(){
   vec3 p = vShadow.xyz/vShadow.w*0.5+0.5;
@@ -162,18 +172,28 @@ void main(){
   vec3 albedo = vCol.rgb;
   float flash = 0.0;
   if(dot(N,V)<0.0){ N=-N; if(gloss>0.05) gloss=0.0; }
-  else if(vScratch.w > 0.01){
-    // Through the clear coat to the primer, and in the deepest grooves to bare steel.
-    float g = grooves(vRest, vScratch.xyz + vec3(1e-4), clamp(vScratch.w, 0.0, 1.0));
-    if(g > 0.0){
-      vec3 bare = g > 0.85 ? vec3(0.60,0.61,0.63) : vec3(0.34,0.31,0.29);
+  else {
+    vec2 sc = scratchAt();
+    if(sc.g > 0.002){
+      // Scuffed clear coat: duller and a little lighter, with some of the obstacle rubbed on.
+      gloss *= 1.0 - 0.75*sc.g;
+      albedo = mix(albedo, albedo*0.72 + vec3(0.10), sc.g);
+    }
+    if(sc.r > 0.004){
+      // Through the paint to grey primer, and in the deep gouges to bare steel.
+      float g = clamp(sc.r*1.6, 0.0, 1.0);
+      float steel = smoothstep(0.42, 0.72, sc.r);
+      vec3 bare = mix(vec3(0.42,0.41,0.39), vec3(0.66,0.67,0.69), steel);
       albedo = mix(albedo, bare, g);
       gloss *= 1.0 - g;
-      flash = g > 0.85 ? 0.2*g : 0.0;
+      flash = 0.25*steel*g;
     }
-    // Dull scuffing around the grooves.
-    gloss *= 1.0 - 0.45*clamp(vScratch.w*1.4, 0.0, 1.0);
-    albedo = mix(albedo, albedo*0.85 + vec3(0.05), clamp(vScratch.w, 0.0, 1.0)*0.5);
+  }
+  if(uDetail > 0.0 && N.z > 0.5){
+    // Patches and grit on the ground. Without them the road gives the eye nothing to measure speed by.
+    float fine = texture(uDetailTex, vPos.xy/3.7).r;
+    float wide = texture(uDetailTex, vPos.xy/41.0 + 0.37).g;
+    albedo *= uDetail*(0.62 + 0.55*fine + 0.45*wide) + (1.0 - uDetail);
   }
   float diff = max(dot(N,uSun),0.0)*shadow();
   vec3 amb = mix(vec3(0.20,0.19,0.17), vec3(0.34,0.40,0.50), N.z*0.5+0.5);
@@ -193,6 +213,67 @@ void main(){
   c = mix(c, vec3(0.66,0.70,0.74), clamp(fog,0.0,0.85));
   c = c/(c*0.22+0.85);
   frag = vec4(pow(c,vec3(1.0/1.6)), uAlpha);
+  // How far this point moves across the screen during the shutter time, for the motion blur.
+  velOut = vPrevClip.w > 0.05 ? (vClip.xy/vClip.w - vPrevClip.xy/vPrevClip.w)*0.5 : vec2(0.0);
+})";
+
+// Motion blur: smears every pixel along its own motion on screen. A blurred background must not pick
+// up the sharp car in front of it, so samples nearer than this pixel only count if they really move
+// that far themselves.
+const char* kPostVS = R"(#version 330 core
+uniform mat4 uSkyVP; uniform mat4 uSkyPrevVP;
+out vec2 vUv; flat out mat4 vSkyReproject;
+void main(){
+  vec2 p = vec2((gl_VertexID==1)?3.0:-1.0, (gl_VertexID==2)?3.0:-1.0);
+  vUv = p*0.5+0.5;
+  vSkyReproject = uSkyPrevVP*inverse(uSkyVP);
+  gl_Position = vec4(p,0.0,1.0);
+})";
+const char* kPostFS = R"(#version 330 core
+in vec2 vUv; flat in mat4 vSkyReproject;
+uniform sampler2D uColor; uniform sampler2D uVel; uniform sampler2D uDepth;
+uniform vec2 uRes; uniform float uBlur; uniform float uNear; uniform float uFar; uniform float uVignette;
+out vec4 frag;
+float linZ(float d){ float z=d*2.0-1.0; return 2.0*uNear*uFar/(uFar+uNear-z*(uFar-uNear)); }
+vec2 motionAt(vec2 uv, float depth){
+  if(depth >= 0.99999){
+    vec4 q = vSkyReproject*vec4(uv*2.0-1.0, 1.0, 1.0);
+    return uv - (q.xy/q.w*0.5+0.5);
+  }
+  return texture(uVel, uv).xy;
+}
+void main(){
+  vec3 base = texture(uColor, vUv).rgb;
+  vec3 c = base;
+  float d0 = texture(uDepth, vUv).r;
+  vec2 vel = motionAt(vUv, d0)*uBlur;
+  // Limited to a fifteenth of the screen width: beyond that it only hides the scenery.
+  float px = length(vel*uRes);
+  float maxPx = uRes.x/15.0;
+  if(px > maxPx){ vel *= maxPx/px; px = maxPx; }
+  if(px > 1.0){
+    const int N = 16;
+    float z0 = linZ(d0);
+    float noise = fract(52.9829189*fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    vec3 sum = base; float total = 1.0;
+    for(int i = 0; i < N; i++){
+      float t = (float(i)+noise)/float(N) - 0.5;
+      vec2 uv = vUv + vel*t;
+      float ds = texture(uDepth, uv).r;
+      float zs = linZ(ds);
+      if(zs < z0 - 0.25){
+        vec2 vs = motionAt(uv, ds)*uBlur;
+        if(length(vs*uRes) < 2.0*abs(t)*px) continue;
+      }
+      sum += texture(uColor, uv).rgb;
+      total += 1.0;
+    }
+    c = sum/total;
+  }
+  // At speed the edges of the view fall away a little, as they do in the eye.
+  vec2 e = vUv*2.0-1.0;
+  c *= 1.0 - uVignette*smoothstep(0.35, 1.5, dot(e,e));
+  frag = vec4(c, 1.0);
 })";
 
 // Wheel: rim damage turns with the wheel, the contact patch and tyre bulge stay at the road.
@@ -210,11 +291,15 @@ uniform vec2 uRunout;
 uniform vec3 uPlaneN;     // towards the road, wheel frame
 uniform float uPlaneD;    // hub to road
 uniform float uDeflate;
-out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow; out vec3 vRest; out vec4 vScratch;
+uniform vec2 uPrevSpin;
+uniform mat4 uPrevVP;
+uniform mat4 uPrevWorld;
+out vec3 vPos; out vec3 vNrm; out vec4 vCol; out vec4 vShadow; out vec3 vRest; out vec3 vRestN;
+out vec4 vClip; out vec4 vPrevClip;
 const float PI = 3.14159265;
 void main(){
   vRest = vec3(0.0);
-  vScratch = vec4(0.0);
+  vRestN = vec3(0.0);
   vec3 p = aPos;
   vec3 n = aNrm;
   if(uMode > 0){
@@ -239,6 +324,7 @@ void main(){
     p.y += dot(uRunout, vec2(cos(phi), sin(phi))) * rimF;
   }
   // Turn the wheel.
+  vec3 pPrev = vec3(p.x*uPrevSpin.x - p.z*uPrevSpin.y, p.y, p.x*uPrevSpin.y + p.z*uPrevSpin.x);
   p.xz = vec2(p.x*uSpin.x - p.z*uSpin.y, p.x*uSpin.y + p.z*uSpin.x);
   n.xz = vec2(n.x*uSpin.x - n.z*uSpin.y, n.x*uSpin.y + n.z*uSpin.x);
   if(uMode == 2){
@@ -260,6 +346,8 @@ void main(){
   vCol = aCol;
   vShadow = uShadowVP * w;
   gl_Position = uVP * w;
+  vClip = gl_Position;
+  vPrevClip = uPrevVP * uPrevWorld * uModel * vec4(pPrev,1.0);
 })";
 
 const char* kDepthVS = R"(#version 330 core
@@ -444,24 +532,181 @@ struct Renderer::Impl {
   GLuint propVao = 0, propVbo = 0;
   std::vector<Vtx> propVerts;
 
-  // Scratches: per-vertex groove direction and depth, in the car's own frame.
-  GLuint carRestVbo = 0, carScratchVbo = 0;
-  std::vector<float> scratch;
+  // Scene targets: the frame is rendered with MSAA and a motion vector per pixel, then blurred.
+  GLuint progPost = 0;
+  GLuint detailTex = 0;
+  void buildDetailTexture() {
+    // Two tiling layers of soft noise: R is grit with dark flecks, G is broad patches.
+    constexpr int N = 512;
+    std::vector<u8> px(size_t(N) * N * 2);
+    std::mt19937 rng(99);
+    auto layer = [&](int cells, std::vector<float>& out) {
+      std::vector<float> g(size_t(cells) * cells);
+      for (float& f : g) f = float(rng() & 0xffff) / 65535.f;
+      out.resize(size_t(N) * N);
+      for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) {
+          const float fx = float(x) * cells / N, fy = float(y) * cells / N;
+          const int ix = int(fx), iy = int(fy);
+          float tx = fx - ix, ty = fy - iy;
+          tx = tx * tx * (3 - 2 * tx);
+          ty = ty * ty * (3 - 2 * ty);
+          const int x1 = (ix + 1) % cells, y1 = (iy + 1) % cells;
+          const float a = g[size_t(iy) * cells + ix], b = g[size_t(iy) * cells + x1], c = g[size_t(y1) * cells + ix], d = g[size_t(y1) * cells + x1];
+          out[size_t(y) * N + x] = a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+        }
+    };
+    std::vector<float> l0, l1, l2, l3;
+    layer(128, l0);
+    layer(32, l1);
+    layer(8, l2);
+    layer(3, l3);
+    for (size_t i = 0; i < size_t(N) * N; i++) {
+      px[i * 2] = u8(std::clamp((l0[i] * 0.6f + l1[i] * 0.4f) * 255.f, 0.f, 255.f));
+      px[i * 2 + 1] = u8(std::clamp((l2[i] * 0.6f + l3[i] * 0.4f) * 255.f, 0.f, 255.f));
+    }
+    glGenTextures(1, &detailTex);
+    glBindTexture(GL_TEXTURE_2D, detailTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, N, N, 0, GL_RG, GL_UNSIGNED_BYTE, px.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    if (epoxy_has_gl_extension("GL_EXT_texture_filter_anisotropic"))
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 8.f);
+  }
+  GLuint sceneFbo = 0, sceneColor = 0, sceneVel = 0, sceneDepth = 0;
+  GLuint resolveFbo = 0, resolveColor = 0, resolveVel = 0, resolveDepth = 0;
+  int targetW = 0, targetH = 0;
+  void ensureTargets(int w, int h) {
+    if (w == targetW && h == targetH) return;
+    targetW = w;
+    targetH = h;
+    if (!sceneFbo) {
+      glGenFramebuffers(1, &sceneFbo);
+      glGenFramebuffers(1, &resolveFbo);
+      glGenRenderbuffers(1, &sceneColor);
+      glGenRenderbuffers(1, &sceneVel);
+      glGenRenderbuffers(1, &sceneDepth);
+      glGenTextures(1, &resolveColor);
+      glGenTextures(1, &resolveVel);
+      glGenTextures(1, &resolveDepth);
+    }
+    constexpr int kSamples = 4;
+    glBindRenderbuffer(GL_RENDERBUFFER, sceneColor);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, kSamples, GL_RGBA8, w, h);
+    glBindRenderbuffer(GL_RENDERBUFFER, sceneVel);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, kSamples, GL_RG16F, w, h);
+    glBindRenderbuffer(GL_RENDERBUFFER, sceneDepth);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, kSamples, GL_DEPTH_COMPONENT24, w, h);
+    glBindFramebuffer(GL_FRAMEBUFFER, sceneFbo);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, sceneColor);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_RENDERBUFFER, sceneVel);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, sceneDepth);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) fprintf(stderr, "Szene-Framebuffer unvollstaendig\n");
+    auto tex = [&](GLuint t, GLenum internal, GLenum format, GLenum type) {
+      glBindTexture(GL_TEXTURE_2D, t);
+      glTexImage2D(GL_TEXTURE_2D, 0, GLint(internal), w, h, 0, format, type, nullptr);
+      const GLint filter = format == GL_DEPTH_COMPONENT ? GL_NEAREST : GL_LINEAR;
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    };
+    tex(resolveColor, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
+    tex(resolveVel, GL_RG16F, GL_RG, GL_FLOAT);
+    tex(resolveDepth, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_FLOAT);
+    glBindFramebuffer(GL_FRAMEBUFFER, resolveFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, resolveColor, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, resolveVel, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, resolveDepth, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) fprintf(stderr, "Resolve-Framebuffer unvollstaendig\n");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+  void useBuffers(int n) {
+    static const GLenum both[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(n, both);
+  }
+
+  // Motion for the blur. The physics delivers in steps of 4 ms and frames do not line up with them, so
+  // raw differences between frames would make the blur length pump. These rates are smoothed.
+  static constexpr double kShutter = 1.0 / 55.0;  // seconds of motion smeared into one frame
+  V3 lastCog, lastFwd, lastUp, lastEye, lastTarget;
+  V3 rateCog, rateFwd, rateUp, rateEye, rateTarget;
+  bool motionValid = false;
+  Mat4 prevVP, carPrevWorld, skyVP, skyPrevVP;
+  void updateMotion(const Snapshot& s, const Camera& cam, const Mat4& proj, double dt) {
+    const double a = dt > 0 ? clampd(dt / 0.05, 0, 1) : 0;
+    auto track = [&](V3 now, V3& last, V3& rate, double limit) {
+      if (motionValid && dt > 1e-4) {
+        const V3 v = (now - last) / dt;
+        if (len(v) > limit) rate = {};  // reset or repair: a jump, not motion
+        else rate += (v - rate) * a;
+      } else {
+        rate = {};
+      }
+      last = now;
+    };
+    track(s.carCog, lastCog, rateCog, 200);
+    track(s.carFwd, lastFwd, rateFwd, 20);
+    track(s.carUp, lastUp, rateUp, 20);
+    track(cam.eye, lastEye, rateEye, 200);
+    track(cam.target, lastTarget, rateTarget, 200);
+    motionValid = true;
+    const double T = kShutter;
+    prevVP = mul(proj, lookAt(cam.eye - rateEye * T, cam.target - rateTarget * T, cam.up));
+    const V3 f = norm(cam.target - cam.eye);
+    const V3 fp = norm(cam.target - rateTarget * T - cam.eye + rateEye * T);
+    skyVP = mul(proj, lookAt(V3{}, f, cam.up));
+    skyPrevVP = mul(proj, lookAt(V3{}, fp, cam.up));
+    // The car as a rigid body, one shutter time ago: p_prev = c_prev + R_prev R_now^T (p - c_now).
+    const V3 f0 = s.carFwd, u0 = norm(s.carUp - s.carFwd * dot(s.carUp, s.carFwd)), l0 = cross(u0, f0);
+    const V3 f1 = norm(f0 - rateFwd * T);
+    const V3 up1 = s.carUp - rateUp * T;
+    const V3 u1 = norm(up1 - f1 * dot(up1, f1)), l1 = cross(u1, f1);
+    const V3 c1 = s.carCog - rateCog * T;
+    auto rot = [&](V3 p) { return f1 * dot(p, f0) + l1 * dot(p, l0) + u1 * dot(p, u0); };
+    const V3 cx = rot(V3{1, 0, 0}), cy = rot(V3{0, 1, 0}), cz = rot(V3{0, 0, 1});
+    const V3 t = c1 - rot(s.carCog);
+    Mat4 m;
+    m.m[0] = float(cx.x); m.m[1] = float(cx.y); m.m[2] = float(cx.z);
+    m.m[4] = float(cy.x); m.m[5] = float(cy.y); m.m[6] = float(cy.z);
+    m.m[8] = float(cz.x); m.m[9] = float(cz.y); m.m[10] = float(cz.z);
+    m.m[12] = float(t.x); m.m[13] = float(t.y); m.m[14] = float(t.z);
+    m.m[15] = 1;
+    carPrevWorld = m;
+  }
+
+  // Scratches: five maps of the car in its own frame. R is groove depth, G is scuffed clear coat.
+  static constexpr int kScrW = 2400, kScrH = 800, kScrLayers = 5;
+  static constexpr double kScrSizeX = 4.8, kScrSizeY = 2.0, kScrSizeZ = 1.6, kScrOrgX = 0.1, kScrOrgY = 1.0;
+  GLuint carRestVbo = 0, carRestNVbo = 0, scratchTex = 0;
+  std::vector<u8> scratchPx;
+  struct DirtyRect { int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1; } scratchDirty[kScrLayers];
+  double mipClock = 0;
+  bool mipStale = false;
   std::vector<std::vector<u32>> scratchGrid;
   static constexpr double kScratchCell = 0.30;
   static constexpr int kGridX = 18, kGridY = 8, kGridZ = 6;
-  bool scratchDirty = false;
   size_t scrapeTotal = 0;
+  std::mt19937 scratchRng{12345};
   static int gridIndex(double x, double y, double z) {
     const int ix = std::clamp(int(x / kScratchCell) + 1, 0, kGridX - 1);
     const int iy = std::clamp(int((y + 1.2) / kScratchCell), 0, kGridY - 1);
     const int iz = std::clamp(int(z / kScratchCell), 0, kGridZ - 1);
     return (iz * kGridY + iy) * kGridX + ix;
   }
+  static int chartOf(float nx, float ny, float nz) {
+    const float ax = std::fabs(nx), ay = std::fabs(ny), az = std::fabs(nz);
+    if (ay >= ax && ay >= az * 0.9f) return ny > 0 ? 0 : 1;
+    if (az >= ax) return nz < 0 ? -1 : 2;
+    return nx < 0 ? 3 : 4;
+  }
   void buildScratchData() {
     const CarMesh& M = *mesh;
     const size_t nv = M.restPos.size() / 3;
-    scratch.assign(nv * 4, 0.f);
+    std::vector<float> restN(nv * 3, 0.f);
     scratchGrid.assign(size_t(kGridX) * kGridY * kGridZ, {});
     for (const MeshPart& p : M.parts) {
       if (!p.bound) continue;
@@ -469,67 +714,174 @@ struct Renderer::Impl {
       const bool skin = p.mat == MM_PAINT || p.mat == MM_BLACK || p.mat == MM_DARK || p.mat == MM_CHROME;
       const bool outer = p.group != "frame" && p.group != "engine" && p.group != "gearbox" && p.group != "radiator" && p.group != "battery" && p.group != "tank";
       if (!skin || !outer) continue;
-      for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++)
+      for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++) {
+        for (int k = 0; k < 3; k++) restN[size_t(v) * 3 + k] = M.restNormal[size_t(v) * 3 + k];
         scratchGrid[size_t(gridIndex(M.restPos[v * 3], M.restPos[v * 3 + 1], M.restPos[v * 3 + 2]))].push_back(v);
+      }
     }
     glGenBuffers(1, &carRestVbo);
     glBindBuffer(GL_ARRAY_BUFFER, carRestVbo);
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(M.restPos.size() * sizeof(float)), M.restPos.data(), GL_STATIC_DRAW);
-    glGenBuffers(1, &carScratchVbo);
-    glBindBuffer(GL_ARRAY_BUFFER, carScratchVbo);
-    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(scratch.size() * sizeof(float)), scratch.data(), GL_DYNAMIC_DRAW);
+    glGenBuffers(1, &carRestNVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, carRestNVbo);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(restN.size() * sizeof(float)), restN.data(), GL_STATIC_DRAW);
     for (GLuint vao : {carVao, carGlassVao, lensVao}) {
       glBindVertexArray(vao);
       glBindBuffer(GL_ARRAY_BUFFER, carRestVbo);
       glEnableVertexAttribArray(3);
       glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-      glBindBuffer(GL_ARRAY_BUFFER, carScratchVbo);
+      glBindBuffer(GL_ARRAY_BUFFER, carRestNVbo);
       glEnableVertexAttribArray(4);
-      glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+      glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
     }
     // Everything else in the world reads the attribute's constant value: no scratches.
     glBindVertexArray(0);
-    glVertexAttrib4f(4, 0.f, 0.f, 0.f, 0.f);
+    glVertexAttrib3f(4, 0.f, 0.f, 0.f);
     glVertexAttrib3f(3, 0.f, 0.f, 0.f);
+
+    scratchPx.assign(size_t(kScrW) * kScrH * kScrLayers * 2, 0);
+    glGenTextures(1, &scratchTex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, scratchTex);
+    int levels = 1;
+    for (int m = std::max(kScrW, kScrH); m > 1; m >>= 1) levels++;
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, levels, GL_RG8, kScrW, kScrH, kScrLayers);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (epoxy_has_gl_extension("GL_EXT_texture_filter_anisotropic"))
+      glTexParameterf(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_ANISOTROPY_EXT, 8.f);
+    uploadScratches(true);
   }
-  void applyScrapes(const Snapshot& s) {
+  void uploadScratches(bool all) {
+    glBindTexture(GL_TEXTURE_2D_ARRAY, scratchTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, kScrW);
+    bool any = false;
+    for (int l = 0; l < kScrLayers; l++) {
+      DirtyRect& r = scratchDirty[l];
+      if (all) r = DirtyRect{0, 0, kScrW - 1, kScrH - 1};
+      if (r.x1 < r.x0) continue;
+      const u8* src = &scratchPx[(size_t(l) * kScrH * kScrW + size_t(r.y0) * kScrW + r.x0) * 2];
+      glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, r.x0, r.y0, l, r.x1 - r.x0 + 1, r.y1 - r.y0 + 1, 1, GL_RG, GL_UNSIGNED_BYTE, src);
+      r = DirtyRect{};
+      any = true;
+    }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    if (any) mipStale = true;
+  }
+  // Paints a capsule into one map. Position in metres on the map's two axes.
+  void paintLine(int layer, double ax, double ay, double bx, double by, double halfWidth, float groove, float scuff) {
+    const double sx = layer <= 2 ? kScrW / kScrSizeX : kScrW / kScrSizeY;
+    const double sy = layer == 2 ? kScrH / kScrSizeY : kScrH / kScrSizeZ;
+    const double feather = 1.5 / std::min(sx, sy);
+    const double reach = halfWidth + feather;
+    const int x0 = std::max(0, int((std::min(ax, bx) - reach) * sx)), x1 = std::min(kScrW - 1, int((std::max(ax, bx) + reach) * sx) + 1);
+    const int y0 = std::max(0, int((std::min(ay, by) - reach) * sy)), y1 = std::min(kScrH - 1, int((std::max(ay, by) + reach) * sy) + 1);
+    if (x1 < x0 || y1 < y0) return;
+    const double dx = bx - ax, dy = by - ay, l2 = std::max(dx * dx + dy * dy, 1e-9);
+    u8* base = &scratchPx[size_t(layer) * kScrH * kScrW * 2];
+    for (int y = y0; y <= y1; y++) {
+      const double py = (y + 0.5) / sy;
+      u8* row = base + size_t(y) * kScrW * 2;
+      for (int x = x0; x <= x1; x++) {
+        const double px = (x + 0.5) / sx;
+        const double t = std::clamp(((px - ax) * dx + (py - ay) * dy) / l2, 0.0, 1.0);
+        const double ex = px - ax - dx * t, ey = py - ay - dy * t;
+        const double d = std::sqrt(ex * ex + ey * ey);
+        if (d >= reach) continue;
+        const double cover = std::clamp((reach - d) / (2.0 * feather), 0.0, 1.0);
+        // The ends taper out, a stylus lifting off the paint.
+        const double taper = std::min(1.0, std::min(t, 1.0 - t) * 6.0 + 0.15);
+        u8* o = row + size_t(x) * 2;
+        o[0] = std::max(o[0], u8(255.0 * groove * cover * taper));
+        // Scuffing builds up with repeated passes.
+        o[1] = u8(std::min(255.0, o[1] + 255.0 * scuff * cover * taper));
+      }
+    }
+    DirtyRect& r = scratchDirty[layer];
+    r.x0 = std::min(r.x0, x0);
+    r.y0 = std::min(r.y0, y0);
+    r.x1 = std::max(r.x1, x1);
+    r.y1 = std::max(r.y1, y1);
+  }
+  // One bundle of marks left by something dragging over the panel: a broad scuffed band, a few clear
+  // scratches, and sometimes a gouge down to the steel. Always a few millimetres wide, so they read
+  // as individual lines from the chase camera.
+  void addStroke(int layer, double u, double v, double du, double dv, double strength) {
+    auto rnd = [&](double a, double b) { return a + (b - a) * double(scratchRng() & 0xffff) / 65535.0; };
+    const double dl = std::hypot(du, dv);
+    if (dl < 0.2) return;  // sliding into the surface, not along it
+    du /= dl;
+    dv /= dl;
+    const double nu = -dv, nv = du;
+    const double len = rnd(0.12, 0.30 + 0.45 * strength);
+    if (rnd(0, 1) < 0.5)
+      paintLine(layer, u - du * len, v - dv * len, u + du * len, v + dv * len, rnd(0.012, 0.03), 0.f, float(0.015 + 0.03 * strength));
+    const double off = rnd(-0.035, 0.035);
+    const double a = rnd(-0.3, 1.0) * len, b = a - rnd(0.5, 1.6) * len;
+    const double width = rnd(0.0016, 0.0034) * (1.0 + 1.2 * strength);
+    const float depth = float(rnd(0.22, 0.42));
+    // A slightly wavering line: the panel bends and the contact point jumps.
+    double px = u + nu * off + du * b, py = v + nv * off + dv * b;
+    const double wob = rnd(-0.012, 0.012);
+    for (int i = 1; i <= 4; i++) {
+      const double s = b + (a - b) * i / 4.0;
+      const double w = off + wob * std::sin(i * 1.7) + rnd(-0.0015, 0.0015);
+      const double qx = u + nu * w + du * s, qy = v + nv * w + dv * s;
+      paintLine(layer, px, py, qx, qy, width, depth, 0.f);
+      px = qx;
+      py = qy;
+    }
+    if (strength > 0.35 && rnd(0, 1) < 0.10 + 0.25 * strength) {
+      const double g = off + rnd(-0.02, 0.02), gl = len * rnd(0.3, 0.8), gw = rnd(0.004, 0.009);
+      paintLine(layer, u + nu * g - du * gl, v + nv * g - dv * gl, u + nu * g + du * gl, v + nv * g + dv * gl, gw, float(rnd(0.75, 1.0)), 0.f);
+    }
+  }
+  void applyScrapes(const Snapshot& s, double dt) {
     const CarMesh& M = *mesh;
     scrapeTotal += s.scrapes.size();
     for (const Scrape& sc : s.scrapes) {
+      // A contact reports hundreds of times a second: thin that out to the scratches it really leaves.
+      if ((scratchRng() & 1023) > 40 + 110 * sc.strength) continue;
       // To the design frame the mesh was modelled in.
       const double px = 2.26 - (sc.restPoint.x - spawn.x), py = sc.restPoint.y - spawn.y, pz = sc.restPoint.z - spawn.z;
-      const V3 d{-dot(sc.dir, s.carFwd), dot(sc.dir, s.carLeft), dot(sc.dir, s.carUp)};
-      // The node is only where the structure touches. The skin slides past the obstacle all around
-      // it, so the mark is a long narrow stroke along the direction of travel, not a round spot.
-      constexpr double kAlong = 0.55, kAcross = 0.09;
-      const V3 dn = norm(d);
-      for (int dz = -2; dz <= 2; dz++)
-        for (int dy = -2; dy <= 2; dy++)
-          for (int dx = -2; dx <= 2; dx++) {
+      const V3 d = norm(V3{-dot(sc.dir, s.carFwd), dot(sc.dir, s.carLeft), dot(sc.dir, s.carUp)});
+      // The node is only where the structure touches. Which faces of the skin are around it?
+      int count[kScrLayers] = {};
+      constexpr double kReach2 = 0.16 * 0.16;
+      for (int dz = -1; dz <= 1; dz++)
+        for (int dy = -1; dy <= 1; dy++)
+          for (int dx = -1; dx <= 1; dx++) {
             const double qx = px + dx * kScratchCell, qy = py + dy * kScratchCell, qz = pz + dz * kScratchCell;
             if (qx < -kScratchCell || qy < -1.2 || qz < 0) continue;
             for (u32 v : scratchGrid[size_t(gridIndex(qx, qy, qz))]) {
               const V3 r{M.restPos[v * 3] - px, M.restPos[v * 3 + 1] - py, M.restPos[v * 3 + 2] - pz};
-              const double al = dot(r, dn);
-              const double ac2 = len2(r) - al * al;
-              const double fall = 1.0 - al * al / (kAlong * kAlong) - ac2 / (kAcross * kAcross);
-              if (fall <= 0) continue;
-              const float add = float((0.3 + 0.7 * sc.strength) * fall * 0.06);
-              float* o = &scratch[size_t(v) * 4];
-              // The newest scrape dominates the direction as it goes deeper.
-              const float w = add / (o[3] + add + 1e-4f);
-              o[0] += (float(dn.x) - o[0]) * w;
-              o[1] += (float(dn.y) - o[1]) * w;
-              o[2] += (float(dn.z) - o[2]) * w;
-              o[3] = std::min(1.f, o[3] + add);
-              scratchDirty = true;
+              if (len2(r) > kReach2) continue;
+              const int c = chartOf(M.restNormal[size_t(v) * 3], M.restNormal[size_t(v) * 3 + 1], M.restNormal[size_t(v) * 3 + 2]);
+              if (c >= 0) count[c]++;
             }
           }
+      int total = 0;
+      for (int c : count) total += c;
+      if (total == 0) continue;
+      for (int l = 0; l < kScrLayers; l++) {
+        if (count[l] * 5 < total) continue;
+        const double strength = sc.strength;
+        if (l <= 1) addStroke(l, px + kScrOrgX, pz, d.x, d.z, strength);
+        else if (l == 2) addStroke(l, px + kScrOrgX, py + kScrOrgY, d.x, d.y, strength);
+        else addStroke(l, py + kScrOrgY, pz, d.y, d.z, strength);
+      }
     }
-    if (scratchDirty) {
-      glBindBuffer(GL_ARRAY_BUFFER, carScratchVbo);
-      glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(scratch.size() * sizeof(float)), scratch.data());
-      scratchDirty = false;
+    uploadScratches(false);
+    // Rebuilding the mipmaps touches the whole texture, so it happens a few times a second at most.
+    mipClock += dt;
+    if (mipStale && mipClock > 0.12) {
+      glBindTexture(GL_TEXTURE_2D_ARRAY, scratchTex);
+      glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+      mipStale = false;
+      mipClock = 0;
     }
   }
 
@@ -734,6 +1086,63 @@ struct Renderer::Impl {
         if ((i / 6) % 2 == 0) strip(-0.07, 0.07, .8f);
       }
     }
+    // Reflector posts every 25 m along the roads, the classic cue for speed.
+    for (const Road& road : world->roads()) {
+      double run = 0;
+      const size_t cnt = road.pts.size();
+      const size_t segs = road.closed ? cnt : cnt - 1;
+      bool flip = false;
+      for (size_t i = 0; i < segs; i++) {
+        const RoadPoint& a = road.pts[i];
+        const RoadPoint& b = road.pts[(i + 1) % cnt];
+        const double tl = std::hypot(b.x - a.x, b.y - a.y);
+        run += tl;
+        if (run < 25.0) continue;
+        run = 0;
+        flip = !flip;
+        const double tx = (b.x - a.x) / tl, ty = (b.y - a.y) / tl, nx = -ty, ny = tx;
+        for (double sd : {-1.0, 1.0}) {
+          const double px = a.x + nx * sd * (road.halfWidth + 1.1), py = a.y + ny * sd * (road.halfWidth + 1.1);
+          const double z0 = world->height(px, py);
+          const double hw = 0.06, hd = 0.04;
+          auto box = [&](double zb, double zt, float cr, float cg, float cb) {
+            const V3 c0{px - tx * hw - nx * hd, py - ty * hw - ny * hd, zb}, c1{px + tx * hw - nx * hd, py + ty * hw - ny * hd, zb};
+            const V3 c2{px + tx * hw + nx * hd, py + ty * hw + ny * hd, zb}, c3{px - tx * hw + nx * hd, py - ty * hw + ny * hd, zb};
+            const V3 up{0, 0, zt - zb};
+            addQuad(v, c0, c1, c1 + up, c0 + up, cr, cg, cb, 0);
+            addQuad(v, c1, c2, c2 + up, c1 + up, cr, cg, cb, 0);
+            addQuad(v, c2, c3, c3 + up, c2 + up, cr, cg, cb, 0);
+            addQuad(v, c3, c0, c0 + up, c3 + up, cr, cg, cb, 0);
+            addQuad(v, c0 + up, c1 + up, c2 + up, c3 + up, cr, cg, cb, 0);
+          };
+          box(z0, z0 + 0.75, .85f, .85f, .83f);
+          box(z0 + 0.75, z0 + 0.95, .05f, .05f, .05f);
+          box(z0 + 0.80, z0 + 0.88, .95f, .55f, .15f);
+        }
+      }
+    }
+    // Tree crowns: two cones each over the solid trunk.
+    {
+      u32 hash = 7;
+      for (const V3& t : world->trees()) {
+        hash = hash * 2654435761u + 17u;
+        const double scale = 0.8 + double(hash >> 24) / 255.0 * 0.8;
+        const float tint = float((hash >> 12) & 63) / 63.f;
+        for (int layer = 0; layer < 2; layer++) {
+          const double r0 = (layer == 0 ? 2.6 : 1.9) * scale;
+          const V3 base{t.x, t.y, t.z + (layer == 0 ? 2.2 : 4.6) * scale};
+          const V3 tip = base + V3{0, 0, (layer == 0 ? 4.2 : 3.8) * scale};
+          constexpr int kSides = 9;
+          const float cr = .10f + tint * .07f, cg = .24f + tint * .12f + float(layer) * .03f, cb = .08f + tint * .04f;
+          for (int k = 0; k < kSides; k++) {
+            const double a0 = 2 * PI * k / kSides, a1 = 2 * PI * (k + 1) / kSides;
+            const V3 p0 = base + V3{std::cos(a0) * r0, std::sin(a0) * r0, 0};
+            const V3 p1 = base + V3{std::cos(a1) * r0, std::sin(a1) * r0, 0};
+            addQuad(v, p0, p1, tip, tip, cr, cg, cb, 0);
+          }
+        }
+      }
+    }
     // Test lanes painted on the pad.
     auto line = [&](double x0, double y0, double x1, double y1, double wd, float r, float g, float b) {
       const double dx = x1 - x0, dy = y1 - y0, l = std::hypot(dx, dy);
@@ -775,6 +1184,8 @@ struct Renderer::Impl {
   }
 
   // Deform the flexbody from the node snapshot.
+  std::vector<size_t> steerParts;
+  int steerRim = -1;
   void updateCar(const Snapshot& s) {
     const CarMesh& M = *mesh;
     const size_t nv = M.restPos.size() / 3;
@@ -809,6 +1220,42 @@ struct Renderer::Impl {
         carVerts[v].x = float(x);
         carVerts[v].y = float(y);
         carVerts[v].z = float(z);
+      }
+    }
+
+    // The steering wheel turns about its column. Lock to lock is just under three turns.
+    if (steerParts.empty()) {
+      for (size_t i = 0; i < M.parts.size(); i++) {
+        if (M.parts[i].name.rfind("steerwheel_", 0) == 0) steerParts.push_back(i);
+        if (M.parts[i].name.rfind("steerwheel_rim", 0) == 0) steerRim = int(i);
+      }
+    }
+    if (steerRim >= 0) {
+      constexpr double kLockAngle = 2.9 * PI;
+      constexpr double kColumnTilt = 24.0 * PI / 180.0;
+      const MeshPart& rim = M.parts[size_t(steerRim)];
+      double cx = 0, cy = 0, cz = 0;
+      for (u32 v = rim.firstVert; v < rim.firstVert + rim.vertCount; v++) {
+        cx += carVerts[v].x;
+        cy += carVerts[v].y;
+        cz += carVerts[v].z;
+      }
+      const double n = std::max(double(rim.vertCount), 1.0);
+      cx /= n;
+      cy /= n;
+      cz /= n;
+      const V3 axis = norm(s.carFwd * std::cos(kColumnTilt) - s.carUp * std::sin(kColumnTilt));
+      // The driver looks along the axis, so turning left is negative about it.
+      const double ang = -s.steer * kLockAngle, ca = std::cos(ang), sa = std::sin(ang);
+      for (size_t pi : steerParts) {
+        const MeshPart& p = M.parts[pi];
+        for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++) {
+          const V3 r{carVerts[v].x - cx, carVerts[v].y - cy, carVerts[v].z - cz};
+          const V3 q = r * ca + cross(axis, r) * sa + axis * (dot(axis, r) * (1.0 - ca));
+          carVerts[v].x = float(cx + q.x);
+          carVerts[v].y = float(cy + q.y);
+          carVerts[v].z = float(cz + q.z);
+        }
       }
     }
 
@@ -1253,6 +1700,7 @@ struct Renderer::Impl {
           "G HYDRACTIVE SPORT   H NIVEAU   V ACTIVA AN/AUS",
           "I ZUENDUNG   R ZURUECK ZUM START   F5 REPARIEREN",
           "C KAMERA   M MAUSLENKUNG   P PAUSE   [ ] ZEITLUPE",
+          "B BEWEGUNGSUNSCHAERFE   J KAMERA-WACKELN   N TON   + - LAUTSTAERKE",
           "F2 BEAM-ANSICHT   F3 ROENTGEN   F12 SCREENSHOT   ESC BEENDEN",
           "MAUS: RECHTS ZIEHEN KAMERA, RAD ZOOM, LINKS ZIEHEN PACKT DAS AUTO",
           "",
@@ -1297,6 +1745,9 @@ struct Renderer::Impl {
     glUseProgram(prog);
     setMat(prog, "uVP", vp);
     setMat(prog, "uShadowVP", shadowVP);
+    setMat(prog, "uPrevVP", prevVP);
+    setMat(prog, "uPrevWorld", carPrevWorld);
+    const GLint uPrevSpin = glGetUniformLocation(prog, "uPrevSpin");
     glBindVertexArray(wheelVao2);
     const GLint uMode = glGetUniformLocation(prog, "uMode"), uSpin = glGetUniformLocation(prog, "uSpin");
     for (const WheelView& wv : s.wheels) {
@@ -1310,6 +1761,12 @@ struct Renderer::Impl {
       glUniform1f(glGetUniformLocation(prog, "uDeflate"), float(wv.deflate));
       const float sn = float(std::sin(wv.theta) * (wv.left ? 1.0 : -1.0));
       glUniform2f(uSpin, float(std::cos(wv.theta)), sn);
+      {
+        // Limited to about a third of a turn: past that a straight smear no longer looks like rotation.
+        const double back = clampd(wv.omega * kShutter, -0.9, 0.9);
+        const double tp = wv.theta - back;
+        glUniform2f(uPrevSpin, float(std::cos(tp)), float(std::sin(tp) * (wv.left ? 1.0 : -1.0)));
+      }
       for (size_t i = 0; i < wheelDrawFirst.size(); i++) {
         glUniform1i(uMode, wheelDrawMode[i]);
         glDrawElements(GL_TRIANGLES, wheelDrawCount[i], GL_UNSIGNED_INT, (void*)(size_t(wheelDrawFirst[i]) * sizeof(u32)));
@@ -1317,6 +1774,7 @@ struct Renderer::Impl {
       // Caliper: fixed to the hub, it does not turn.
       glUniform1i(uMode, 0);
       glUniform2f(uSpin, 1.f, 0.f);
+      glUniform2f(uPrevSpin, 1.f, 0.f);
       for (size_t i = 0; i < staticDrawFirst.size(); i++)
         glDrawElements(GL_TRIANGLES, staticDrawCount[i], GL_UNSIGNED_INT, (void*)(size_t(staticDrawFirst[i]) * sizeof(u32)));
     }
@@ -1347,6 +1805,7 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   d->progPart = program(kPartVS, kPartFS);
   d->progLine = program(kLineVS, kLineFS);
   d->progHud = program(kHudVS, kHudFS);
+  d->progPost = program(kPostVS, kPostFS);
 
   glGenFramebuffers(1, &d->shadowFbo);
   glGenTextures(1, &d->shadowTex);
@@ -1385,6 +1844,7 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   d->setupVtxAttribs();
 
   d->buildScratchData();
+  d->buildDetailTexture();
 
   glGenVertexArrays(1, &d->propVao);
   glGenBuffers(1, &d->propVbo);
@@ -1443,8 +1903,8 @@ void Renderer::clearSkidMarks() {
 
 void Renderer::resetDamage() {
   std::fill(d->partHidden.begin(), d->partHidden.end(), u8(0));
-  std::fill(d->scratch.begin(), d->scratch.end(), 0.f);
-  d->scratchDirty = true;
+  std::fill(d->scratchPx.begin(), d->scratchPx.end(), u8(0));
+  d->uploadScratches(true);
   d->particles.clear();
 }
 
@@ -1453,7 +1913,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   D.origin = {};  // positions stay within +-512 m, which is fine for float vertex data
   auto tp0 = std::chrono::steady_clock::now();
   D.handleEvents(s);
-  D.applyScrapes(s);
+  D.applyScrapes(s, dt);
   D.xrayNow = hud.xray;
   if (s.splitGeneration != D.seenSplit) {
     if (s.splitGeneration < D.seenSplit) {
@@ -1479,6 +1939,8 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   const Mat4 view = lookAt(cam.eye, cam.target, cam.up);
   const Mat4 proj = perspective(cam.fovY, double(w) / double(h), 0.12, 2500.0);
   const Mat4 vp = mul(proj, view);
+  D.updateMotion(s, cam, proj, dt);
+  D.ensureTargets(w, h);
 
   // Shadow map: a tight box following the car, for sharp contact shadows where it matters.
   constexpr double kRange = 42.0;
@@ -1498,10 +1960,13 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
 
   auto drawDyn = [&](GLuint prog) {
     D.setMat(prog, "uModel", I);
+    D.setMat(prog, "uPrevWorld", D.carPrevWorld);
     glBindVertexArray(D.carVao);
     glDrawElements(GL_TRIANGLES, GLsizei(D.carIdx.size()), GL_UNSIGNED_INT, nullptr);
+    D.setMat(prog, "uPrevWorld", I);
     glBindVertexArray(D.propVao);
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.propVerts.size()));
+    D.setMat(prog, "uPrevWorld", D.carPrevWorld);
     // Running gear: arms, shafts and struts between their real nodes.
     glBindVertexArray(D.rodVao);
     for (const VisLink& l : D.rig->links) {
@@ -1539,12 +2004,17 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
   D.drawWheels(s, D.progWheelDepth, lightVP, lightVP);
   glDisable(GL_POLYGON_OFFSET_FILL);
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
+  glBindFramebuffer(GL_FRAMEBUFFER, D.sceneFbo);
   glViewport(0, 0, w, h);
+  D.useBuffers(2);
   glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+  {
+    const GLfloat none[4] = {0, 0, 0, 0};
+    glClearBufferfv(GL_COLOR, 1, none);
+  }
 
   // Sky.
+  D.useBuffers(1);
   glDisable(GL_DEPTH_TEST);
   glUseProgram(D.progSky);
   {
@@ -1560,8 +2030,11 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glEnable(GL_DEPTH_TEST);
 
   // Main pass.
+  D.useBuffers(2);
   glUseProgram(D.progMesh);
   D.setMat(D.progMesh, "uVP", vp);
+  D.setMat(D.progMesh, "uPrevVP", D.prevVP);
+  D.setMat(D.progMesh, "uPrevWorld", I);
   D.setMat(D.progMesh, "uShadowVP", lightVP);
   D.setMat(D.progMesh, "uModel", I);
   glUniform3f(glGetUniformLocation(D.progMesh, "uEye"), float(cam.eye.x), float(cam.eye.y), float(cam.eye.z));
@@ -1570,6 +2043,14 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, D.shadowTex);
   glUniform1i(glGetUniformLocation(D.progMesh, "uShadow"), 0);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D_ARRAY, D.scratchTex);
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, D.detailTex);
+  glActiveTexture(GL_TEXTURE0);
+  glUniform1i(glGetUniformLocation(D.progMesh, "uScratchTex"), 1);
+  glUniform1i(glGetUniformLocation(D.progMesh, "uDetailTex"), 2);
+  glUniform1f(glGetUniformLocation(D.progMesh, "uDetail"), 1.f);
 
   // Terrain chunks by distance, with the far LOD beyond 220 m.
   const V3 viewDir = norm(cam.target - cam.eye);
@@ -1585,13 +2066,20 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glBindVertexArray(D.staticVao);
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
 
+  glUniform1f(glGetUniformLocation(D.progMesh, "uDetail"), 0.f);
   drawDyn(D.progMesh);
   glUseProgram(D.progWheel);
   glUniform3f(glGetUniformLocation(D.progWheel, "uEye"), float(cam.eye.x), float(cam.eye.y), float(cam.eye.z));
   glUniform3f(glGetUniformLocation(D.progWheel, "uSun"), float(D.sun.x), float(D.sun.y), float(D.sun.z));
   glUniform1f(glGetUniformLocation(D.progWheel, "uAlpha"), 1.f);
   glUniform1i(glGetUniformLocation(D.progWheel, "uShadow"), 0);
+  glUniform1i(glGetUniformLocation(D.progWheel, "uScratchTex"), 1);
+  glUniform1i(glGetUniformLocation(D.progWheel, "uDetailTex"), 2);
+  glUniform1f(glGetUniformLocation(D.progWheel, "uDetail"), 0.f);
   D.drawWheels(s, D.progWheel, vp, lightVP);
+
+  // From here on nothing writes motion: glass and sparks take on the motion of what is behind them.
+  D.useBuffers(1);
 
   // Debug overlay: every beam, coloured by load.
   if (hud.debugBeams) {
@@ -1639,7 +2127,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), 0.30f);
   glBindVertexArray(D.lensVao);
   glDrawElements(GL_TRIANGLES, GLsizei(D.lensIdx.size()), GL_UNSIGNED_INT, nullptr);
-  glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), 0.80f);
+  glUniform1f(glGetUniformLocation(D.progMesh, "uAlpha"), cam.inside ? 0.14f : 0.80f);
   glBindVertexArray(D.carGlassVao);
   glDrawElements(GL_TRIANGLES, GLsizei(D.glassIdx.size()), GL_UNSIGNED_INT, nullptr);
 
@@ -1649,9 +2137,45 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glBindVertexArray(D.partVao);
   glDrawArrays(GL_POINTS, 0, GLsizei(D.partVerts.size()));
   glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+
+  // Resolve MSAA, then the motion blur onto the screen.
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, D.sceneFbo);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, D.resolveFbo);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+  glDrawBuffer(GL_COLOR_ATTACHMENT0);
+  glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+  glReadBuffer(GL_COLOR_ATTACHMENT1);
+  glDrawBuffer(GL_COLOR_ATTACHMENT1);
+  glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glDrawBuffer(GL_BACK);
+  glReadBuffer(GL_BACK);
+  glDisable(GL_DEPTH_TEST);
+  glUseProgram(D.progPost);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, D.resolveColor);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, D.resolveVel);
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, D.resolveDepth);
+  glActiveTexture(GL_TEXTURE0);
+  glUniform1i(glGetUniformLocation(D.progPost, "uColor"), 0);
+  glUniform1i(glGetUniformLocation(D.progPost, "uVel"), 1);
+  glUniform1i(glGetUniformLocation(D.progPost, "uDepth"), 2);
+  glUniform2f(glGetUniformLocation(D.progPost, "uRes"), float(w), float(h));
+  glUniform1f(glGetUniformLocation(D.progPost, "uBlur"), hud.motionBlur ? 1.f : 0.f);
+  glUniform1f(glGetUniformLocation(D.progPost, "uNear"), 0.12f);
+  glUniform1f(glGetUniformLocation(D.progPost, "uFar"), 2500.f);
+  glUniform1f(glGetUniformLocation(D.progPost, "uVignette"), hud.motionBlur ? float(0.28 * clampd((std::fabs(s.speedKmh) - 60.0) / 170.0, 0, 1)) : 0.f);
+  D.setMat(D.progPost, "uSkyVP", D.skyVP);
+  D.setMat(D.progPost, "uSkyPrevVP", D.skyPrevVP);
+  glBindVertexArray(D.hudVao);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
 
   // HUD.
-  glDisable(GL_DEPTH_TEST);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glUseProgram(D.progHud);
   glUniform2f(glGetUniformLocation(D.progHud, "uRes"), float(w), float(h));
   glBindVertexArray(D.hudVao);
@@ -1663,7 +2187,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     static int n = 0;
     if (++n % 30 == 0)
-      fprintf(stderr, "scrapes so far %zu, verts >2%% %d, >30%% %d, >80%% %d\n", D.scrapeTotal, [&] { int c = 0; for (size_t i = 3; i < D.scratch.size(); i += 4) c += D.scratch[i] > 0.02f; return c; }(), [&] { int c = 0; for (size_t i = 3; i < D.scratch.size(); i += 4) c += D.scratch[i] > 0.3f; return c; }(), [&] { int c = 0; for (size_t i = 3; i < D.scratch.size(); i += 4) c += D.scratch[i] > 0.8f; return c; }()), fprintf(stderr, "frame: scrapes %.1f car %.1f props %.1f misc %.1f gl %.1f ms\n", ms(tp0, tp1), ms(tp1, tp2), ms(tp2, tp3), ms(tp3, tp4), ms(tp4, std::chrono::steady_clock::now()));
+      fprintf(stderr, "frame: scrapes %.1f car %.1f props %.1f misc %.1f gl %.1f ms\n", ms(tp0, tp1), ms(tp1, tp2), ms(tp2, tp3), ms(tp3, tp4), ms(tp4, std::chrono::steady_clock::now()));
   }
 }
 

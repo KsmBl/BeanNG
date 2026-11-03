@@ -60,12 +60,14 @@ class World {
   u8 gridSurface(int ix, int iy) const { return surf_[size_t(iy) * N + ix]; }
   const std::vector<StaticBox>& boxes() const { return boxes_; }
   const std::vector<Road>& roads() const { return roads_; }
+  const std::vector<V3>& trees() const { return trees_; }  // foot of each tree, the trunk is a box
 
  private:
   std::vector<float> h_;
   std::vector<u8> surf_;
   std::vector<StaticBox> boxes_;
   std::vector<Road> roads_;
+  std::vector<V3> trees_;
   static constexpr double kBoxCell = 8.0;
   static constexpr int kBoxGrid = 128;
   std::vector<std::vector<u16>> boxGrid_;

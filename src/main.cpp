@@ -10,6 +10,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
+#include "audio.h"
 #include "props.h"
 #include "render.h"
 #include "vehicle.h"
@@ -97,6 +99,8 @@ struct Game {
       v.theta = w.theta;
       v.left = w.left;
       v.skid = w.skid;
+      v.omega = w.omega;
+      v.fz = w.Fz;
       v.surface = w.surface;
       v.patch = w.patchPoint;
       v.deflate = w.deflate;
@@ -141,6 +145,10 @@ struct Game {
     s.damageMsg = car.lastDamage;
     s.damageAge = car.lastDamageAge;
     s.physLoad = load;
+    s.engineLoad = clampd((car.manifold - 0.22) / 0.78, 0, 1);
+    s.inputRpm = std::fabs(car.inputOmega) * 60.0 / (2.0 * PI);
+    s.starter = car.starterClock > 0;
+    s.shifting = car.shiftPhase != 0;
     s.awake = int(sim.active.size());
     s.objectCount = int(sim.objs.size());
     if (s.splitGeneration != sim.splitGeneration) {
@@ -234,6 +242,57 @@ struct Game {
 enum CamMode { CAM_CHASE, CAM_ORBIT, CAM_HOOD, CAM_DRIVER, CAM_COUNT };
 const char* kCamNames[CAM_COUNT] = {"VERFOLGER", "ORBIT", "HAUBE", "FAHRER"};
 
+// Everything that tells the driver how fast and how rough it is, read from the running simulation.
+// Shared by the camera and the sound, so that what shakes is also what is heard.
+struct DriveFeel {
+  double fzLP[4] = {};
+  double rough = 0;      // suspension activity, 0..1
+  double trauma = 0;     // recent violence: crashes and hard landings, 0..1
+  double lastPlastic = 0;
+  double plasticRate = 0;  // joules per second of metal being bent
+  double roadPhase = 0, timePhase = 0;
+  double speedFx = 0;    // 0 at a walk, 1 flat out, smoothed
+  double lon = 0, lat = 0;
+  double thump = 0;      // biggest bump this frame, 0..1
+  bool valid = false;
+
+  void update(const Snapshot& s, double dt) {
+    thump = 0;
+    if (dt <= 0) return;
+    const double v = len(s.carVel);
+    double act = 0;
+    for (int i = 0; i < 4; i++) {
+      const double fz = s.wheels[i].fz;
+      if (!valid) fzLP[i] = fz;
+      const double delta = std::fabs(fz - fzLP[i]);
+      act += delta;
+      thump = std::max(thump, clampd((delta - 2500.0) / 10000.0, 0, 1));
+      fzLP[i] += (fz - fzLP[i]) * clampd(dt / 0.22, 0, 1);
+    }
+    const double target = clampd(act / 4.0 / 2600.0, 0, 1);
+    rough += (target - rough) * clampd(dt / (target > rough ? 0.04 : 0.25), 0, 1);
+
+    const double dp = valid ? std::max(s.plastic - lastPlastic, 0.0) : 0.0;
+    lastPlastic = s.plastic;
+    plasticRate = dp / dt;
+    // A repair clears the counter: never read that as a blow.
+    trauma = std::min(1.0, trauma + std::sqrt(dp / 12000.0) * 0.5 + thump * thump * 0.22);
+    trauma *= std::exp(-dt * 2.8);
+
+    roadPhase += v * dt;
+    timePhase += dt;
+    const double fxTarget = clampd((v - 8.0) / 50.0, 0, 1);
+    speedFx += (fxTarget - speedFx) * clampd(dt / 0.5, 0, 1);
+    lon += (s.lonG - lon) * clampd(dt / 0.28, 0, 1);
+    lat += (s.latG - lat) * clampd(dt / 0.28, 0, 1);
+    valid = true;
+  }
+  // Smooth noise, -1..1, from sines at unrelated frequencies. Never repeats in any noticeable way.
+  static double wobble(double t, double seed) {
+    return (std::sin(t * 1.00 + seed) + 0.7 * std::sin(t * 1.73 + seed * 2.1) + 0.5 * std::sin(t * 2.91 + seed * 3.7)) / 2.2;
+  }
+};
+
 struct CameraRig {
   CamMode mode = CAM_CHASE;
   double yaw = 0, pitch = 0.22, dist = 6.8;
@@ -241,7 +300,7 @@ struct CameraRig {
   double headingSmooth = 0;
   bool init = false;
 
-  void update(const Snapshot& s, double dt, Camera& out, const World& world) {
+  void update(const Snapshot& s, double dt, Camera& out, const World& world, const DriveFeel& feel, bool shakeOn) {
     const double heading = std::atan2(s.carFwd.y, s.carFwd.x);
     if (!init) {
       headingSmooth = heading;
@@ -258,7 +317,14 @@ struct CameraRig {
       case CAM_ORBIT: {
         const double base = mode == CAM_CHASE ? headingSmooth + PI : 0.0;
         const double a = base + yaw;
-        V3 eye = c + V3{std::cos(a) * std::cos(pitch), std::sin(a) * std::cos(pitch), std::sin(pitch)} * dist + V3{0, 0, 0.5};
+        // Wider lens and a closer camera with speed: the car keeps its size while the road rushes past.
+        const double d = dist * (1.0 - 0.10 * feel.speedFx);
+        V3 eye = c + V3{std::cos(a) * std::cos(pitch), std::sin(a) * std::cos(pitch), std::sin(pitch)} * d + V3{0, 0, 0.5};
+        if (mode == CAM_CHASE) {
+          // The camera lags behind the car's accelerations: back under power, forward under braking,
+          // out to the side in a bend.
+          eye += s.carFwd * clampd(-feel.lon * 0.55, -0.5, 0.5) + s.carLeft * clampd(feel.lat * 0.28, -0.35, 0.35);
+        }
         const double gh = world.height(eye.x, eye.y) + 0.35;
         if (eye.z < gh) eye.z = gh;
         const V3 target = c + V3{0, 0, 0.45};
@@ -269,14 +335,14 @@ struct CameraRig {
         out.eye = eye;
         out.target = target;
         out.up = {0, 0, 1};
-        out.fovY = 58.0 * PI / 180.0;
+        out.fovY = (58.0 + 16.0 * feel.speedFx) * PI / 180.0;
         break;
       }
       case CAM_HOOD:
         out.eye = c + s.carFwd * 0.2 + s.carUp * 0.72;
         out.target = out.eye + s.carFwd * 10.0 + s.carUp * -0.6;
         out.up = s.carUp;
-        out.fovY = 62.0 * PI / 180.0;
+        out.fovY = (62.0 + 12.0 * feel.speedFx) * PI / 180.0;
         break;
       case CAM_DRIVER: {
         // Left-hand drive seat, with the mouse able to look around.
@@ -285,11 +351,138 @@ struct CameraRig {
         const V3 look = s.carFwd * std::cos(la) + s.carLeft * std::sin(la);
         out.target = out.eye + look * 10.0 + s.carUp * (-0.35 + pitch - 0.22);
         out.up = s.carUp;
-        out.fovY = 68.0 * PI / 180.0;
+        out.fovY = (68.0 + 8.0 * feel.speedFx) * PI / 180.0;
         break;
       }
       default:
         break;
+    }
+    out.inside = mode == CAM_DRIVER;
+    if (shakeOn) addShake(s, out, feel);
+  }
+
+  // The camera turns about the car instead of moving through space, so the world shakes and the car
+  // stays steady in the middle of the picture. A shaking car would look like a physics fault.
+  void addShake(const Snapshot& s, Camera& out, const DriveFeel& f) {
+    const double v = len(s.carVel);
+    const double speed = clampd(v / 60.0, 0, 1.3);
+    const double inCar = mode == CAM_HOOD || mode == CAM_DRIVER ? 1.6 : 1.0;
+    // Road texture: frequency goes with speed, so that it is felt to speed up.
+    const double fine = f.roadPhase * 2.4;
+    const double fast = (0.0011 * speed * speed + 0.0028 * f.rough * (0.4 + speed)) * inCar;
+    // Slow heave from the bigger waves in the road.
+    const double slow = f.roadPhase * 0.55;
+    const double heave = 0.0016 * f.rough * inCar;
+    // A blow: large, quick, and over soon.
+    const double blow = 0.040 * f.trauma * f.trauma;
+    const double t = f.timePhase * 38.0;
+    const double pitchA = fast * DriveFeel::wobble(fine, 1.3) + heave * DriveFeel::wobble(slow, 4.2) + blow * DriveFeel::wobble(t, 0.7);
+    const double yawA = 0.6 * fast * DriveFeel::wobble(fine * 1.13, 2.9) + 0.6 * blow * DriveFeel::wobble(t * 1.21, 3.1);
+    const double rollA = 1.2 * fast * DriveFeel::wobble(fine * 0.87, 5.5) + heave * DriveFeel::wobble(slow * 1.3, 0.2) + 0.8 * blow * DriveFeel::wobble(t * 0.83, 6.0);
+    const V3 f0 = norm(out.target - out.eye);
+    const V3 right = norm(cross(f0, out.up));
+    const V3 up = cross(right, f0);
+    const double D = len(out.target - out.eye);
+    out.target += (right * yawA + up * pitchA) * D;
+    out.up = norm(up + right * rollA);
+    // Only the blow itself also throws the camera about.
+    out.eye += (right * DriveFeel::wobble(t * 0.9, 1.9) + up * DriveFeel::wobble(t * 1.1, 2.3)) * (0.05 * f.trauma * f.trauma);
+  }
+};
+
+// Turns the frame's simulation state into what the synth needs.
+struct SoundDriver {
+  AudioSynth synth;
+  double volume = 0.8;
+  bool muted = false;
+  double metalClock = 0, glassClock = 0, thumpClock = 0;
+  int lastGear = 1;
+  double scrapeLP = 0;
+
+  void update(const Snapshot& s, const Camera& cam, const DriveFeel& feel, CamMode mode, double dt) {
+    AudioFeed f;
+    f.rpm = float(s.rpm);
+    f.load = float(s.engineLoad);
+    f.engineOn = s.running;
+    f.starter = s.starter;
+    f.inputRpm = float(s.inputRpm);
+    f.speed = float(len(s.carVel));
+    double skid = 0, soft = 0, grounded = 0;
+    for (const WheelView& w : s.wheels) {
+      const bool loose = w.surface == SURF_GRASS || w.surface == SURF_GRAVEL;
+      if (!loose) skid = std::max(skid, w.skid);
+      if (w.fz > 50.0) {
+        grounded += 1.0;
+        if (loose) soft += 1.0;
+      }
+    }
+    f.skid = float(skid);
+    f.dirt = grounded > 0 ? float(soft / grounded) : 0.f;
+    f.rough = float(feel.rough);
+    const double scrapeTarget = clampd(double(s.scrapes.size()) / std::max(dt, 1e-3) / 900.0, 0, 1);
+    scrapeLP += (scrapeTarget - scrapeLP) * clampd(dt / 0.05, 0, 1);
+    f.scrape = float(scrapeLP);
+    const double camDist = len(cam.eye - s.carCog);
+    f.listener = float(1.0 / (1.0 + std::max(camDist - 8.0, 0.0) / 14.0));
+    f.interior = mode == CAM_DRIVER ? 1.f : 0.f;
+    f.master = (muted || s.paused) ? 0.f : float(volume);
+    synth.setFeed(f);
+
+    // Where a sound is heard from.
+    const V3 fwd = norm(cam.target - cam.eye), right = norm(cross(fwd, cam.up));
+    auto place = [&](V3 p, float& pan, float& gain) {
+      const V3 r = p - cam.eye;
+      const double d = len(r);
+      pan = float(clampd(dot(r, right) / std::max(d, 1.0), -1, 1)) * 0.8f;
+      gain = float(1.0 / (1.0 + d / 16.0));
+    };
+
+    metalClock -= dt;
+    glassClock -= dt;
+    thumpClock -= dt;
+    // Bending metal, however much of it. Several per second while a crash goes on.
+    if (feel.plasticRate > 4000.0 && metalClock <= 0) {
+      const float st = float(clampd(std::log10(feel.plasticRate / 4000.0) / 2.5, 0.15, 1.0));
+      float pan, gain;
+      place(s.carCog, pan, gain);
+      synth.trigger(Sfx::Metal, st, pan, gain * (0.55f + 0.55f * st));
+      metalClock = 0.05;
+    }
+    int glassN = 0, crunchN = 0;
+    V3 glassAt, crunchAt;
+    for (const SimEvent& e : s.events) {
+      if (e.kind == EV_GLASS) {
+        glassAt = e.p;
+        glassN++;
+      } else if (e.kind == EV_CRUNCH) {
+        crunchAt = e.p;
+        crunchN++;
+      }
+    }
+    if (glassN > 0 && glassClock <= 0) {
+      float pan, gain;
+      place(glassAt, pan, gain);
+      synth.trigger(Sfx::Glass, clampd(glassN / 6.0, 0.3, 1.0), pan, gain);
+      glassClock = 0.12;
+    }
+    // Something tore, also out in the scenery: fences, signs, a stone wall.
+    if (crunchN > 0 && metalClock <= 0) {
+      float pan, gain;
+      place(crunchAt, pan, gain);
+      synth.trigger(Sfx::Metal, clampd(0.2 + crunchN / 12.0, 0.2, 1.0), pan, gain * 0.9f);
+      metalClock = 0.05;
+    }
+    if (feel.thump > 0.08 && thumpClock <= 0) {
+      float pan, gain;
+      place(s.carCog, pan, gain);
+      synth.trigger(Sfx::Thump, float(feel.thump), pan * 0.5f, gain * 0.8f);
+      thumpClock = 0.09;
+    }
+    if (s.gear != lastGear) {
+      float pan, gain;
+      place(s.carCog, pan, gain);
+      synth.trigger(Sfx::Clunk, 0.7f, pan, gain);
+      lastGear = s.gear;
     }
   }
 };
@@ -304,6 +497,38 @@ double applyDeadzone(double v, double dz) {
 // On a hybrid laptop GL would land on the integrated GPU. This asks for the discrete NVIDIA card
 // through PRIME render offload. It has to happen before anything loads a GL driver, and it only takes
 // effect if that card and its driver exist. BEANNG_GPU=integrated keeps the integrated one.
+static void SDLCALL audioCallback(void* user, SDL_AudioStream* stream, int additional, int) {
+  static std::vector<float> buffer;
+  const int frames = additional / int(2 * sizeof(float));
+  if (frames <= 0) return;
+  buffer.resize(size_t(frames) * 2);
+  static_cast<AudioSynth*>(user)->render(buffer.data(), frames);
+  SDL_PutAudioStreamData(stream, buffer.data(), frames * int(2 * sizeof(float)));
+}
+
+// A WAV of the game's real sound, so that it can be measured without listening.
+static void writeWav(const std::string& path, const std::vector<float>& samples) {
+  FILE* f = fopen(path.c_str(), "wb");
+  if (!f) return;
+  const u32 bytes = u32(samples.size() * sizeof(float));
+  auto u32le = [&](u32 v) { fwrite(&v, 4, 1, f); };
+  auto u16le = [&](uint16_t v) { fwrite(&v, 2, 1, f); };
+  fwrite("RIFF", 1, 4, f);
+  u32le(36 + bytes);
+  fwrite("WAVEfmt ", 1, 8, f);
+  u32le(16);
+  u16le(3);  // IEEE float
+  u16le(2);
+  u32le(AudioSynth::kRate);
+  u32le(AudioSynth::kRate * 8);
+  u16le(8);
+  u16le(32);
+  fwrite("data", 1, 4, f);
+  u32le(bytes);
+  fwrite(samples.data(), 1, bytes, f);
+  fclose(f);
+}
+
 static void preferDiscreteGpu() {
   const char* choice = getenv("BEANNG_GPU");
   if (choice && !strcmp(choice, "integrated")) return;
@@ -326,11 +551,12 @@ static void preferDiscreteGpu() {
 
 int main(int argc, char** argv) {
   preferDiscreteGpu();
-  std::string shotDir;
+  std::string shotDir, wavPath;
   int scriptMode = 0;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--shots") && i + 1 < argc) shotDir = argv[++i];
     if (!strcmp(argv[i], "--script") && i + 1 < argc) scriptMode = atoi(argv[++i]);
+    if (!strcmp(argv[i], "--wav") && i + 1 < argc) wavPath = argv[++i];
     if (!strcmp(argv[i], "--spawn") && i + 2 < argc) {
       kSpawn.x = atof(argv[++i]);
       kSpawn.y = atof(argv[++i]);
@@ -346,6 +572,13 @@ int main(int argc, char** argv) {
   printf("Baue Welt und Fahrzeug...\n");
   G.world.build();
   G.sim.world = &G.world;
+  // Script 15 starts on the country road, on its long southern stretch.
+  if (scriptMode == 15) {
+    const RoadPoint& p = G.world.roads()[0].pts[1200];
+    kSpawn.x = p.x;
+    kSpawn.y = p.y;
+  }
+  kSpawn.z = G.world.height(kSpawn.x, kSpawn.y);
   G.car = buildXantia(G.sim, kSpawn, 0.0, &G.rig);
   populateWorld(G.sim, G.world);
   G.sim.finalize();
@@ -374,8 +607,7 @@ int main(int argc, char** argv) {
   SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-  SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
-  SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
+  SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);  // the renderer does its own MSAA
 
   SDL_Window* window = SDL_CreateWindow("BeanNG - Citroen Xantia Activa", 1600, 900, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
   if (!window) {
@@ -395,6 +627,23 @@ int main(int argc, char** argv) {
   // The renderer reads only topology from this immutable copy (rest pose, triangle list, beam end
   // points). Everything that moves arrives through snapshots, so it never races the physics.
   renderer.init(G.world, G.simStart, G.rig, G.mesh, kSpawn);
+
+  // Sound. It stays silent for automated runs, which must not make noise on the machine they run on,
+  // and without a sound card the game simply runs without it.
+  auto* sound = new SoundDriver();
+  SDL_AudioStream* audioStream = nullptr;
+  std::vector<float> wavSamples;
+  double wavDebt = 0;
+  if (scriptMode == 0 && wavPath.empty()) {
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+      SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "512");
+      const SDL_AudioSpec spec{SDL_AUDIO_F32, 2, AudioSynth::kRate};
+      audioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, audioCallback, &sound->synth);
+      if (audioStream) SDL_ResumeAudioStreamDevice(audioStream);
+    }
+    if (!audioStream) fprintf(stderr, "Kein Ton: %s\n", SDL_GetError());
+    else printf("Ton: %s\n", SDL_GetAudioDeviceName(SDL_GetAudioStreamDevice(audioStream)));
+  }
 
   G.fillSnapshot(0);
   std::thread physics([&] { G.physicsLoop(); });
@@ -422,6 +671,8 @@ int main(int argc, char** argv) {
   CameraRig rig;
   Camera cam;
   HudOptions hud;
+  DriveFeel feel;
+  bool shakeOn = true;
   {
     // Short name for the HUD: "NVIDIA RTX 3500 Ada Generation Laptop GPU/PCIe/SSE2" -> "RTX 3500".
     std::string r = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
@@ -529,6 +780,14 @@ int main(int argc, char** argv) {
             case SDLK_P: paused = !paused; break;
             case SDLK_LEFTBRACKET: timeScale = std::max(0.05, timeScale * 0.5); break;
             case SDLK_RIGHTBRACKET: timeScale = std::min(1.0, timeScale * 2.0); break;
+            case SDLK_B: hud.motionBlur = !hud.motionBlur; break;
+            case SDLK_J: shakeOn = !shakeOn; break;
+            case SDLK_N: sound->muted = !sound->muted; break;
+            case SDLK_PLUS:
+            case SDLK_EQUALS:
+            case SDLK_KP_PLUS: sound->volume = std::min(1.5, sound->volume + 0.1); break;
+            case SDLK_MINUS:
+            case SDLK_KP_MINUS: sound->volume = std::max(0.0, sound->volume - 0.1); break;
             case SDLK_F1: hud.help = !hud.help; helpTimer = 0; break;
             case SDLK_F2: hud.debugBeams = !hud.debugBeams; break;
             case SDLK_F3: hud.xray = !hud.xray; break;
@@ -686,6 +945,31 @@ int main(int argc, char** argv) {
           scriptSteer = view.carCog.x < 91 ? 0.012 : 0.0;
           scriptBrake = scriptMode == 14 || view.carCog.x > 93 ? 1.0 : 0.0;
           break;
+        case 15: {  // flat out along the country road, with the sound recorded
+          const auto& pts = G.world.roads()[0].pts;
+          size_t best = 0;
+          double bd = 1e18;
+          for (size_t i = 0; i < pts.size(); i++) {
+            const double dd = std::hypot(pts[i].x - view.carCog.x, pts[i].y - view.carCog.y);
+            if (dd < bd) {
+              bd = dd;
+              best = i;
+            }
+          }
+          const double look = 12.0 + std::fabs(view.speedKmh) * 0.22;
+          const RoadPoint& t = pts[(best + size_t(look / 1.4)) % pts.size()];
+          const double want = std::atan2(t.y - view.carCog.y, t.x - view.carCog.x);
+          double err = want - std::atan2(view.carFwd.y, view.carFwd.x);
+          while (err > PI) err -= 2 * PI;
+          while (err < -PI) err += 2 * PI;
+          scriptSteer = clampd(err * 1.6, -0.35, 0.35);
+          scriptGas = tNow < 2.0 ? 0.0 : (std::fabs(err) > 0.12 ? 0.4 : 1.0);
+          scriptBrake = view.speedKmh > 175 ? 0.3 : 0.0;
+          break;
+        }
+        case 16:  // the steering wheel from the back seat, turning
+          scriptSteer = std::sin(tNow * 1.2) * 0.7;
+          break;
         case 10:  // close look at a tyre going flat and a dented rim
           rig.mode = CAM_ORBIT;
           rig.dist = 2.6;
@@ -796,6 +1080,10 @@ int main(int argc, char** argv) {
       view.damageMsg = G.snap.damageMsg;
       view.damageAge = G.snap.damageAge;
       view.physLoad = G.snap.physLoad;
+      view.engineLoad = G.snap.engineLoad;
+      view.inputRpm = G.snap.inputRpm;
+      view.starter = G.snap.starter;
+      view.shifting = G.snap.shifting;
       view.realtime = G.snap.realtime;
       view.awake = G.snap.awake;
       view.objectCount = G.snap.objectCount;
@@ -823,7 +1111,9 @@ int main(int argc, char** argv) {
     }
     hud.mouseSteer = mouseSteer;
     hud.cameraName = kCamNames[rig.mode];
-    rig.update(view, dt, cam, G.world);
+    feel.update(view, paused ? 0.0 : dt);
+    if (doReset || doRepair) feel.lastPlastic = 0, feel.valid = false;
+    rig.update(view, dt, cam, G.world, feel, shakeOn);
     if (scriptMode == 10) {  // close-up of the front left wheel
       cam.target = view.wheels[0].hub + V3{0, 0, -0.05};
       cam.eye = cam.target + V3{0.55, 1.15, 0.12};
@@ -831,6 +1121,19 @@ int main(int argc, char** argv) {
     if (scriptMode == 13 || scriptMode == 14) {  // close look along the left flank
       cam.target = view.carCog + view.carFwd * -0.2 + view.carUp * 0.05;
       cam.eye = cam.target + view.carLeft * 2.7 + view.carFwd * 0.5 + view.carUp * 0.25;
+    }
+    if (scriptMode == 16) {
+      cam.eye = view.carCog + view.carFwd * -0.35 + view.carLeft * 0.36 + view.carUp * 0.55;
+      cam.target = view.carCog + view.carFwd * 0.70 + view.carLeft * 0.36 + view.carUp * 0.28;
+      cam.up = view.carUp;
+      cam.fovY = 45.0 * PI / 180.0;
+      cam.inside = true;
+    }
+    if (scriptMode == 17) {  // front arch, from the side
+      cam.target = view.carCog + view.carFwd * 1.25 + view.carLeft * 0.8 + view.carUp * -0.1;
+      cam.eye = cam.target + view.carLeft * 1.7 + view.carFwd * -0.05 + view.carUp * 0.1;
+      cam.up = view.carUp;
+      cam.fovY = 45.0 * PI / 180.0;
     }
     if (scriptMode == 11) {  // close-up of a rear corner
       const V3 corner = view.carCog + view.carFwd * -2.25 + view.carLeft * 0.55 + view.carUp * 0.5;
@@ -840,6 +1143,17 @@ int main(int argc, char** argv) {
 
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);
+    sound->update(view, cam, feel, rig.mode, dt);
+    if (!wavPath.empty()) {
+      wavDebt += dt * AudioSynth::kRate;
+      const int n = int(wavDebt);
+      wavDebt -= n;
+      if (n > 0) {
+        const size_t at = wavSamples.size();
+        wavSamples.resize(at + size_t(n) * 2);
+        sound->synth.render(wavSamples.data() + at, n);
+      }
+    }
     if (w > 0 && h > 0) renderer.draw(view, cam, hud, w, h, dt);
 
     // Scripted screenshot series.
@@ -876,6 +1190,8 @@ int main(int argc, char** argv) {
     }
   }
 
+  if (!wavPath.empty()) writeWav(wavPath, wavSamples);
+  if (audioStream) SDL_DestroyAudioStream(audioStream);
   G.running = false;
   physics.join();
   if (gamepad) SDL_CloseGamepad(gamepad);

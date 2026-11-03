@@ -462,7 +462,21 @@ bump_f = box(-uB, 0.235, uB, 0.527)
 intake = Polygon([(-0.56, 0.285), (0.56, 0.285), (0.60, 0.415), (-0.60, 0.415)]).buffer(0.015)
 fog_l = Point(0.72, 0.345).buffer(0.052)
 fog_r = Point(-0.72, 0.345).buffer(0.052)
-arch_cut_l = None
+
+
+def arch_in_chart(circle, chart):
+    """A round opening drawn in side view, as it appears in a chart that wraps around the corner."""
+    x, z = np.array(circle.exterior.coords).T
+    y = Ysurf(x, z)
+    u = chart.r * np.arctan2(y, chart.cx - x if chart.front else x - chart.cx)
+    return Polygon(np.stack([u, z], -1)).buffer(0)
+
+
+# Without this the panels end in a straight vertical edge across the wheel opening.
+arch_l = arch_in_chart(FA, NOSE)
+arch_r = Polygon([(-a, b) for a, b in arch_l.exterior.coords])
+arches_f = unary_union([arch_l, arch_r])
+bump_f = bump_f.difference(arches_f).buffer(-0.014).buffer(0.014)  # no sharp slivers left at the arch
 panel("bumper_f", "bumper_f", "paint", bump_f.difference(intake).difference(fog_l).difference(fog_r), NOSE, h=0.05, flange=0.03)
 panel("intake", "bumper_f", "dark", intake.buffer(0.004), NOSE, offset=-0.022, roll=0, flange=0, h=0.05)
 for i in range(3):
@@ -471,7 +485,7 @@ for i in range(3):
 panel("fog_l", "bumper_f", "reflector", fog_l.buffer(0.002), NOSE, offset=-0.012, roll=0, flange=0, h=0.02)
 panel("fog_r", "bumper_f", "reflector", fog_r.buffer(0.002), NOSE, offset=-0.012, roll=0, flange=0, h=0.02)
 # Chrome strip on top of the bumper, running around the nose as on the Activa.
-panel("strip_f", "bumper_f", "chrome", box(-uB + 0.01, 0.527, uB - 0.01, 0.541), NOSE, offset=0.006, roll=0.004, flange=0.012, h=0.04, edge=0.012)
+panel("strip_f", "bumper_f", "chrome", box(-uB + 0.01, 0.527, uB - 0.01, 0.541).difference(arches_f.buffer(0.006)), NOSE, offset=0.006, roll=0.004, flange=0.012, h=0.04, edge=0.012)
 
 # Number plate.
 panel("plate_f", "bumper_f", "plate", box(-0.26, 0.44, 0.26, 0.55) if False else box(-0.26, 0.42, 0.26, 0.5), NOSE, offset=0.008, roll=0.001, flange=0.006, h=0.05)
@@ -498,7 +512,7 @@ for nm, s in (("l", 1.0), ("r", -1.0)):
     panel("lamp_" + nm, "bumper_f", "lens", lp, NOSE, offset=-0.002, roll=0.003, flange=0.03, h=0.03)
     panel("ind_" + nm, "bumper_f", "amber", id2, NOSE, offset=-0.002, roll=0.003, flange=0.02, h=0.025)
     # Dark nose surround between lamp, wing and bumper.
-surround = box(-1.17, 0.541, 1.17, 0.66).difference(lamp).difference(Polygon([(-x, y) for x, y in lamp.exterior.coords])).difference(ind).difference(Polygon([(-x, y) for x, y in ind.exterior.coords])).difference(grille)
+surround = box(-1.17, 0.541, 1.17, 0.66).difference(lamp).difference(Polygon([(-x, y) for x, y in lamp.exterior.coords])).difference(ind).difference(Polygon([(-x, y) for x, y in ind.exterior.coords])).difference(grille).difference(arches_f)
 panel("nose_surround", "body", "paint", surround.buffer(-0.003), NOSE, offset=-0.003, roll=0.002, flange=0.01, h=0.04)
 
 # ---- Rear.
@@ -832,19 +846,79 @@ IN.finish("interior")
 
 # Driver's controls: left-hand drive.
 ST = Comp("frame")
-sw = np.array([1.78, 0.38, 0.84])
+sw = np.array([1.93, 0.38, 0.87])  # well clear of the dashboard, which ends at x = 1.77
 st_axis = np.array([-math.cos(math.radians(24)), 0, -math.sin(math.radians(24))])
-ST.cyl("black", sw, sw + st_axis * 0.26, 0.022, 10)
-ST.cyl("black", sw - st_axis * 0.01, sw + st_axis * 0.03, 0.075, 20)
-ring_n = 28
-t1 = np.array([0, 1.0, 0])
-t2 = np.cross(st_axis, t1)
-for i in range(ring_n):
-    a0 = 2 * math.pi * i / ring_n
-    a1 = 2 * math.pi * (i + 1) / ring_n
-    ST.cyl("black", sw + (t1 * math.cos(a0) + t2 * math.sin(a0)) * 0.18, sw + (t1 * math.cos(a1) + t2 * math.sin(a1)) * 0.18, 0.014, 8)
-ST.cyl("black", sw + t2 * 0.0, sw - t2 * 0.18, 0.012, 8)
-ST.cyl("black", sw - t1 * 0.18, sw + t1 * 0.18, 0.012, 8)
+ST.cyl("black", sw + st_axis * 0.03, sw + st_axis * 0.30, 0.022, 24)
+ST.cyl("dark", sw + st_axis * 0.05, sw + st_axis * 0.30, 0.048, 28)              # column shroud
+
+
+def torus(c, axis, R, r, major=96, minor=20, flatten=1.0):
+    """A closed, smooth ring. flatten < 1 makes the section oval, thicker in the driver's hands."""
+    a = axis / np.linalg.norm(axis)
+    e1 = np.cross(a, [0.0, 1.0, 0.0])
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(a, e1)
+    v, n, f = [], [], []
+    for i in range(major):
+        t = 2 * math.pi * i / major
+        d = e1 * math.cos(t) + e2 * math.sin(t)
+        for j in range(minor):
+            p = 2 * math.pi * j / minor
+            nn = d * math.cos(p) / flatten + a * math.sin(p)
+            v.append(c + d * (R + r * flatten * math.cos(p)) + a * (r * math.sin(p)))
+            n.append(nn / np.linalg.norm(nn))
+    for i in range(major):
+        for j in range(minor):
+            A, B = i * minor + j, i * minor + (j + 1) % minor
+            C, D = ((i + 1) % major) * minor + j, ((i + 1) % major) * minor + (j + 1) % minor
+            f += [[A, C, D], [A, D, B]]
+    return np.array(v, float), np.array(n, float), np.array(f)
+
+
+def dome(c, axis, r0, h, rings=10, seg=48):
+    """A shallow padded cap over the wheel's centre, facing against the axis."""
+    a = axis / np.linalg.norm(axis)
+    e1 = np.cross(a, [0.0, 1.0, 0.0])
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(a, e1)
+    v, n, f = [c - a * h], [-a], []
+    for i in range(1, rings + 1):
+        q = i / rings
+        for j in range(seg):
+            t = 2 * math.pi * j / seg
+            d = e1 * math.cos(t) + e2 * math.sin(t)
+            v.append(c + d * (r0 * q) - a * (h * (1 - q * q)))
+            nn = -a + d * (2 * h * q / r0)
+            n.append(nn / np.linalg.norm(nn))
+    for j in range(seg):
+        f.append([0, 1 + j, 1 + (j + 1) % seg])
+    for i in range(rings - 1):
+        for j in range(seg):
+            A, B = 1 + i * seg + j, 1 + i * seg + (j + 1) % seg
+            C, D = A + seg, B + seg
+            f += [[A, C, D], [A, D, B]]
+    return np.array(v, float), np.array(n, float), np.array(f)
+
+
+# Everything named steerwheel_* turns about the column axis in the renderer. The rim is its own part:
+# its vertices are evenly spread, so that their centre is exactly the point on the column.
+SWR = Comp("frame")
+SWR.add("black", torus(sw, st_axis, 0.182, 0.0135, flatten=1.12))
+SW = Comp("frame")
+sw_e1 = np.cross(st_axis, [0.0, 1.0, 0.0])
+sw_e1 = sw_e1 / np.linalg.norm(sw_e1)
+sw_e2 = np.cross(st_axis, sw_e1)
+SW.add("dark", dome(sw - st_axis * 0.012, st_axis, 0.078, 0.024))
+SW.cyl("black", sw - st_axis * 0.012, sw + st_axis * 0.03, 0.078, 48)
+for ang in (0.0, 180.0, 270.0):
+    d = sw_e1 * math.cos(math.radians(ang)) + sw_e2 * math.sin(math.radians(ang))
+    w = np.cross(st_axis, d) * 0.018
+    # Spokes are flat and wide, meeting the rim smoothly.
+    SW.add("black", prim_box(sw + d * 0.125, (0.12, 0.05, 0.012), np.column_stack([d, np.cross(st_axis, d), st_axis])))
+SWR.finish("steerwheel_rim")
+SW.finish("steerwheel_hub")
+STEER_AXIS = st_axis
+STEER_CENTRE = sw
 ST.finish("steering")
 
 # Underbody: exhaust, fuel tank, rear beam.

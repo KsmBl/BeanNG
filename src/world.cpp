@@ -255,6 +255,35 @@ void World::build() {
       if (x > -130 && x < -60 && y > -110 && y < -80) surf_[id] = SURF_GRASS;  // low-grip patch
     }
 
+  // Trees along the country road. Something has to rush past, or the speed is only a number on the
+  // dial. Their trunks are solid: this is a game about what happens when you hit one.
+  {
+    u32 seed = 90210;
+    auto rnd = [&](double a, double b) {
+      seed = seed * 1664525u + 1013904223u;
+      return a + (b - a) * double(seed >> 16) / 65535.0;
+    };
+    const Road& lp = roads_[0];
+    const size_t cnt = lp.pts.size();
+    for (int n = 0; n < 520; n++) {
+      const size_t i = size_t(rnd(0, double(cnt - 1)));
+      const RoadPoint& a = lp.pts[i];
+      const RoadPoint& b = lp.pts[(i + 1) % cnt];
+      const double tx = b.x - a.x, ty = b.y - a.y, tl = std::hypot(tx, ty);
+      const double side = rnd(0, 1) < 0.5 ? -1.0 : 1.0;
+      const double off = side * (lp.halfWidth + 5.0 + std::pow(rnd(0, 1), 1.6) * 34.0);
+      const double x = a.x - ty / tl * off, y = a.y + tx / tl * off;
+      bool clear = std::hypot(x, y) > kPadR + 30.0;
+      for (const Road& r : roads_)
+        for (size_t k = 0; clear && k < r.pts.size(); k += 2)
+          if (std::hypot(r.pts[k].x - x, r.pts[k].y - y) < r.halfWidth + 4.5) clear = false;
+      if (!clear) continue;
+      const double zb = height(x, y);
+      trees_.push_back({x, y, zb});
+      addBox({x, y, zb + 1.5}, {0.22, 0.22, 2.2}, rnd(0, 3), 0, SURF_CONCRETE, .24f, .17f, .11f);
+    }
+  }
+
   // Static features on the pad. Forward lanes run along +X.
   const float wr = .62f, wg = .60f, wb = .56f;
   addBox({110, -30, 1.25}, {0.6, 5.0, 1.25}, 0, 0, SURF_CONCRETE, wr, wg, wb);    // crash wall
