@@ -38,8 +38,10 @@ struct PowerSpec {
   double shaftRate = 8000.0, shaftDamp = 9.0, shaftShear = 6500.0;
   double upshiftLow = 2300.0, upshiftHigh = 6150.0, downshiftLow = 1250.0, downshiftHigh = 3400.0;
   double tyreMu = 1.02, rimRadius = 0.232;
+  double dentFz = 17000.0, burstFz = 32000.0;  // loads at which the rim dents and the tyre bursts
   bool conventional = false;  // no Citroen hydraulics to speak of: plain dampers, plain brakes
   bool turbo = false;
+  double diffPreload = 0, diffRamp = 0;  // limited slip: locking torque at rest, and per N m of drive
   double frontShare = 0.58;
   double lockAngle = 0.60, wheelbase = 2.74, understeer = 0.0022;
   double downforceCla = 0;    // lift coefficient times area, downwards
@@ -98,6 +100,7 @@ struct HydroStrut {
   double Lmin = 0, Lmax = 0, Lnom = 0;
   double bump[2] = {1850, 1000}, reb[2] = {2400, 1400};  // [firm, soft] damping
   double L = 0, vel = 0, pGas = 0, F = 0;
+  double VfRest = 0;  // plain damper: fluid in the sphere at the nominal length
   bool burst = false;
 };
 
@@ -213,6 +216,9 @@ class Vehicle {
   double stuckTime_ = 0;
   int bodyTick_ = 0;
   Controls edge_;
+  bool launching_ = true;
+  double shiftPedal_ = 0;
+  double spinLP_ = 0, espErrLP_ = 0;
   double espThrottle_ = 1, tcsThrottle_ = 1, sumpContact_ = 0, absHold_ = 0, espHold_ = 0, tcsHold_ = 0;
   void updateStability(const Controls& in, double dt);
   void updateBodyFrame(Sim& sim, double dt);

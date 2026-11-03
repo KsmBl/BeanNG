@@ -21,11 +21,11 @@ M = {n: i for i, n in enumerate(MATS)}
 parts = []
 
 X = np.array([0.00, 0.12, 0.30, 0.55, 0.80, 1.00, 1.25, 1.50, 1.75, 2.00, 2.30, 2.60, 2.90, 3.20, 3.45, 3.70, 3.95, 4.20, 4.40, 4.50])
-ZTOP = np.array([0.42, 0.50, 0.58, 0.63, 0.66, 0.69, 0.74, 0.84, 0.98, 1.10, 1.15, 1.15, 1.12, 1.05, 0.98, 0.92, 0.88, 0.86, 0.84, 0.72])
+ZTOP = np.array([0.42, 0.50, 0.58, 0.64, 0.69, 0.72, 0.75, 0.84, 0.98, 1.10, 1.15, 1.15, 1.12, 1.05, 0.98, 0.92, 0.88, 0.86, 0.84, 0.72])
 W = np.array([0.62, 0.78, 0.90, 0.98, 1.015, 1.03, 1.00, 0.96, 0.94, 0.94, 0.96, 0.99, 1.02, 1.03, 1.03, 1.03, 1.02, 0.98, 0.90, 0.72])
-ZBELT = np.array([0.34, 0.40, 0.50, 0.60, 0.66, 0.68, 0.66, 0.66, 0.70, 0.74, 0.74, 0.76, 0.80, 0.84, 0.87, 0.88, 0.86, 0.84, 0.82, 0.70])
-ZRAIL = np.array([0.40, 0.46, 0.54, 0.60, 0.64, 0.68, 0.72, 0.80, 0.93, 1.05, 1.10, 1.10, 1.06, 0.99, 0.93, 0.89, 0.86, 0.85, 0.83, 0.71])
-WRAIL = np.array([0.30, 0.42, 0.55, 0.66, 0.72, 0.74, 0.72, 0.66, 0.60, 0.55, 0.52, 0.52, 0.55, 0.62, 0.72, 0.80, 0.82, 0.80, 0.72, 0.55])
+ZBELT = np.array([0.34, 0.40, 0.52, 0.68, 0.78, 0.81, 0.77, 0.69, 0.70, 0.74, 0.74, 0.76, 0.80, 0.84, 0.87, 0.88, 0.86, 0.84, 0.82, 0.70])
+ZRAIL = np.array([0.40, 0.46, 0.56, 0.68, 0.78, 0.81, 0.79, 0.81, 0.93, 1.05, 1.10, 1.10, 1.06, 0.99, 0.93, 0.89, 0.86, 0.85, 0.83, 0.71])
+WRAIL = np.array([0.30, 0.42, 0.55, 0.62, 0.66, 0.67, 0.67, 0.65, 0.60, 0.55, 0.52, 0.52, 0.55, 0.62, 0.72, 0.80, 0.82, 0.80, 0.72, 0.55])
 FRONT, REAR, AXLE_Z = 0.98, 3.64, 0.34
 ARCH_R = 0.385
 
@@ -33,7 +33,7 @@ ztop, wmax, zbelt, zrail, wrail = [Pchip(X, a) for a in (ZTOP, W, ZBELT, ZRAIL, 
 
 
 def sill(x):
-    return np.full_like(x, 0.15) + 0.02 * np.exp(-((x - 0.0) / 0.25) ** 2) + 0.14 * np.clip((x - 4.0) / 0.5, 0, 1)
+    return np.full_like(x, 0.19) + 0.02 * np.exp(-((x - 0.0) / 0.25) ** 2) + 0.10 * np.clip((x - 4.0) / 0.5, 0, 1)
 
 
 # A cross-section goes round from the sill, up the side, over the shoulder and across the roof to the
@@ -62,7 +62,7 @@ def section(x, t):
 
 
 # ---- Skin grid. A nose and a tail rounding in plan view, on top of the tables.
-NX, NT = 420, 120
+NX, NT = 300, 90
 gx = np.linspace(0.0, 4.5, NX)
 gt = np.linspace(0.0, 1.0, NT)
 XX, TT = np.meshgrid(gx, gt, indexing="ij")
@@ -70,18 +70,7 @@ YY, ZZ = section(XX.ravel(), TT.ravel())
 YY = YY.reshape(XX.shape)
 ZZ = ZZ.reshape(XX.shape)
 XX = XX.copy()
-# Arches: the grid points nearest to the circle go exactly onto it.
 cell = float(gx[1] - gx[0])
-for cx in (FRONT, REAR):
-    dx = XX - cx
-    dz = ZZ - AXLE_Z
-    r = np.hypot(dx, dz)
-    near = np.abs(r - ARCH_R) < cell * 1.3
-    near &= TT < 0.5
-    k = ARCH_R / np.maximum(r, 1e-6)
-    XX[near] = cx + dx[near] * k[near]
-    ZZ[near] = AXLE_Z + dz[near] * k[near]
-
 
 
 def inside_poly(px, py, poly):
@@ -98,13 +87,13 @@ def inside_poly(px, py, poly):
 SIDE_WIN = [(1.90, 0.80), (2.06, 1.00), (2.32, 1.06), (2.66, 1.05), (2.84, 0.86), (2.76, 0.79)]
 DOOR = [(1.86, 0.30), (2.94, 0.30), (2.98, 0.82), (2.84, 1.07), (2.32, 1.10), (2.04, 1.03), (1.84, 0.80)]
 SCOOP = [(3.00, 0.44), (3.32, 0.48), (3.36, 0.74), (3.02, 0.70)]
-LAMP = [(0.10, 0.40), (0.62, 0.59), (0.70, 0.64), (0.50, 0.64), (0.14, 0.50)]
+LAMP = [(0.10, 0.40), (0.60, 0.60), (0.70, 0.69), (0.50, 0.66), (0.14, 0.50)]
 LOWER_INTAKE = [(0.00, 0.14), (0.40, 0.14), (0.42, 0.30), (0.00, 0.33)]
 
 
 
 def lower_line(x):
-    return 0.28 + 0.03 * np.clip((x - 2.9) / 1.0, 0, 1)
+    return 0.31 + 0.03 * np.clip((x - 2.9) / 1.0, 0, 1)
 
 
 def densify(points, closed=True, step=0.004):
@@ -118,130 +107,306 @@ def densify(points, closed=True, step=0.004):
     return np.array(pts)
 
 
-def snap_side(curve, mask):
-    """Grid points close to a curve in side view go exactly onto it: no stairs along part edges."""
-    from scipy.spatial import cKDTree
-    tree = cKDTree(curve)
-    q = np.stack([XX[mask], ZZ[mask]], -1)
-    d, i = tree.query(q, distance_upper_bound=cell * 0.75)
-    ok = np.isfinite(d)
-    xs, zs = XX[mask], ZZ[mask]
-    xs[ok] = curve[i[ok], 0]
-    zs[ok] = curve[i[ok], 1]
-    XX[mask] = xs
-    ZZ[mask] = zs
+def poly_sdf(px, pz, poly):
+    """Signed distance to a polygon in side view: negative inside."""
+    p = np.stack([px, pz], -1)
+    d = np.full(px.shape, 1e9)
+    n = len(poly)
+    for i in range(n):
+        a = np.array(poly[i])
+        b = np.array(poly[(i + 1) % n])
+        ab = b - a
+        t = np.clip(((p - a) * ab).sum(-1) / (ab * ab).sum(), 0, 1)
+        q = p - (a + t[..., None] * ab)
+        d = np.minimum(d, np.hypot(q[..., 0], q[..., 1]))
+    return np.where(inside_poly(px, pz, poly), -d, d)
 
 
-side_mask = TT < 0.70
-for poly in (SIDE_WIN, DOOR, SCOOP):
-    snap_side(densify(poly), side_mask)
-_lx = np.arange(0.0, 4.5, 0.004)
-snap_side(np.stack([_lx, lower_line(_lx)], -1), side_mask & (np.hypot(XX - FRONT, ZZ - AXLE_Z) > ARCH_R + cell) & (np.hypot(XX - REAR, ZZ - AXLE_Z) > ARCH_R + cell))
-# The upper edge of the headlights, on the part of the surface facing up and out.
-snap_side(densify(LAMP), (TT < 0.92) & (np.abs(YY) > 0.42))
+def rbox(x, y, x0, x1, y0, y1, r):
+    """Signed distance to a rounded rectangle: negative inside."""
+    cx_, cy_ = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+    qx = np.abs(x - cx_) - (0.5 * (x1 - x0) - r)
+    qy = np.abs(y - cy_) - (0.5 * (y1 - y0) - r)
+    return np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - r
 
 
-def classify(cx, cy, cz, ct):
-    """Part of every triangle, from where its centre lies. Returns an array of part keys."""
-    out = np.full(cx.shape, "pearl", dtype=object)
-    group = np.full(cx.shape, "body", dtype=object)
-    side = ct < 0.72
-    # The lower body is exposed carbon, with the line of the sill rising towards the tail.
-    low = cz < lower_line(cx)
-    out[low] = "carbon"
-    # An accent line along the shoulder.
-    accent = side & (np.abs(cz - (zbelt(cx) - 0.11)) < 0.009) & (cx > 0.5) & (cx < 4.2)
-    out[accent] = "accent"
-    # Rear deck, in carbon, with the engine vents.
-    deck = (ct > 0.72) & (cx > 3.05) & (cx < 4.25)
-    out[deck] = "carbon"
-    # Windows.
-    d_side = side & inside_poly(cx, cz, SIDE_WIN)
-    out[d_side] = "glass"
-    screen = (ct > 0.72) & (cx > 1.50) & (cx < 2.30) & (np.abs(cy) < 0.62)
-    out[screen] = "glass"
-    # The targa roof, in carbon, with a small rear window behind it.
-    roof = (ct > 0.72) & (cx >= 2.30) & (cx < 2.95) & (np.abs(cy) < 0.50)
-    out[roof] = "carbon"
-    rear_glass = (ct > 0.72) & (cx >= 2.95) & (cx < 3.28) & (np.abs(cy) < 0.40)
-    out[rear_glass] = "glass"
-    # Door, with its shut line.
-    in_door = side & inside_poly(cx, cz, DOOR)
-    group[in_door] = "door"
-    # Shut lines are dark gaps. This grid is fine enough to show them as thin ones.
-    eps = 0.008
-    shut = side & ~in_door & (inside_poly(cx - eps, cz, DOOR) | inside_poly(cx + eps, cz, DOOR) | inside_poly(cx, cz - eps, DOOR) | inside_poly(cx, cz + eps, DOOR))
-    out[shut] = "black"
-    # Side intake behind the door.
-    out[side & inside_poly(cx, cz, SCOOP)] = "dark"
-    # Headlights, sweeping back along the wing.
-    lamp = (cz > 0.36) & inside_poly(cx, cz, LAMP) & (np.abs(cy) > 0.44)
-    out[lamp] = "lens"
-    # The hood's two vents, and the shut line of the front clam.
-    vents = (ct > 0.72) & (cx > 0.90) & (cx < 1.22) & (np.abs(cy) > 0.16) & (np.abs(cy) < 0.40)
-    out[vents] = "dark"
-    out[(cx > 1.40) & (cx < 1.415) & (ct > 0.3)] = "black"
-    # The nose's lower intake.
-    out[(cz < 0.33) & (cx < 0.26) & (np.abs(cy) < 0.56)] = "dark"
-    return out, group
+# ---- Cut the skin exactly along each part's edge, by splitting the triangles there. A part made of whole
+# grid squares can only have stairs for edges, however fine the grid.
+class Skin:
+    def __init__(self):
+        self.P = PP_all.reshape(-1, 3).copy()
+        self.N = NN_all.reshape(-1, 3).copy()
+        self.T = TT.reshape(-1).copy()
+        i = np.arange(NX - 1)
+        j = np.arange(NT - 1)
+        I, J = np.meshgrid(i, j, indexing="ij")
+        a = (I * NT + J).ravel()
+        b = ((I + 1) * NT + J).ravel()
+        c = ((I + 1) * NT + J + 1).ravel()
+        d = (I * NT + J + 1).ravel()
+        self.F = np.concatenate([np.stack([a, b, c], -1), np.stack([a, c, d], -1)])
+        self.mat = np.full(len(self.F), "pearl", dtype=object)
+        self.grp = np.full(len(self.F), "body", dtype=object)
+
+    def field(self, fn):
+        return fn(self.P[:, 0], np.abs(self.P[:, 1]), self.P[:, 2], self.T)
+
+    def cut(self, fn):
+        """Splits every triangle crossing fn = 0. Afterwards each one lies wholly on one side."""
+        f = self.field(fn)
+        s = f[self.F] < 0
+        cross = s.any(1) & ~s.all(1)
+        if not cross.any():
+            return
+        P, N, T = list(self.P), list(self.N), list(self.T)
+        seen = {}
+
+        def mid(a, b):
+            key = (min(a, b), max(a, b))
+            if key not in seen:
+                k = f[a] / (f[a] - f[b])
+                nn = self.N[a] + (self.N[b] - self.N[a]) * k
+                P.append(self.P[a] + (self.P[b] - self.P[a]) * k)
+                N.append(nn / (np.linalg.norm(nn) + 1e-12))
+                T.append(self.T[a] + (self.T[b] - self.T[a]) * k)
+                seen[key] = len(P) - 1
+            return seen[key]
+
+        newF, newM, newG = [], [], []
+        for idx in np.nonzero(cross)[0]:
+            tri = self.F[idx]
+            ins = s[idx]
+            # Rotate so that vertex 0 is the one alone on its side.
+            k = next(i for i in range(3) if ins[i] != ins[(i + 1) % 3] and ins[i] != ins[(i + 2) % 3])
+            a, b, c = tri[k], tri[(k + 1) % 3], tri[(k + 2) % 3]
+            ab, ca = mid(a, b), mid(c, a)
+            newF += [[a, ab, ca], [ab, b, c], [ab, c, ca]]
+            newM += [self.mat[idx]] * 3
+            newG += [self.grp[idx]] * 3
+        keep = ~cross
+        self.F = np.concatenate([self.F[keep], np.array(newF)])
+        self.mat = np.concatenate([self.mat[keep], np.array(newM, dtype=object)])
+        self.grp = np.concatenate([self.grp[keep], np.array(newG, dtype=object)])
+        self.P, self.N, self.T = np.array(P), np.array(N), np.array(T)
+
+    def inside(self, fn):
+        f = self.field(fn)
+        # After a cut each triangle is on one side: its centre tells which, without rounding trouble.
+        return f[self.F].mean(1) < 0
+
+    def paint(self, fn, mat):
+        self.cut(fn)
+        self.mat[self.inside(fn)] = mat
+
+    def remove(self, fn):
+        self.cut(fn)
+        keep = ~self.inside(fn)
+        self.F, self.mat, self.grp = self.F[keep], self.mat[keep], self.grp[keep]
 
 
-cx = 0.25 * (XX[:-1, :-1] + XX[1:, :-1] + XX[:-1, 1:] + XX[1:, 1:]).ravel()
-cy = 0.25 * (YY[:-1, :-1] + YY[1:, :-1] + YY[:-1, 1:] + YY[1:, 1:]).ravel()
-cz = 0.25 * (ZZ[:-1, :-1] + ZZ[1:, :-1] + ZZ[:-1, 1:] + ZZ[1:, 1:]).ravel()
-ct = 0.25 * (TT[:-1, :-1] + TT[1:, :-1] + TT[:-1, 1:] + TT[1:, 1:]).ravel()
-mat_of, grp_of = classify(cx, cy, cz, ct)
-arch = np.zeros_like(cx, bool)
+def both(*conds):
+    """Inside all of several regions: the largest of their distances."""
+    def fn(x, y, z, t):
+        out = conds[0](x, y, z, t)
+        for c in conds[1:]:
+            out = np.maximum(out, c(x, y, z, t))
+        return out
+    return fn
+
+
+side_only = lambda x, y, z, t: t - 0.70
+top_only = lambda x, y, z, t: 0.70 - t
+
+
+PP_all = np.stack([XX, YY, ZZ], -1)
+_du = np.gradient(PP_all, axis=0)
+_dv = np.gradient(PP_all, axis=1)
+NN_all = np.cross(_dv, _du)
+NN_all /= np.linalg.norm(NN_all, axis=-1, keepdims=True) + 1e-12
+if NN_all[NX // 2, NT // 4, 1] < 0:
+    NN_all = -NN_all
+
+S = Skin()
+S.paint(lambda x, y, z, t: z - lower_line(x), "carbon")
+# Rear deck, then the glass and roof, all with rounded corners in plan view.
+S.paint(both(top_only, lambda x, y, z, t: rbox(x, y, 3.28, 4.28, -0.1, 0.80, 0.10)), "carbon")
+S.paint(both(top_only, lambda x, y, z, t: rbox(x, y, 2.28, 3.02, -0.1, 0.49, 0.08)), "carbon")
+S.paint(both(top_only, lambda x, y, z, t: rbox(x, y, 3.02, 3.28, -0.1, 0.40, 0.06)), "glass")
+S.paint(both(top_only, lambda x, y, z, t: rbox(x, y, 1.52, 2.28, -0.1, 0.62, 0.10)), "glass")
+# Side windows, the door and the intake behind it.
+S.paint(both(side_only, lambda x, y, z, t: poly_sdf(x, z, SIDE_WIN)), "glass")
+door_fn = both(side_only, lambda x, y, z, t: poly_sdf(x, z, DOOR))
+S.cut(door_fn)
+S.grp[S.inside(door_fn)] = "door"
+S.paint(both(side_only, lambda x, y, z, t: poly_sdf(x, z, SCOOP)), "dark")
+# The mouth in the nose.
+S.paint(lambda x, y, z, t: rbox(x, y, -0.2, 0.25, -0.1, 0.56, 0.06) if False else np.maximum(rbox(x, y, -0.2, 0.25, -0.1, 0.56, 0.06), z - 0.33), "dark")
+# Round wheel arches: a true circle, right through the triangles.
 for c0 in (FRONT, REAR):
-    arch |= np.hypot(cx - c0, cz - AXLE_Z) < ARCH_R
-arch &= ct < 0.5
-
-# Smooth normals from the whole surface, shared by every part cut from it.
-du = np.gradient(np.stack([XX, YY, ZZ], -1), axis=0)
-dv = np.gradient(np.stack([XX, YY, ZZ], -1), axis=1)
-NN = np.cross(dv, du)
-NN /= np.linalg.norm(NN, axis=-1, keepdims=True) + 1e-12
-if NN[NX // 2, NT // 4, 1] < 0:
-    NN = -NN
-PP = np.stack([XX, YY, ZZ], -1)
+    S.remove(both(lambda x, y, z, t, c0=c0: np.hypot(x - c0, z - AXLE_Z) - ARCH_R, lambda x, y, z, t: t - 0.5))
 
 
-def add_skin(side_sign, name_suffix, door_group):
-    keys = {}
-    for k, (m, g) in enumerate(zip(mat_of, grp_of)):
-        if arch[k]:
-            continue
-        keys.setdefault((m, g), []).append(k)
-    for (m, g), cells in keys.items():
-        cells = np.array(cells)
-        i = cells // (NT - 1)
-        j = cells % (NT - 1)
-        idx = {}
-        v, n, f = [], [], []
-
-        def vert(a, b):
-            key = (a, b)
-            if key not in idx:
-                idx[key] = len(v)
-                p = PP[a, b].copy()
-                q = NN[a, b].copy()
-                p[1] *= side_sign
-                q[1] *= side_sign
-                v.append(p)
-                n.append(q)
-            return idx[key]
-
-        for a, b in zip(i, j):
-            A, B, C, D = vert(a, b), vert(a + 1, b), vert(a + 1, b + 1), vert(a, b + 1)
-            f.append([A, B, C])
-            f.append([A, C, D])
-        group = door_group if g == "door" else "body"
-        off = 0.0
-        parts.append(("skin_%s_%s%s" % (m, g, name_suffix), group, M[m], np.array(v), np.array(n), np.array(f)))
+def add_skin(side_sign, suffix):
+    F = S.F
+    for key in sorted({(m, g) for m, g in zip(S.mat, S.grp)}):
+        m, g = key
+        sel = np.nonzero((S.mat == m) & (S.grp == g))[0]
+        tris = F[sel]
+        used, inv = np.unique(tris, return_inverse=True)
+        v = S.P[used].copy()
+        n = S.N[used].copy()
+        v[:, 1] *= side_sign
+        n[:, 1] *= side_sign
+        f = inv.reshape(-1, 3)
+        if side_sign < 0:
+            f = f[:, [0, 2, 1]]
+        group = ("door_l" if side_sign > 0 else "door_r") if g == "door" else "body"
+        parts.append(("skin_%s_%s%s" % (m, g, suffix), group, M[m], v, n, f))
 
 
-add_skin(1, "_l", "door_l")
-add_skin(-1, "_r", "door_r")
+add_skin(1, "_l")
+add_skin(-1, "_r")
+
+
+# ---- Clean overlays laid on the surface: everything that needs a crisp edge. A part cut out of the grid
+# can only follow the grid's squares; these have their own vertices, along their own outline.
+def surface_at(x, t):
+    x = np.atleast_1d(np.asarray(x, float))
+    t = np.atleast_1d(np.asarray(t, float))
+    y, z = section(x, t)
+    h = 0.004
+    y1, z1 = section(x, np.clip(t + h, 0, 1))
+    y0, z0 = section(x, np.clip(t - h, 0, 1))
+    yb, zb = section(x + h * 2, t)
+    ya, za = section(x - h * 2, t)
+    du_ = np.stack([np.full_like(x, 4 * h), yb - ya, zb - za], -1)
+    dv_ = np.stack([np.zeros_like(x), y1 - y0, z1 - z0], -1)
+    n = np.cross(dv_, du_)
+    n /= np.linalg.norm(n, axis=-1, keepdims=True) + 1e-12
+    n[n[:, 1] < 0] *= 1.0 if False else 1.0
+    return np.stack([x, y, z], -1), n
+
+
+def t_of_side(x, z):
+    """The surface parameter where a side-view point lies on the side of the car."""
+    x = np.asarray(x, float)
+    z = np.asarray(z, float)
+    lo, hi = np.zeros_like(x), np.full_like(x, 0.72)
+    for _ in range(26):
+        m = 0.5 * (lo + hi)
+        _, zm = section(x, m)
+        lo = np.where(zm < z, m, lo)
+        hi = np.where(zm < z, hi, m)
+    return 0.5 * (lo + hi)
+
+
+OVER = {}
+
+
+def overlay(mat, group, v, n, f):
+    OVER.setdefault((mat, group), []).append((np.asarray(v, float), np.asarray(n, float), np.asarray(f, int)))
+
+
+def outward(p, n):
+    # Normals point away from the car's core.
+    core = np.stack([p[:, 0], np.zeros(len(p)), np.full(len(p), 0.45)], -1)
+    flip = ((p - core) * n).sum(-1) < 0
+    n = n.copy()
+    n[flip] *= -1
+    return n
+
+
+def ribbon(points, width, lift, mat, group="body", closed=False):
+    """A thin strip along a line given in side view: shut lines, trim, the accent stripe."""
+    if len(points) < 2:
+        return
+    pts = densify(list(map(tuple, points)), closed=closed, step=0.012)
+    t = t_of_side(pts[:, 0], pts[:, 1])
+    p, n = surface_at(pts[:, 0], t)
+    n = outward(p, n)
+    d = np.gradient(p, axis=0)
+    side = np.cross(n, d)
+    side /= np.linalg.norm(side, axis=-1, keepdims=True) + 1e-12
+    v = np.concatenate([p + n * lift + side * width * 0.5, p + n * lift - side * width * 0.5])
+    nn = np.concatenate([n, n])
+    m = len(p)
+    f = []
+    for i in range(m - 1):
+        f += [[i, i + 1, m + i + 1], [i, m + i + 1, m + i]]
+    overlay(mat, group, v, nn, f)
+
+
+def patch(cx0, t0, ax, at, skew, power, lift, mat, group="body", rings=8, seg=56):
+    """A rounded shape on the surface: an ellipse-like outline around a centre in surface coordinates."""
+    v, n, f = [], [], []
+    pc, nc = surface_at(cx0, t0)
+    nc = outward(pc, nc)
+    v.append(pc[0] + nc[0] * lift)
+    n.append(nc[0])
+    for r in range(1, rings + 1):
+        q = r / rings
+        for j in range(seg):
+            a = 2 * math.pi * j / seg
+            ca, sa = math.cos(a), math.sin(a)
+            e = 2.0 / power
+            u = abs(ca) ** e * (1 if ca >= 0 else -1)
+            w = abs(sa) ** e * (1 if sa >= 0 else -1)
+            xx = cx0 + ax * q * u
+            tt = t0 + at * q * w + skew * q * u
+            p1, n1 = surface_at(xx, tt)
+            n1 = outward(p1, n1)
+            # A rim that dips back to the surface at the edge, so that it looks set in.
+            v.append(p1[0] + n1[0] * (lift * (1.0 - q ** 8) + 0.0005))
+            n.append(n1[0])
+    for j in range(seg):
+        f.append([0, 1 + j, 1 + (j + 1) % seg])
+    for r in range(rings - 1):
+        for j in range(seg):
+            A, B = 1 + r * seg + j, 1 + r * seg + (j + 1) % seg
+            C, D = A + seg, B + seg
+            f += [[A, C, D], [A, D, B]]
+    overlay(mat, group, v, n, f)
+
+
+# Shut lines of the door, and the frame of its window.
+ribbon(DOOR, 0.007, 0.0015, "black", "door", closed=True)
+ribbon(SIDE_WIN, 0.020, 0.0025, "black", "door", closed=True)
+# The orange accent running from wing to tail, broken by the wheel arches and the intake.
+for x0, x1 in ((0.46, 0.56), (1.40, 2.98), (4.08, 4.25)):
+    xs = np.arange(x0, x1, 0.02)
+    ribbon(np.stack([xs, zbelt(xs) - 0.10], -1), 0.012, 0.002, "accent")
+# The edges where the carbon underbody meets the paint.
+for x0, x1 in ((0.58, FRONT - ARCH_R - 0.02), (FRONT + ARCH_R + 0.02, REAR - ARCH_R - 0.02), (REAR + ARCH_R + 0.02, 4.42)):
+    xs = np.arange(x0, x1, 0.02)
+    ribbon(np.stack([xs, lower_line(xs)], -1), 0.006, 0.0015, "black")
+# Intake frame, behind the door.
+ribbon(SCOOP, 0.012, 0.002, "black", closed=True)
+# Black lips around the wheel arches.
+for c0 in (FRONT, REAR):
+    a = np.radians(np.arange(8, 172, 3.0))
+    ribbon(np.stack([c0 + (ARCH_R + 0.004) * np.cos(a), AXLE_Z + (ARCH_R + 0.004) * np.sin(a)], -1), 0.012, 0.002, "black")
+# Headlights: long, narrow and swept back along the top of the wing.
+patch(0.36, 0.60, 0.25, 0.060, 0.055, 3.4, 0.0015, "dark")
+for _x, _t in ((0.26, 0.572), (0.42, 0.610)):
+    patch(_x, _t, 0.045, 0.030, 0.0, 2.0, 0.003, "reflector", rings=4, seg=24)
+patch(0.36, 0.60, 0.235, 0.055, 0.055, 3.4, 0.005, "lens")
+# Bonnet vents, between the raised wings.
+patch(1.05, 0.90, 0.13, 0.042, 0.0, 4.0, 0.0015, "dark")
+for (m, grp), prims in OVER.items():
+    vs, ns, fs, base = [], [], [], 0
+    for v, n, f in prims:
+        vs.append(v)
+        ns.append(n)
+        fs.append(f + base)
+        base += len(v)
+    V, N, FF = np.vstack(vs), np.vstack(ns), np.vstack(fs)
+    gl = "door_l" if grp == "door" else "body"
+    gr = "door_r" if grp == "door" else "body"
+    parts.append(("over_%s_%s_l" % (m, grp), gl, M[m], V, N, FF))
+    V2, N2 = V.copy(), N.copy()
+    V2[:, 1] *= -1
+    N2[:, 1] *= -1
+    parts.append(("over_%s_%s_r" % (m, grp), gr, M[m], V2, N2, FF[:, [0, 2, 1]]))
 
 
 # ---- Small helpers for everything that is not skin.
@@ -317,7 +482,7 @@ def cyl(g, mat, a, b, r, seg=24):
 
 # ---- Inside and underneath: closes the car against the light, and something to see through the glass.
 F = Group("frame")
-box(F, "carpet", (2.35, 0.0, 0.30), (1.1, 1.30, 0.02))
+box(F, "carpet", (2.35, 0.0, 0.26), (1.1, 1.30, 0.02))
 box(F, "dark", (1.86, 0.0, 0.50), (0.34, 1.50, 0.26))
 box(F, "dark", (2.40, 0.0, 0.40), (0.95, 0.20, 0.20))
 for sg in (-1, 1):
@@ -330,11 +495,11 @@ for cx0 in (FRONT, REAR):
     for sg in (-1, 1):
         # Half-round arch liners behind the openings.
         v, f = [], []
-        th = np.linspace(math.radians(-6), math.radians(186), 28)
+        th = np.linspace(math.radians(-32), math.radians(212), 40)
         for t in th:
             px, pz = cx0 + (ARCH_R + 0.01) * math.cos(t), AXLE_Z + (ARCH_R + 0.01) * math.sin(t)
             v.append((px, sg * 0.56, pz))
-            v.append((px, sg * 1.0, pz))
+            v.append((px, sg * 1.05, pz))
         for i in range(len(th) - 1):
             a = i * 2
             f += [[a, a + 2, a + 3], [a, a + 3, a + 1]]
@@ -347,9 +512,61 @@ for cx0 in (FRONT, REAR):
         v = np.array(v, float)
         n = np.tile([0.0, 0.0, -1.0], (len(v), 1))
         F.add("liner", v, n, f)
-# The underbody and the panels that close both ends.
-box(F, "liner", (2.25, 0.0, 0.135), (4.1, 1.5, 0.012))
 F.finish("inside")
+
+
+# ---- Everything that closes the shell, so that no gap ever looks into the car: a floor from sill to sill
+# with the wheel wells left open, and an end cap on the nose and on the tail.
+def closing(xs, yfun, zfun, mat, name):
+    v, n, f = [], [], []
+    M_ = 12
+    for x in xs:
+        for j in range(M_ + 1):
+            y = (j / M_ * 2 - 1) * float(yfun(x))
+            v.append((x, y, float(zfun(x))))
+            n.append((0, 0, -1))
+    R_ = M_ + 1
+    for i in range(len(xs) - 1):
+        for j in range(M_):
+            a, b = i * R_ + j, (i + 1) * R_ + j
+            c, d = b + 1, a + 1
+            xc = 0.5 * (xs[i] + xs[i + 1])
+            yc = (j + 0.5) / M_ * 2 - 1
+            yy = abs(yc * float(yfun(xc)))
+            if yy > 0.56 and (abs(xc - FRONT) < ARCH_R + 0.012 or abs(xc - REAR) < ARCH_R + 0.012):
+                continue  # the wheel well stays open downwards
+            f += [[a, b, c], [a, c, d]]
+    g_ = Group("frame")
+    g_.add(mat, np.array(v, float), np.array(n, float), np.array(f))
+    g_.finish(name)
+
+
+closing(np.arange(0.0, 4.5001, 0.02), lambda x: wmax(np.array([x]))[0] * 0.965, lambda x: sill(np.array([x]))[0], "liner", "floor")
+
+
+def end_cap(x, name):
+    # A fan from the middle of the section to its outline, all the way round.
+    ts = np.linspace(0.0, 1.0, 48)
+    y, z = section(np.full_like(ts, x), ts)
+    c = (x, 0.0, float(z.mean()))
+    nrm = (-1.0, 0.0, 0.0) if x < 2 else (1.0, 0.0, 0.0)
+    v = [c]
+    n = [nrm]
+    f = []
+    outline = [(y[i], z[i]) for i in range(len(ts))] + [(-y[i], z[i]) for i in range(len(ts) - 1, -1, -1)]
+    for yy, zz in outline:
+        v.append((x, yy, zz))
+        n.append(nrm)
+    for i in range(1, len(outline)):
+        f.append([0, i, i + 1])
+    f.append([0, len(outline), 1])
+    g_ = Group("frame")
+    g_.add("carbon", np.array(v, float), np.array(n, float), np.array(f))
+    g_.finish(name)
+
+
+end_cap(0.0, "cap_nose")
+end_cap(4.5, "cap_tail")
 
 
 # Steering wheel: a flat-bottomed feel is left out, it is one smooth rim with a centre.
@@ -392,30 +609,41 @@ H.finish("steerwheel_hub")
 # ---- Mirrors, the rear lights and the exhaust on the body.
 B = Group("body")
 for sg in (-1, 1):
-    lathe(B, "carbon", (1.74, sg * 0.98, 0.86), (1.90, sg * 1.02, 0.87), [(0.05, 0.05), (0.5, 0.075), (0.95, 0.05)], 20)
-    cyl(B, "carbon", (1.86, sg * 0.84, 0.84), (1.84, sg * 0.98, 0.86), 0.012, 10)
+    lathe(B, "carbon", (1.70, sg * 0.99, 0.87), (1.86, sg * 1.03, 0.88), [(0.05, 0.05), (0.5, 0.075), (0.95, 0.05)], 20)
+    cyl(B, "carbon", (1.80, sg * 0.83, 0.80), (1.79, sg * 1.00, 0.87), 0.012, 10)
     # Rear lights: round, stacked, the car's signature from behind.
     for z, r in ((0.70, 0.075), (0.56, 0.058)):
         y = sg * 0.56
-        cyl(B, "tail", (4.47, y, z), (4.50, y, z), r, 28)
+        cyl(B, "tail", (4.48, y, z), (4.522, y, z), r, 32)
+        cyl(B, "lens", (4.522, y, z), (4.524, y, z), r * 0.5, 24)
     # Vents on the tail.
-    box(B, "dark", (4.50, sg * 0.28, 0.42), (0.02, 0.40, 0.18))
+    box(B, "dark", (4.522, sg * 0.28, 0.42), (0.012, 0.40, 0.14))
 # Tail panel and diffuser, in carbon.
-box(B, "carbon", (4.48, 0.0, 0.34), (0.05, 1.36, 0.30))
+box(B, "carbon", (4.49, 0.0, 0.33), (0.06, 1.36, 0.24))
 box(B, "carbon", (4.40, 0.0, 0.205), (0.34, 1.34, 0.03))
 for y in (-0.42, -0.21, 0.0, 0.21, 0.42):
     box(B, "dark", (4.42, y, 0.26), (0.30, 0.015, 0.11))
 # The central exhaust, up high between the lights.
-cyl(B, "alu", (4.44, 0.0, 0.64), (4.51, 0.0, 0.64), 0.075, 28)
-cyl(B, "black", (4.51, 0.0, 0.64), (4.515, 0.0, 0.64), 0.058, 24)
+cyl(B, "alu", (4.46, 0.0, 0.62), (4.54, 0.0, 0.62), 0.075, 32)
+cyl(B, "black", (4.54, 0.0, 0.62), (4.543, 0.0, 0.62), 0.060, 28)
 # Front splitter.
-box(B, "carbon", (0.20, 0.0, 0.125), (0.42, 1.30, 0.02))
+# A blade following the nose's plan outline, instead of a plank across it.
+_sx = np.linspace(0.015, 0.62, 18)
+_sy = wmax(_sx) * 0.90
+_v, _n, _f = [], [], []
+for _z, _nz in ((0.155, 1.0), (0.135, -1.0)):
+    for _x, _y in zip(_sx, _sy):
+        _v += [(_x, _y, _z), (_x, -_y, _z)]
+        _n += [(0, 0, _nz), (0, 0, _nz)]
+for _i in range(len(_sx) - 1):
+    _a = _i * 2
+    _f += [[_a, _a + 2, _a + 3], [_a, _a + 3, _a + 1]]
+    _a += len(_sx) * 2
+    _f += [[_a, _a + 3, _a + 2], [_a, _a + 1, _a + 3]]
+B.add("carbon", _v, _n, _f)
 for sg in (-1, 1):
     # Canards, ahead of the front arches.
-    box(B, "carbon", (0.42, sg * 0.97, 0.30), (0.20, 0.08, 0.012))
-    # Headlight projectors under the lens.
-    for x in (0.34, 0.50):
-        lathe(B, "reflector", (x, sg * (0.60 + x * 0.25), 0.50 + (x - 0.34) * 0.25), (x + 0.05, sg * (0.60 + x * 0.25), 0.50 + (x - 0.34) * 0.25), [(0.1, 0.03), (0.9, 0.03)], 14)
+    box(B, "carbon", (0.40, sg * 0.90, 0.30), (0.16, 0.09, 0.010))
 # Roof scoop over the engine.
 box(B, "carbon", (3.08, 0.0, 1.075), (0.30, 0.34, 0.05))
 box(B, "black", (2.94, 0.0, 1.07), (0.02, 0.30, 0.035))
@@ -423,12 +651,12 @@ B.finish("trim")
 
 # ---- The wing: a two-element blade on swan-neck pylons, with end plates.
 WNG = Group("wing")
-for x0, x1, z, thick in ((4.12, 4.34, 1.13, 0.022), (4.34, 4.48, 1.17, 0.015)):
-    box(WNG, "carbon", (0.5 * (x0 + x1), 0.0, z), (x1 - x0, 1.86, thick))
+for x0, x1, z, thick in ((4.12, 4.33, 1.06, 0.024), (4.35, 4.48, 1.09, 0.016)):
+    box(WNG, "carbon", (0.5 * (x0 + x1), 0.0, z), (x1 - x0, 1.84, thick))
 for sg in (-1, 1):
-    box(WNG, "carbon", (4.30, sg * 0.93, 1.13), (0.46, 0.012, 0.24))
-    box(WNG, "accent", (4.32, sg * 0.935, 1.20), (0.40, 0.006, 0.03))
-    box(WNG, "carbon", (4.26, sg * 0.42, 1.02), (0.12, 0.02, 0.20))
+    box(WNG, "carbon", (4.30, sg * 0.93, 1.06), (0.46, 0.014, 0.20))
+    box(WNG, "accent", (4.32, sg * 0.945, 1.12), (0.40, 0.004, 0.025))
+    box(WNG, "carbon", (4.24, sg * 0.42, 0.955), (0.16, 0.024, 0.21))
 WNG.finish("wing")
 
 # ---- Drivetrain, for the X-ray view.

@@ -14,13 +14,13 @@ constexpr double kNoseX = 2.25;
 constexpr double kFrontAxle = 0.98, kRearAxle = 3.64;
 
 const double X[NS] = {0.00, 0.12, 0.30, 0.55, 0.80, 1.00, 1.25, 1.50, 1.75, 2.00, 2.30, 2.60, 2.90, 3.20, 3.45, 3.70, 3.95, 4.20, 4.40, 4.50};
-const double ZTOP[NS] = {0.42, 0.50, 0.58, 0.63, 0.66, 0.69, 0.74, 0.84, 0.98, 1.10, 1.15, 1.15, 1.12, 1.05, 0.98, 0.92, 0.88, 0.86, 0.84, 0.72};
+const double ZTOP[NS] = {0.42, 0.50, 0.58, 0.64, 0.69, 0.72, 0.75, 0.84, 0.98, 1.10, 1.15, 1.15, 1.12, 1.05, 0.98, 0.92, 0.88, 0.86, 0.84, 0.72};
 const double W[NS] = {0.62, 0.78, 0.90, 0.98, 1.015, 1.03, 1.00, 0.96, 0.94, 0.94, 0.96, 0.99, 1.02, 1.03, 1.03, 1.03, 1.02, 0.98, 0.90, 0.72};
-const double ZBELT[NS] = {0.34, 0.40, 0.50, 0.60, 0.66, 0.68, 0.66, 0.66, 0.70, 0.74, 0.74, 0.76, 0.80, 0.84, 0.87, 0.88, 0.86, 0.84, 0.82, 0.70};
-const double ZRAIL[NS] = {0.40, 0.46, 0.54, 0.60, 0.64, 0.68, 0.72, 0.80, 0.93, 1.05, 1.10, 1.10, 1.06, 0.99, 0.93, 0.89, 0.86, 0.85, 0.83, 0.71};
-const double WRAIL[NS] = {0.30, 0.42, 0.55, 0.66, 0.72, 0.74, 0.72, 0.66, 0.60, 0.55, 0.52, 0.52, 0.55, 0.62, 0.72, 0.80, 0.82, 0.80, 0.72, 0.55};
-const double ZLOW[NS] = {0.16, 0.14, 0.16, 0.26, 0.42, 0.56, 0.42, 0.20, 0.15, 0.15, 0.15, 0.15, 0.20, 0.34, 0.50, 0.56, 0.48, 0.32, 0.26, 0.26};
-const double ZFLOOR[NS] = {0.15, 0.13, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.11, 0.11, 0.11, 0.11, 0.12, 0.13, 0.14, 0.14, 0.15, 0.17, 0.20, 0.22};
+const double ZBELT[NS] = {0.34, 0.40, 0.52, 0.68, 0.78, 0.81, 0.77, 0.69, 0.70, 0.74, 0.74, 0.76, 0.80, 0.84, 0.87, 0.88, 0.86, 0.84, 0.82, 0.70};
+const double ZRAIL[NS] = {0.40, 0.46, 0.56, 0.68, 0.78, 0.81, 0.79, 0.81, 0.93, 1.05, 1.10, 1.10, 1.06, 0.99, 0.93, 0.89, 0.86, 0.85, 0.83, 0.71};
+const double WRAIL[NS] = {0.30, 0.42, 0.55, 0.62, 0.66, 0.67, 0.67, 0.65, 0.60, 0.55, 0.52, 0.52, 0.55, 0.62, 0.72, 0.80, 0.82, 0.80, 0.72, 0.55};
+const double ZLOW[NS] = {0.20, 0.19, 0.20, 0.27, 0.42, 0.56, 0.42, 0.22, 0.19, 0.19, 0.19, 0.19, 0.22, 0.34, 0.50, 0.56, 0.48, 0.32, 0.27, 0.27};
+const double ZFLOOR[NS] = {0.20, 0.19, 0.18, 0.18, 0.18, 0.18, 0.18, 0.17, 0.17, 0.17, 0.17, 0.17, 0.18, 0.18, 0.19, 0.19, 0.20, 0.21, 0.23, 0.25};
 const double WFLOOR[NS] = {0.45, 0.55, 0.55, 0.42, 0.42, 0.42, 0.42, 0.62, 0.78, 0.78, 0.78, 0.78, 0.62, 0.45, 0.45, 0.45, 0.45, 0.50, 0.60, 0.55};
 
 V3 design(int s, int r) {
@@ -95,8 +95,12 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
   P.downshiftHigh = 4300.0;
   P.tyreMu = 1.34;
   P.rimRadius = 0.255;
+  P.dentFz = 30000.0;   // a stiff, flat tyre reaches higher loads for the same blow
+  P.burstFz = 52000.0;
   P.conventional = true;
   P.turbo = true;
+  P.diffPreload = 350.0;
+  P.diffRamp = 0.45;
   P.frontShare = 0.44;
   P.lockAngle = 0.52;
   P.wheelbase = kRearAxle - kFrontAxle;
@@ -265,8 +269,8 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
       oriented(e[f[0]], e[f[2]], e[f[3]], fc - c, TF_HARD | TF_NOVIS);
     }
   };
-  block(2.92, 3.48, -0.30, 0.30, 0.20, 0.66, 190.0, veh.engineNodes, mBlock, &veh.engineBlockBeams);
-  block(3.50, 3.98, -0.20, 0.20, 0.20, 0.50, 70.0, veh.gearboxNodes, mBlock, &veh.gearboxBeams);
+  block(2.92, 3.48, -0.30, 0.30, 0.24, 0.68, 190.0, veh.engineNodes, mBlock, &veh.engineBlockBeams);
+  block(3.50, 3.98, -0.20, 0.20, 0.24, 0.52, 70.0, veh.gearboxNodes, mBlock, &veh.gearboxBeams);
   for (int i = 0; i < 8; i += 2)
     for (int j = 0; j < 4; j++) beam(veh.engineNodes[size_t(i) + 1], veh.gearboxNodes[size_t(j) * 2], mAnchor);
   for (u32 n : veh.engineNodes) anchor(n, 3, mMount, &veh.engineMountBeams);
@@ -280,9 +284,9 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
 
   // Radiators in the nose, the tank between cabin and engine, as on the real car.
   std::vector<u32> radNodes, tankNodes;
-  block(0.42, 0.52, -0.50, 0.50, 0.24, 0.48, 16.0, radNodes, mRadCore, &veh.radiatorBeams);
+  block(0.42, 0.52, -0.50, 0.50, 0.26, 0.48, 16.0, radNodes, mRadCore, &veh.radiatorBeams);
   for (u32 n : radNodes) anchor(n, 3, mRadMount);
-  block(2.66, 2.88, -0.55, 0.55, 0.20, 0.62, 62.0, tankNodes, mTank, &veh.tankBeams);
+  block(2.66, 2.88, -0.55, 0.55, 0.24, 0.62, 62.0, tankNodes, mTank, &veh.tankBeams);
   for (u32 n : tankNodes) anchor(n, 3, mAnchor);
 
   // ---- Running gear: double wishbones at all four corners.
@@ -366,10 +370,10 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
     st.top = tower;
     st.low = kl;
     st.A = 5e-4;
-    st.V0 = front ? 27e-6 : 35e-6;
+    st.V0 = front ? 45e-6 : 55e-6;
     st.p0 = 25e5;
-    st.bump[0] = st.bump[1] = front ? 3300 : 3800;
-    st.reb[0] = st.reb[1] = front ? 5000 : 5800;
+    st.bump[0] = st.bump[1] = front ? 2400 : 2900;
+    st.reb[0] = st.reb[1] = front ? 3700 : 4400;
     const double L = len(sim.pos[st.low] - sim.pos[st.top]);
     st.L = st.Lnom = L;
     st.Lmin = L - 0.075;
@@ -397,8 +401,8 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
   }
   for (int i = 0; i < 2; i++) veh.shaftLen[i] = len(sim.pos[veh.wheels[size_t(i) + 2].axIn] - sim.pos[veh.shaftNode[i]]);
   veh.steerTravel = 0.058;
-  veh.axle[0].kBar = 34e3;
-  veh.axle[1].kBar = 22e3;
+  veh.axle[0].kBar = 16e3;
+  veh.axle[1].kBar = 11e3;
 
   veh.refFrontL = u32(body[8][2][0]);
   veh.refFrontR = u32(body[8][2][1]);
@@ -410,17 +414,23 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
   {
     u32 wn[6];
     int k = 0;
-    for (double x : {4.10, 4.46})
-      for (double y : {-0.86, 0.0, 0.86}) wn[k++] = sim.addNode(world({x, y, 1.13 + (x > 4.3 ? 0.03 : 0.0)}, 0), 1.8, NF_COLLIDE, 0.4f);
-    for (u32 a : wn)
+    for (double x : {4.12, 4.46})
+      for (double y : {-0.90, 0.0, 0.90}) wn[k++] = sim.addNode(world({x, y, 1.06 + (x > 4.3 ? 0.03 : 0.0)}, 0), 1.6, NF_COLLIDE, 0.4f);
+    // The feet of the two pylons, down on the deck. They belong to the wing, and they also give it depth:
+    // the visible wing follows these nodes, and points all in one plane say nothing about up and down.
+    u32 foot[2];
+    for (int side = 0; side < 2; side++) foot[side] = sim.addNode(world({4.24, 0.42, 0.87}, side), 1.4, 0, 0.4f);
+    for (u32 a : wn) {
       for (u32 b : wn) beam(a, b, mSkin);
+      for (u32 f : foot) beam(a, f, mSkin);
+    }
+    beam(foot[0], foot[1], mSkin);
     for (u32 n : wn) wing.push_back(n);
+    wing.push_back(foot[0]);
+    wing.push_back(foot[1]);
     for (int side = 0; side < 2; side++)
-      for (int s : {16, 17}) {
-        beam(wn[side == 0 ? 2 : 0], u32(body[s][5][side]), mPylon);
-        beam(wn[side == 0 ? 5 : 3], u32(body[s][5][side]), mPylon);
-        beam(wn[1], u32(body[s][5][side]), mPylon);
-      }
+      for (int s : {15, 16, 17})
+        for (int r : {5, 6}) beam(foot[side], u32(body[s][r][side]), mPylon);
   }
 
   // ---- Outer collision surface.

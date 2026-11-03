@@ -134,38 +134,51 @@ void Vehicle::updateStability(const Controls& in, double dt) {
     // The tail is coming round when the car turns further than asked, or slides well past the line.
     const bool oversteer = std::fabs(yawRate_) > std::fabs(wanted) || std::fabs(slip) > 0.10;
     // Body slip counts too: it is the one thing a yaw rate alone does not show in a slow spin.
-    const double slipErr = std::fabs(slip) > 0.06 ? (slip - std::copysign(0.06, slip)) * -2.5 : 0.0;
-    const double e = err + slipErr;
-    constexpr double kDead = 0.06;
-    if (std::fabs(e) > kDead) {
-      const double torque = clampd((std::fabs(e) - kDead) * 3200.0, 0.0, 2100.0);
+    const double slipErr = std::fabs(slip) > 0.07 ? (slip - std::copysign(0.07, slip)) * -2.5 : 0.0;
+    // Bumps and ordinary steering make the measured values twitch. Only what lasts is a real slide.
+    espErrLP_ += (err + slipErr - espErrLP_) * clampd(dt / 0.04, 0, 1);
+    const double e = espErrLP_;
+    // A bend that is merely a little wide needs no help at all: it takes real understeer to step in.
+    const double dead = oversteer ? 0.10 : 0.28;
+    if (std::fabs(e) > dead) {
+      const double torque = clampd((std::fabs(e) - dead) * 3200.0, 0.0, 2100.0);
       // Too much yaw to the left wants a moment to the right: brake a wheel on the right.
       const bool brakeLeft = e < 0;
       for (Wheel& w : wheels)
         if (w.left == brakeLeft && w.front == oversteer) w.espTorque = oversteer ? torque : torque * 0.55;
-      wantEsp = clampd(1.0 - (std::fabs(e) - kDead) * 1.6, 0.25, 1.0);
-      if (torque > 150.0) espHold_ = 0.3;
+      // Gas is only taken away from a car that is really coming round.
+      if (oversteer) wantEsp = clampd(1.0 - (std::fabs(e) - dead) * 1.4, 0.35, 1.0);
+      if (torque > 200.0) espHold_ = 0.3;
     }
   }
   if (tune.tcs) {
-    // Traction control: a driven wheel running away is braked, and the engine is pulled back.
-    double spin = 0;
+    // Traction control: what counts is the driven axle as a whole. One wheel running away on its own is
+    // braked, which the differential turns into drive at the other one. Only when both spin is the
+    // engine pulled back, and a moment's spin over a bump is let go.
+    double mean = 0, worst = 0;
+    int driven = 0;
+    const double allowed = std::max(1.5, 0.16 * v);
     for (Wheel& w : wheels) {
       if (!w.driven) continue;
       const double overrun = w.omega * w.R - v;
-      const double allowed = std::max(1.0, 0.14 * v);
-      if (overrun > allowed) {
-        spin = std::max(spin, overrun - allowed);
-        w.espTorque += clampd((overrun - allowed) * 260.0, 0.0, 1100.0);
-      }
+      mean += overrun;
+      driven++;
+      worst = std::max(worst, overrun);
     }
-    if (spin > 0) {
-      wantTcs = clampd(1.0 - spin * 0.22, 0.15, 1.0);
-      tcsHold_ = 0.3;
+    mean /= std::max(driven, 1);
+    for (Wheel& w : wheels) {
+      if (!w.driven) continue;
+      const double extra = (w.omega * w.R - v) - mean;
+      if (extra > 1.0 && worst > allowed) w.espTorque += clampd((extra - 1.0) * 220.0, 0.0, 900.0);
+    }
+    spinLP_ += (std::max(mean - allowed, 0.0) - spinLP_) * clampd(dt / 0.035, 0, 1);
+    if (spinLP_ > 0.15) {
+      wantTcs = clampd(1.0 - spinLP_ * 0.28, 0.25, 1.0);
+      tcsHold_ = 0.25;
     }
   }
   espThrottle_ += (wantEsp - espThrottle_) * clampd(dt * (wantEsp < espThrottle_ ? 30.0 : 4.0), 0, 1);
-  tcsThrottle_ += (wantTcs - tcsThrottle_) * clampd(dt * (wantTcs < tcsThrottle_ ? 40.0 : 3.0), 0, 1);
+  tcsThrottle_ += (wantTcs - tcsThrottle_) * clampd(dt * (wantTcs < tcsThrottle_ ? 25.0 : 7.0), 0, 1);
   (void)in;
 }
 
@@ -369,7 +382,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
     w.patchPoint = patch;
     w.patchNormal = n;
     // A heavy blow through the tyre leaves its mark on the rim, right where it struck.
-    if (Fz > 17000.0 && (sim.stepCount & 3) == 0) addRimDamage(w, patch, (Fz - 17000.0) * 8e-9, 0.0);
+    if (Fz > spec.dentFz && (sim.stepCount & 3) == 0) addRimDamage(w, patch, (Fz - spec.dentFz) * 8e-9, 0.0);
   } else {
     w.skid = 0;
     w.ux *= 0.995;
@@ -433,7 +446,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
   // A deep dent lifts the bead off the rim and the tyre loses its air.
   double deepest = 0;
   for (float d : w.dent) deepest = std::max(deepest, double(d));
-  if (w.deflate == 0 && (w.Fz > 32000.0 || deepest > 0.016)) {
+  if (w.deflate == 0 && (w.Fz > spec.burstFz || deepest > 0.016)) {
     w.deflate = 0.001;
     note("REIFEN GEPLATZT");
   }
@@ -541,7 +554,10 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
         live++;
       }
       // Fluid displaced by the rod. Extension draws fluid out of the sphere.
-      s.Vf -= s.A * s.vel * dt;
+      // A sealed damper has a fixed charge, so its gas volume follows from its length alone. Summing up
+      // small changes would drift, and on such a small gas volume that twists the whole car on its springs.
+      if (spec.conventional) s.Vf = s.VfRest + s.A * (s.Lnom - s.L);
+      else s.Vf -= s.A * s.vel * dt;
       if (s.burst) s.Vf -= kFluidLeakSinkRate * dt;
 
       double Vgas = s.V0 - s.Vf;
@@ -591,7 +607,8 @@ void Vehicle::updateHydraulics(Sim& sim, double dt) {
       avgL /= live;
       const double err = (A.s[0].Lnom + heightOffset) - avgL;
       A.levelErrLP += (err - A.levelErrLP) * clampd(dt * 2.0, 0, 1);
-      if (std::fabs(A.levelErrLP) > 0.003) {
+      // A car on steel-and-gas dampers has no height correction to chase the road with.
+      if (std::fabs(A.levelErrLP) > 0.003 && !spec.conventional) {
         const bool canAdd = accumulator > A.s[0].pGas + 10e5;
         // Proportional, so that it converges instead of hunting around the target height.
         constexpr double kLevelGain = 0.45;     // 1/s
@@ -627,6 +644,7 @@ void Vehicle::settleFluid(Sim& sim) {
       const double p = corner / s.A;
       const double Vg = s.V0 * std::pow(s.p0 / p, 1.0 / 1.35);
       s.Vf = s.V0 - Vg;
+      s.VfRest = s.Vf;
       s.pGas = p;
     }
     const double p = corner / axle[ax].s[0].A;
@@ -700,11 +718,14 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   if (in.requestGear != 99) request(in.requestGear);
   if (in.shiftUp) request(std::min(5, shiftTarget + 1));
   if (in.shiftDown) request(std::max(-1, shiftTarget - 1));
+  // The box goes by the driver's foot, smoothed a little. It must not follow what the traction control does
+  // to the throttle, or each cut would call for a shift, and each shift for another cut.
+  shiftPedal_ += (in.throttle - shiftPedal_) * clampd(dt / 0.15, 0, 1);
   if (autoBox && shiftPhase == 0 && sinceShift > 0.9 && gear >= 1) {
     const double r = std::fabs(inputOmega) / kRpmToRad;
-    if (r > lerpd(spec.upshiftLow, spec.upshiftHigh, throttleAct) && gear < spec.nGears)
+    if (r > lerpd(spec.upshiftLow, spec.upshiftHigh, shiftPedal_) && gear < spec.nGears)
       request(gear + 1);
-    else if (r < lerpd(spec.downshiftLow, spec.downshiftHigh, throttleAct) && gear > 1)
+    else if (r < lerpd(spec.downshiftLow, spec.downshiftHigh, shiftPedal_) && gear > 1)
       request(gear - 1);
   }
   double syncTorque = 0;
@@ -805,9 +826,12 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
     else
       e = throttleAct > 0.03 ? smoothstepd(1000.0, 2100.0, rpmNow) : 0.0;
     // Launch control: the clutch keeps slipping until the turbos have something to work with.
-    // How high it holds follows the driver's foot: pulling away gently must not wait for 4000 rpm that a
-    // part-open throttle never reaches.
-    if (spec.turbo && gear == 1 && rIn < 3600.0) {
+    // It only applies pulling away from rest. Once the clutch has locked, it stays out of it until the car
+    // stops again: lifting or the traction control must never reopen the clutch at speed.
+    if (std::fabs(speed) < 1.5 && in.throttle < 0.05) launching_ = true;
+    if (rIn > 3400.0 || (launching_ && rpmNow - rIn < 250.0 && rIn > 1150.0) || std::fabs(speed) > 20.0) launching_ = false;
+    if (spec.turbo && launching_ && gear == 1) {
+      // How high it holds follows the driver's foot.
       const double gate = lerpd(1500.0, 4300.0, in.throttle * in.throttle);
       e = std::min(e, smoothstepd(gate - 1100.0, gate, rpmNow));
     }
@@ -859,6 +883,13 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   }
 
   spiderOmega += ((TR - TL) / kSpiderInertia) * dt;
+  if (spec.diffPreload > 0) {
+    // Limited slip: clutch packs hold the two sides together, harder the more torque goes through.
+    // A wheel going light on a bump cannot take all the power and just spin up.
+    const double cap = spec.diffPreload + spec.diffRamp * std::fabs(TL + TR);
+    const double stop = spiderOmega * kSpiderInertia / dt;
+    spiderOmega -= clampd(stop, -cap, cap) * dt / kSpiderInertia;
+  }
   spiderOmega *= 1.0 - clampd(dt * 0.6, 0, 1);
 
   // Gear mesh: in gear, input shaft and final drive turn as one. Oil churning and bearing friction
