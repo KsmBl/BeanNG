@@ -74,6 +74,10 @@ struct Snapshot {
     double fuelShare = 1;
     int shells = 0, missiles = 0, codes = 0;
     bool tapped = false, hasFix = false;
+    bool droneLive = false;
+    V3 droneP;
+    double droneBattery = 0;
+    int drones = 0;
     bool noSight = false, noRange = false, noPeriscope = false, noRadio = false;
     V3 fix;
     double fixAge = 0, fixWait = 0;

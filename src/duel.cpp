@@ -76,6 +76,14 @@ void Duel::build() {
       sim.addNode(V3{0, 0, -389.99}, 1.0, NF_FIXED);
       sim.endObj();
     }
+  for (int i = 0; i < 2; i++) {
+    sim.beginObj(OBJ_PROP, false);
+    droneFirst[i] = u32(sim.pos.size());
+    for (int k = 0; k < kDroneNodes; k++) sim.addNode(V3{}, 1.0, NF_FIXED);
+    poseDrone(sim, droneFirst[i], false, V3{}, 0);
+    for (int k = 0; k < kDroneNodes; k++) sim.rest[droneFirst[i] + u32(k)] = sim.pos[droneFirst[i] + u32(k)];
+    sim.endObj();
+  }
   for (int i = 0; i < kRpgRockets + kStrikeRockets; i++) {
     sim.beginObj(OBJ_PROP, false);
     rocketFirst[i] = u32(sim.pos.size());
@@ -520,6 +528,64 @@ void Duel::poseRagdoll(Sim& sim, u32 first, const Ragdoll& r, bool ghillie) {
   }
 }
 
+void Duel::poseDrone(Sim& sim, u32 first, bool live, V3 at, double yaw) {
+  if (!live) at = V3{0, 0, -385.0};
+  const double c = std::cos(yaw), s = std::sin(yaw);
+  constexpr double kArm = 0.42;
+  // The body, and four rotors out on their arms.
+  const V3 nodes[kDroneNodes] = {
+      at + V3{0, 0, -0.06}, at + V3{0, 0, 0.06},
+      at + V3{(c - s) * kArm, (s + c) * kArm, 0}, at + V3{(-c + s) * kArm, (-s - c) * kArm, 0},
+      at + V3{(c + s) * kArm, (s - c) * kArm, 0}, at + V3{(-c - s) * kArm, (-s + c) * kArm, 0},
+  };
+  for (int k = 0; k < kDroneNodes; k++) sim.pos[first + u32(k)] = nodes[k];
+}
+
+void Duel::stepDrone(int p, const Intent& in, double dt) {
+  Player& pl = players[p];
+  if (in.drone) {
+    if (pl.droneLive) {
+      pl.droneLive = false;  // back to the hand, without being any use again
+    } else if (pl.drones > 0 && pl.vehicle < 0 && phase == PLAYING) {
+      pl.drones--;
+      pl.droneLive = true;
+      pl.droneBattery = kDroneBattery;
+      pl.droneP = pl.soldier.p + V3{0, 0, 2.2};
+      pl.droneV = V3{0, 0, 3.0};
+    }
+  }
+  if (!pl.droneLive) return;
+  pl.droneBattery -= dt;
+  // Flown like a camera: it goes where one looks, and sideways as told.
+  const double cy = std::cos(in.walk.yaw), sy = std::sin(in.walk.yaw), cp = std::cos(in.pitch), sp = std::sin(in.pitch);
+  const V3 ahead{-cy * cp, -sy * cp, -sp}, side{sy, -cy, 0};
+  const V3 want = (ahead * in.walk.forward + side * in.walk.strafe) * (in.walk.sprint ? kDroneSpeed : kDroneSpeed * 0.55);
+  pl.droneV += (want - pl.droneV) * clampd(dt * 3.0, 0, 1);
+  pl.droneP += pl.droneV * dt;
+  const double ground = world.height(pl.droneP.x, pl.droneP.y);
+  // It keeps above the ground by itself, and stays under the sky it can reach.
+  pl.droneP.z = clampd(pl.droneP.z, ground + 1.5, ground + 170.0);
+  Contact c;
+  if (pl.droneBattery <= 0 || world.contact(pl.droneP, c)) {
+    pl.droneLive = false;
+    sim.event(EV_SPARK, pl.droneP, V3{0, 0, 1}, 1.f);
+    return;
+  }
+  // Firing marks the other player, if the crosshair is near enough to them.
+  if (in.fireFoot) {
+    const Player& other = players[1 - p];
+    const V3 where = other.vehicle >= 0 ? frames[other.vehicle].cog : other.soldier.p + V3{0, 0, 1.0};
+    const V3 to = where - pl.droneP;
+    const double d = len(to);
+    if (d < kDroneMarkRange && dot(norm(to), ahead) > 0.97) {
+      pl.fix = where;
+      pl.hasFix = true;
+      pl.fixAge = 0;
+      noteHit(-1, p, where);
+    }
+  }
+}
+
 void Duel::poseNet(Sim& sim, u32 first, const Tank& t, bool on) {
   const V3 rest0 = (sim.rest[t.refFL] + sim.rest[t.refFR] + sim.rest[t.refRL] + sim.rest[t.refRR]) * 0.25;
   const V3 now = (sim.pos[t.refFL] + sim.pos[t.refFR] + sim.pos[t.refRL] + sim.pos[t.refRR]) * 0.25;
@@ -698,7 +764,7 @@ void Duel::rollLoot() {
   static const Roll kTable[] = {
       {"kleinmunition", 26, 60}, {"granaten", 13, 4}, {"lenkraketen", 7, 2}, {"raketen", 8, 2}, {"raketenwerfer", 7, 1},
       {"scharfschuetzengewehr", 6, 1}, {"scharfschuetzenmunition", 8, 5}, {"reparaturset", 8, 1}, {"tretmine", 6, 2},
-      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"leben", 6, 50}, {"nebelgranate", 7, 2}, {"ghillie", 4, 1}, {"tarnnetz", 4, 1},
+      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"leben", 6, 50}, {"nebelgranate", 7, 2}, {"ghillie", 4, 1}, {"tarnnetz", 4, 1}, {"drohne", 5, 1},
   };
   int total = 0;
   for (const Roll& r : kTable) total += r.weight;
@@ -741,14 +807,14 @@ int Duel::nearCrate(V3 p) const {
 }
 
 const char* Duel::crateLabel(const Crate& c, char* buf, size_t n) {
-  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Verbandskasten", "Nebelgranaten", "Ghillie-Anzug", "Tarnnetz"};
+  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Verbandskasten", "Nebelgranaten", "Ghillie-Anzug", "Tarnnetz", "Drohne"};
   snprintf(buf, n, c.count > 1 ? "%s  x%d" : "%s", kLabels[c.what], c.count);
   return buf;
 }
 
 const char* const Duel::kGiveNames[kGiveKinds] = {
     "tretmine", "panzermine", "reparaturset", "sturmgewehr", "kleinmunition", "scharfschuetzengewehr", "scharfschuetzenmunition",
-    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "leben", "nebelgranate", "ghillie", "tarnnetz",
+    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "leben", "nebelgranate", "ghillie", "tarnnetz", "drohne",
 };
 
 bool Duel::give(int player, const char* name, int count) {
@@ -756,7 +822,8 @@ bool Duel::give(int player, const char* name, int count) {
   Player& p = players[player];
   const std::string n = name;
   const auto addItem = [&](ItemKind k) { p.items[k] = u8(std::min(int(p.items[k]) + count, 99)); };
-  if (n == "nebelgranate") addItem(IT_SMOKE);
+  if (n == "drohne") p.drones += count;
+  else if (n == "nebelgranate") addItem(IT_SMOKE);
   else if (n == "ghillie") addItem(IT_GHILLIE);
   else if (n == "tarnnetz") addItem(IT_NET);
   else if (n == "tretmine") addItem(IT_FOOT_MINE);
@@ -950,6 +1017,16 @@ void Duel::stepBullets(double dt) {
     const V3 seg = b.p - from;
     const double L = len(seg);
     const int samples = std::max(1, int(L));
+    // A drone is small, and does not take much.
+    if (!stop && b.kind != kKindStrike)
+      for (Player& pl : players)
+        if (pl.droneLive && len2(pl.droneP - (from + seg * clampd(dot(pl.droneP - from, seg) / std::max(len2(seg), 1e-9), 0, 1))) < 0.7 * 0.7) {
+          pl.droneLive = false;
+          sim.event(EV_SPARK, pl.droneP, V3{0, 0, 1}, 1.f);
+          noteHit(-1, b.owner, from);
+          stop = true;
+          at = pl.droneP;
+        }
     // Those it may hit: the other player, where the shooter saw them.
     if (!stop) {
       const int q = 1 - b.owner;
@@ -1296,7 +1373,8 @@ void Duel::stepPlayers(const Intent in[2]) {
       Tank& t = tanks[pl.vehicle];
       if (!t.netOn && t.netClock <= 0 && std::fabs(t.speed) < 1.0) t.netClock = 3.0;
     }
-    if (pl.vehicle < 0 && phase == PLAYING) {
+    stepDrone(i, in[i], kDt);
+    if (pl.vehicle < 0 && phase == PLAYING && !pl.droneLive) {
       fireWeapon(i, in[i]);
       if (in[i].placeFoot) placeMine(i, 0);
       if (in[i].placeTank) placeMine(i, 1);
@@ -1394,6 +1472,7 @@ void Duel::stepPlayers(const Intent in[2]) {
       // Whoever lies down, or is getting up, is not going anywhere; only turning the rifle a little.
       WalkInput wi = in[i].walk;
       if (in[i].aiming) wi.sprint = false, wi.forward *= 0.55, wi.strafe *= 0.55;
+      if (pl.droneLive) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
       // Before and after the match itself one waits where one stands.
       if (phase != PLAYING) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
       if (s.prone > 0) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
@@ -1454,6 +1533,8 @@ void Duel::placePlayers() {
     p.repairClock = 0;
     p.repairing = -1;
     p.lastBlow = V3{};
+    p.droneLive = false;
+    p.drones = 0;
     p.hurtFrom = V3{};
     p.tapped = false;
     p.tapClock = p.fixWait = p.fixAge = 0;

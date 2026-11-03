@@ -747,6 +747,11 @@ struct Game {
     int weaponShown[2] = {WP_PISTOL, WP_PISTOL};
     V3 blowShown[2];
     bool ghillieShown[2] = {};
+    struct DroneSeen {
+      bool live = false;
+      V3 p, v, shown;
+      double battery = 0, heardAt = 0;
+    } droneShown[2];
     Ragdoll bodies[2];
     double repairNow = 0;
     // A part just lost is said out loud for a few seconds.
@@ -839,7 +844,7 @@ struct Game {
         in = input;
         input.chatOut.clear();
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = input.c.smoke = input.c.net = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = input.c.smoke = input.c.net = input.c.drone = false;
       }
       if (!in.chatOut.empty() && state == NET_IN) {
         saying = in.chatOut;
@@ -865,6 +870,7 @@ struct Game {
       if (in.c.query) out.queryCount++;
       if (in.c.smoke) out.smokeCount++;
       if (in.c.net) out.netCount++;
+      if (in.c.drone) out.droneCount++;
       if (in.c.strike) {
         out.strikeCount++;
         out.strikeX = float(in.c.strikeAt.x);
@@ -989,6 +995,17 @@ struct Game {
             u8 wearing = 0;
             r.get(wearing);
             ghillieShown[i] = wearing != 0;
+            u8 flying = 0;
+            r.get(flying);
+            droneShown[i].live = flying != 0;
+            if (flying) {
+              droneShown[i].p = r.getV3();
+              droneShown[i].v = r.getV3();
+              float battery = 0;
+              r.get(battery);
+              droneShown[i].battery = battery;
+              droneShown[i].heardAt = now;
+            }
             sd.yaw = yaw;
             sd.pitch = pitch;
             sd.hp = hp;
@@ -1026,6 +1043,9 @@ struct Game {
             duel.players[mySlot].tankShells = shells;
             duel.players[mySlot].tankMissiles = missiles;
             duel.players[mySlot].strikeCodes = codes;
+            u8 dronesHeld = 0;
+            r.get(dronesHeld);
+            duel.players[mySlot].drones = dronesHeld;
             u8 tap = 0;
             float tapClock = 0, fixWait = 0, fixAge = 0;
             r.get(tap);
@@ -1277,7 +1297,7 @@ struct Game {
       // On foot one's own legs answer at once.
       duel.players[mySlot].vehicle = vehicleNow;
       const bool playingNow = state == NET_IN && (phaseNow == Duel::PLAYING || phaseNow == Duel::CHOOSING || phaseNow == Duel::FINISHED);
-      const bool canWalk = state == NET_IN && phaseNow == Duel::PLAYING;
+      const bool canWalk = state == NET_IN && phaseNow == Duel::PLAYING && !droneShown[mySlot].live;
       if (vehicleNow >= 0) {
         me = shownSoldier[mySlot];
         past.clear();
@@ -1318,6 +1338,24 @@ struct Game {
         me = duel.players[mySlot].soldier;
       }
       for (int t = 0; t < Duel::kTanks; t++) Duel::poseNet(sim, duel.netFirst[t], duel.tanks[t], duel.tanks[t].netOn);
+      // Drones, a little smoothed: thirty positions a second would show.
+      for (int i = 0; i < 2; i++) {
+        DroneSeen& ds = droneShown[i];
+        if (ds.live) {
+          const V3 target = ds.p + ds.v * std::clamp(now - ds.heardAt, 0.0, 0.1);
+          if (len(target - ds.shown) > 30.0) ds.shown = target;
+          ds.shown += (target - ds.shown) * clampd(dt * 18.0, 0, 1);
+        }
+        // One's own would only be in the way of its camera.
+        Duel::poseDrone(sim, duel.droneFirst[i], ds.live && i != mySlot, ds.shown, 0.0);
+      }
+      {
+        std::lock_guard<std::mutex> lock(snapMutex);
+        snap.foot.droneLive = droneShown[mySlot].live;
+        snap.foot.droneP = droneShown[mySlot].shown;
+        snap.foot.droneBattery = droneShown[mySlot].battery;
+        snap.foot.drones = duel.players[mySlot].drones;
+      }
       // A guided missile is a real thing to look at, for whoever is flying it and whoever it comes for.
       for (int side = 0; side < 2; side++) {
         const Tank& launcher = duel.tanks[Duel::tankIndex(side, TK_MISSILE)];
@@ -1448,6 +1486,7 @@ struct Game {
           snprintf(msg, sizeof msg, "%s  ·  %s %u : %u %s", winner < 0 ? "Unentschieden" : (winner == mySlot ? "Sieg!" : "Niederlage"), names[mySlot].c_str(), wins[mySlot], wins[1 - mySlot], names[1 - mySlot].c_str());
         }
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
+        else if (droneShown[mySlot].live) snprintf(msg, sizeof msg, "Drohne  ·  Akku %.0f s  ·  Feuer markiert den Gegner  ·  U holt sie zurück", droneShown[mySlot].battery);
         else if (mine && mine->netClock > 0) snprintf(msg, sizeof msg, "Tarnnetz wird aufgezogen  ·  %.0f s", mine->netClock);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
         else if (vehicleNow >= 0) snprintf(msg, sizeof msg, "E: aussteigen");
@@ -1624,6 +1663,13 @@ static void runGame() {
       const float seed = std::sin(float(d) * 12.9f + float(i)) * 0.5f + 0.5f;
       G.rig.links.push_back({G.duel.bloodFirst[i][d], G.duel.bloodFirst[i][d] + 1, (d < 3 ? 0.2f : 0.07f) + 0.1f * seed, MM_PAINT, 0});
     }
+  // Drones: a little body, and a cross of arms with a rotor at each end.
+  for (int i = 0; i < 2; i++) {
+    const u32 f = G.duel.droneFirst[i];
+    G.rig.links.push_back({f, f + 1, 0.11f, MM_DARK, 0});
+    G.rig.links.push_back({f + 2, f + 3, 0.018f, MM_BLACK, 0});
+    G.rig.links.push_back({f + 4, f + 5, 0.018f, MM_BLACK, 0});
+  }
   // Rockets of every kind: body, nose and fins.
   const auto rocketRods = [&](u32 f, float body, u8 bodyMat, u8 noseMat) {
     G.rig.links.push_back({f, f + 1, body, bodyMat, 2});
@@ -1867,6 +1913,7 @@ static void runGame() {
       key("Waffe wählen", "1 2 3 4 5");
       key("Nebel: Granate zu Fuß, Werfer im Panzer", "H");
       key("Tarnnetz über den stehenden Panzer", "V");
+      key("Drohne: starten, zurückholen; Feuer markiert", "U");
       key("Anvisieren, in jedem Panzer und mit jedem Gewehr", "Rechte Maustaste halten");
       key("Tretmine, Panzermine legen", "M, N");
       key("Bombencode auf den Punkt der Karte", "K, Klick, B");
@@ -2093,6 +2140,7 @@ static void runGame() {
             case SDLK_J: edges.query = true; break;
             case SDLK_H: edges.smoke = true; break;
             case SDLK_V: edges.net = true; break;
+            case SDLK_U: edges.drone = true; break;
             case SDLK_M: edges.placeFoot = true; break;
             case SDLK_N: edges.placeTank = true; break;
             case SDLK_F12: wantShot = true; break;
@@ -2275,6 +2323,23 @@ static void runGame() {
         gas = 1.0;
       }
     }
+    if (scriptMode == 58 && netState == Game::NET_IN) {
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      if (inMatch) {
+        rig.yaw = G.world.base(slot).facing + PI + 0.15;
+        rig.pitch = 0.18;
+        static double last = -100;
+        if (tNow - last > 2.0 && !view.foot.droneLive) {
+          sendC.drone = true;
+          last = tNow;
+        }
+        if (view.foot.droneLive) {
+          gas = 1.0;
+          sprintScript = true;
+        }
+      }
+    }
     if (scriptMode == 56 && netState == Game::NET_IN) {
       if (phase == Duel::CHOOSING && !pickReady) {
         pickItems[IT_GHILLIE] = 1;
@@ -2382,6 +2447,7 @@ static void runGame() {
       c.query |= sendC.query;
       c.smoke |= sendC.smoke;
       c.net |= sendC.net;
+      c.drone |= sendC.drone;
       if (sendC.strike) {
         c.strike = true;
         c.strikeAt = sendC.strikeAt;
@@ -2655,7 +2721,15 @@ static void runGame() {
       cam.target = view.missileP - back * 30.0;
       cam.up = {0, 0, 1};
     }
-    if (onFoot && !mapOpen) {
+    if (view.foot.droneLive && !mapOpen) {
+      // Through the drone's camera, looking where it is told to.
+      const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+      cam.eye = view.foot.droneP - V3{0, 0, 0.1};
+      cam.target = cam.eye - back * 50.0;
+      cam.up = {0, 0, 1};
+      cam.inside = false;
+      cam.fovY = 74.0 * PI / 180.0;
+    } else if (onFoot && !mapOpen) {
       // Over the right shoulder, and close. Forward is along -back; right of that, seen from behind.
       const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
       const V3 right{-std::sin(rig.yaw), std::cos(rig.yaw), 0};

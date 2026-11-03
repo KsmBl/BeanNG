@@ -89,6 +89,11 @@ class Duel {
     Soldier soldier;
     int vehicle = -1;  // what they sit in, -1 on foot
     double walkDebt = 0;
+    // A drone from a crate. While it flies, its owner stands there holding the controls.
+    int drones = 0;
+    bool droneLive = false;
+    V3 droneP, droneV;
+    double droneBattery = 0;
     V3 lastBlow;  // the last thing to hit them, for how they fall
     // For the screen: how many hits this player has landed, how many they have taken, and from where the last came.
     u16 hitsLanded = 0, hitsTaken = 0;
@@ -126,6 +131,7 @@ class Duel {
     bool query = false;     // asks a tapped computer where the enemy is
     bool smoke = false;     // a grenade on foot, the launcher in a tank
     bool net = false;       // throws the camouflage net over the tank one sits in
+    bool drone = false;     // sends a drone up, or calls it off
     V3 strikeAt;
     bool setup = false;     // lies down behind the big rifle, or gets up again
     int weapon = WP_PISTOL;
@@ -224,7 +230,12 @@ class Duel {
   u32 mineFirst[2][kMinesEach] = {};
   bool giveAll = false;  // for trying things out: every weapon from the start
   // What can be handed out by name: from the server's shell, and what loot is made of.
-  static constexpr int kGiveKinds = 16;
+  static constexpr int kGiveKinds = 17;
+  static constexpr double kDroneBattery = 50.0, kDroneSpeed = 24.0, kDroneMarkRange = 300.0;
+  static constexpr int kDroneNodes = 6;
+  u32 droneFirst[2] = {};
+  static void poseDrone(Sim& sim, u32 first, bool live, V3 at, double yaw);
+  void stepDrone(int p, const Intent& in, double dt);
   static const char* const kGiveNames[kGiveKinds];
   bool give(int player, const char* name, int count);
   static V3 eyeOf(const Soldier& s);

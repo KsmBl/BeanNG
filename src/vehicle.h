@@ -33,6 +33,7 @@ struct Controls {
   bool query = false;     // edge-triggered: asks the tapped computer where the enemy is
   bool smoke = false;     // edge-triggered: a smoke grenade or the tank's launcher
   bool net = false;       // edge-triggered: the camouflage net
+  bool drone = false;     // edge-triggered: a drone up, or back
   V3 strikeAt;
 };
 
