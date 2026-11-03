@@ -681,6 +681,7 @@ struct Game {
       u32 tick = 0;
       V3 cog, fwd, left, up;
       float speed = 0, rpm = 0, throttle = 0, brake = 0, steer = 0, fuel = 0, coolant = 0, lat = 0, lon = 0;
+      float theta[4] = {};
       int gear = 1;
       bool exploded = false;
       std::vector<i16> offsets;
@@ -1080,7 +1081,7 @@ struct Game {
           head.up = r.getV3();
           i8 gear = 0;
           u8 exploded = 0;
-          for (float* v : {&head.speed, &head.rpm, &head.throttle, &head.brake, &head.steer, &head.fuel, &head.coolant, &head.lat, &head.lon}) r.get(*v);
+          for (float* v : {&head.speed, &head.rpm, &head.throttle, &head.brake, &head.steer, &head.fuel, &head.coolant, &head.lat, &head.lon, &head.theta[0], &head.theta[1], &head.theta[2], &head.theta[3]}) r.get(*v);
           r.get(gear);
           r.get(exploded);
           head.gear = gear;
@@ -1168,6 +1169,23 @@ struct Game {
           sim.pos[first + i] = cog + (oa + (ob - oa) * a) * (1.0 / net::kNodeScale);
         }
         Vehicle& v = duel.cars[size_t(k)];
+        // In the simulation a wheel's rim stays put and only its angle goes round; here the drawn wheel goes round with it.
+        for (size_t w = 0; w < v.wheels.size() && w < 4; w++) {
+          const Wheel& wheel = v.wheels[w];
+          // The shortest way between the two pictures, whatever the angle's wrapping has done.
+          const double from = fa.theta[w], to = fb.theta[w];
+          const double turn = std::remainder(to - from, 2.0 * PI);
+          const double theta = from + turn * a;
+          const V3 hub = (sim.pos[wheel.axIn] + sim.pos[wheel.axOut]) * 0.5;
+          // Rolling forward turns a wheel about the axis pointing to the car's left, on both sides of it.
+          V3 axis = norm(sim.pos[wheel.axOut] - sim.pos[wheel.axIn]);
+          if (!wheel.left) axis = axis * -1.0;
+          const double c = std::cos(theta), sn = std::sin(theta);
+          for (u32 n : wheel.ring) {
+            const V3 r = sim.pos[n] - hub;
+            sim.pos[n] = hub + r * c + cross(axis, r) * sn + axis * (dot(axis, r) * (1.0 - c));
+          }
+        }
         v.cog = cog;
         v.fwd = norm(fa.fwd + (fb.fwd - fa.fwd) * a);
         v.left = norm(fa.left + (fb.left - fa.left) * a);
@@ -2007,7 +2025,7 @@ static void runGame() {
         }
       }
     }
-    if (scriptMode == 41 && netState == Game::NET_IN) {
+    if ((scriptMode == 41 || scriptMode == 48) && netState == Game::NET_IN) {
       {
         // Says something once, to see it arrive on both screens.
         static bool said = false;
@@ -2295,6 +2313,13 @@ static void runGame() {
       cam.target = cam.eye - back * 100.0;
       cam.up = {0, 0, 1};
       cam.fovY = (60.0 / scopeZoom) * PI / 180.0;
+    }
+    if (scriptMode == 48 && inVehicle) {
+      // Beside a car on the move, to see its wheels go round.
+      cam.target = view.carCog;
+      cam.eye = view.carCog + view.carLeft * 4.0 + view.carFwd * 0.5 + V3{0, 0, 0.3};
+      cam.up = {0, 0, 1};
+      cam.fovY = 50.0 * PI / 180.0;
     }
     if (scriptMode == 45) {
       const double a = 0.6 + double(shotCount) * 0.9;

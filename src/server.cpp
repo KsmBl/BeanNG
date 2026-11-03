@@ -385,6 +385,7 @@ int main(int argc, char** argv) {
       w.put(float(v.dmg.coolantTemp));
       w.put(float(v.latAcc));
       w.put(float(v.lonAcc));
+      for (size_t t = 0; t < 4; t++) w.put(float(t < v.wheels.size() ? v.wheels[t].theta : 0.0));
       w.put(i8(v.gear));
       w.put(u8(v.exploded ? 1 : 0));
       w.put(at - first);
