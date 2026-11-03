@@ -1521,7 +1521,10 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       if (std::fabs(f.speed) < 3.0) continue;
       const V3 q = s.p - f.cog;
       if (std::fabs(q.z) > f.height + 1.0) continue;
-      if (std::fabs(dot(q, f.fwd)) < f.halfLength + 0.5 && std::fabs(dot(q, f.left)) < f.halfWidth + 0.5) {
+      const double along = dot(q, f.fwd);
+      // Only what it is actually driving at: brushing along its side just pushes one away, and so does what is behind it.
+      if (along * f.speed <= 0 || std::fabs(along) < f.halfLength * 0.5) continue;
+      if (std::fabs(along) < f.halfLength + 0.5 && std::fabs(dot(q, f.left)) < f.halfWidth + 0.5) {
         s.hp -= std::fabs(f.speed) * 40.0 * kDt * 20.0;
         pl.lastBlow = f.fwd * (f.speed * 0.9) + V3{0, 0, 2.0};
       }
@@ -1644,6 +1647,9 @@ void Duel::step(const Intent in[kMaxPlayers]) {
       }
       t.update(sim, *c, kDt);
     } else {
+      // Asleep nothing reads its speed any more, and what it last said must not outlive it: someone walking up to a
+      // parked tank would be run over by a number.
+      t.speed = 0;
       t.tickFire(sim, kDt);
     }
   }
@@ -1692,6 +1698,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
         driven = in[p].c;
       }
     if (sim.objs[v.obj].awake) v.update(sim, driven, kDt);
+    else v.speed = 0;
   }
   // Water holds back whatever goes through it. A tank just grinds on; a car, with less weight on it, hardly at all.
   for (int v = 0; v < kVehicles; v++) {
