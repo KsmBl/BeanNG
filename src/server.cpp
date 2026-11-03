@@ -259,11 +259,22 @@ int main(int argc, char** argv) {
       w.put(float(pl.soldier.pitch));
       w.put(float(pl.soldier.hp));
       w.put(float(pl.soldier.stride));
+      w.put(float(pl.soldier.prone));
+      w.put(u8(pl.weapon));
     }
     w.put(duel->players[slot].lastInput);
     // What this player carries, as it stands now.
     for (int k = 0; k < IT_COUNT; k++) w.put(duel->players[slot].items[k]);
     w.put(float(duel->players[slot].repairClock));
+    {
+      const Duel::Player& me = duel->players[slot];
+      w.put(i16(me.smallAmmo));
+      w.put(i16(me.sniperAmmo));
+      w.put(i16(me.rpgAmmo));
+      u8 has = 0;
+      for (int k = 0; k < WP_COUNT; k++) has |= u8(me.hasWeapon[k] ? 1 << k : 0);
+      w.put(has);
+    }
     // Blasts stay in the packet until the player says they have gone off there.
     const auto& log = duel->sim.blastLog;
     const u32 ack = c.in.ackMatch == duel->matchId ? c.in.ackBlasts : 0;
@@ -366,6 +377,11 @@ int main(int argc, char** argv) {
         k.launch = c.launch;
         k.fire = c.fire;
         in[i].use = c.use;
+        in[i].fireFoot = c.fire;
+        in[i].fireHeld = c.in.fireHeld;
+        in[i].weapon = c.in.weapon;
+        // How far behind this player's screen is: their picture is a tenth of a second late and half a ping old.
+        in[i].lag = std::clamp((double(tick) - double(c.in.viewTick)) / kSendRate, 0.0, 0.3);
         in[i].repair = c.repair;
         in[i].seq = c.in.seq;
         in[i].pitch = c.in.pitch;

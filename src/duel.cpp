@@ -1,5 +1,6 @@
 #include "duel.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include "props.h"
@@ -373,6 +374,127 @@ int Duel::nearestToRepair(V3 p) const {
   return best;
 }
 
+V3 Duel::soldierAt(int p, double lag) const {
+  const int back = std::clamp(int(lag * 100.0), 0, kPastSteps - 1);
+  return past[(pastAt - back + kPastSteps * 2) % kPastSteps].soldier[p];
+}
+
+void Duel::fireWeapon(int p, const Intent& in) {
+  Player& pl = players[p];
+  const int w = pl.weapon;
+  if (!pl.hasWeapon[w] || pl.shotClock > 0) return;
+  if (!(in.fireFoot || (in.fireHeld && kWeapons[w].automatic))) return;
+  const Soldier& s = pl.soldier;
+  const V3 eye = s.p + V3{0, 0, 1.45};
+  if (w == WP_KNIFE) {
+    pl.shotClock = kWeapons[w].interval;
+    const V3 target = soldierAt(1 - p, in.lag);
+    Soldier& other = players[1 - p].soldier;
+    if (players[1 - p].vehicle < 0 && len(V3{target.x - s.p.x, target.y - s.p.y, target.z - s.p.z}) < 2.2) other.hp -= kWeapons[w].damage;
+    return;
+  }
+  int& ammo = w == WP_SNIPER ? pl.sniperAmmo : (w == WP_RPG ? pl.rpgAmmo : pl.smallAmmo);
+  if (ammo <= 0) return;
+  // The big rifle takes setting up: it fires lying still behind its bipod, or not at all.
+  if (w == WP_SNIPER && s.prone < 0.99) return;
+  ammo--;
+  pl.shotClock = kWeapons[w].interval;
+  V3 dir = norm(in.c.aimPoint - eye);
+  // Off the line by a random angle: the same on no two shots, and worse for moving.
+  const auto chance = [&] {
+    randState = randState * 1664525u + 1013904223u;
+    return double(randState >> 16) / 65535.0 * 2.0 - 1.0;
+  };
+  const double spread = kWeapons[w].spread * (1.0 + (w == WP_SNIPER ? 0.0 : std::min(len(s.v) * 0.5, 2.0)));
+  dir = norm(dir + V3{chance(), chance(), chance()} * spread);
+  Bullet b;
+  b.p = eye + dir * 0.7;
+  b.v = dir * kWeapons[w].speed;
+  b.owner = p;
+  b.kind = w;
+  b.lag = in.lag;
+  bullets.push_back(b);
+  sim.event(EV_MUZZLE, b.p, dir, w == WP_RPG ? 0.5f : (w == WP_SNIPER ? 0.45f : 0.12f));
+}
+
+void Duel::stepBullets(double dt) {
+  for (size_t i = 0; i < bullets.size();) {
+    Bullet& b = bullets[i];
+    b.age += dt;
+    if (b.kind == WP_RPG) {
+      // A rocket wanders, more the longer it flies.
+      const double wander = 0.25 * std::min(b.age, 3.0);
+      b.v += V3{std::sin(b.age * 7.0 + b.p.x), std::cos(b.age * 5.0 + b.p.y), std::sin(b.age * 6.0)} * (wander * 12.0 * dt);
+    } else {
+      b.v.z -= 9.81 * dt;
+    }
+    const V3 from = b.p;
+    b.p += b.v * dt;
+    if ((b.kind == WP_RPG && int(b.age * 200.0) % 4 == 0) || (b.kind != WP_RPG && int(b.age * 200.0) % 8 == 0)) sim.event(EV_TRACER, b.p, b.v, 1.f);
+    bool stop = b.age > 6.0;
+    V3 at = b.p;
+    const V3 seg = b.p - from;
+    const double L = len(seg);
+    const int samples = std::max(1, int(L));
+    // Those it may hit: the other player, where the shooter saw them.
+    if (!stop) {
+      const int q = 1 - b.owner;
+      if (players[q].vehicle < 0) {
+        const V3 foot = soldierAt(q, b.lag);
+        const double t = clampd(dot(V3{foot.x - from.x, foot.y - from.y, 0}, V3{seg.x, seg.y, 0}) / std::max(seg.x * seg.x + seg.y * seg.y, 1e-9), 0, 1);
+        const V3 near = from + seg * t;
+        if (std::hypot(near.x - foot.x, near.y - foot.y) < 0.38 && near.z > foot.z && near.z < foot.z + Soldier::kHeight) {
+          stop = true;
+          at = near;
+          if (b.kind != WP_RPG) {
+            // In the head it counts for more than in the boots.
+            const double z = near.z - foot.z;
+            players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
+          }
+        }
+      }
+    }
+    // Vehicles stop it. What a bullet can do to them comes with their weak spots.
+    if (!stop)
+      for (int v = 0; v < kVehicles && !stop; v++) {
+        const VehicleFrame& f = frames[v];
+        const V3 q = b.p - f.cog;
+        if (std::fabs(dot(q, f.fwd)) < f.halfLength && std::fabs(dot(q, f.left)) < f.halfWidth && std::fabs(dot(q, f.up)) < f.height * 0.5) {
+          stop = true;
+          at = b.p;
+        }
+      }
+    // And the world, every metre of the way.
+    for (int k = 1; k <= samples && !stop; k++) {
+      const V3 p = from + seg * (double(k) / samples);
+      Contact c;
+      if (world.contact(p, c)) {
+        stop = true;
+        at = p;
+        break;
+      }
+      for (const Block& bl : sim.blocks) {
+        const V3 a = sim.pos[bl.n[0]], d = sim.pos[bl.n[7]];
+        const V3 mid = (a + d) * 0.5;
+        const double rr = len(a - d) * 0.5;
+        if (len2(mid - p) < rr * rr) {
+          stop = true;
+          at = p;
+          break;
+        }
+      }
+    }
+    if (stop) {
+      if (b.kind == WP_RPG) sim.explode(at, 2800.0, 10.0);
+      else if (b.age < 6.0) sim.event(EV_SPARK, at, b.v * -0.01, 0.3f);
+      bullets[i] = bullets.back();
+      bullets.pop_back();
+      continue;
+    }
+    i++;
+  }
+}
+
 void Duel::boardVehicle(int p, int v) {
   players[p].vehicle = v;
   const u16 a = v < kTanks ? tanks[v].hullObj : cars[size_t(v - kTanks)].obj;
@@ -409,9 +531,19 @@ void Duel::stepPlayers(const Intent in[2]) {
       if (d < kill) pl.soldier.hp -= 140.0 * (1.0 - d / kill) * std::min(b.impulse / 1000.0, 1.0);
     }
   }
+  pastAt = (pastAt + (int(sim.stepCount % 20) == 0 ? 1 : 0)) % kPastSteps;
+  for (int i = 0; i < 2; i++) past[pastAt].soldier[i] = players[i].soldier.p;
+  bulletDebt += kDt;
+  while (bulletDebt >= 0.005) {
+    bulletDebt -= 0.005;
+    stepBullets(0.005);
+  }
   for (int i = 0; i < 2; i++) {
     Player& pl = players[i];
     Soldier& s = pl.soldier;
+    pl.shotClock = std::max(0.0, pl.shotClock - kDt);
+    if (in[i].weapon >= 0 && in[i].weapon < WP_COUNT && pl.hasWeapon[in[i].weapon]) pl.weapon = in[i].weapon;
+    if (pl.vehicle < 0 && phase == PLAYING) fireWeapon(i, in[i]);
     if (in[i].use) {
       if (pl.vehicle >= 0) {
         leaveVehicle(i);
@@ -486,6 +618,7 @@ void Duel::restart() {
   cars = carsStart;
   winner = -1;
   phaseClock = 0;
+  bullets.clear();
   blastSeen = sim.blastCount;
   matchId++;
   blastsDone = 0;
@@ -500,6 +633,11 @@ void Duel::placePlayers() {
     p.ready = false;
     p.repairClock = 0;
     p.repairing = -1;
+    p.weapon = WP_PISTOL;
+    p.smallAmmo = 24;
+    p.sniperAmmo = p.rpgAmmo = 0;
+    p.shotClock = 0;
+    for (int k = 0; k < WP_COUNT; k++) p.hasWeapon[k] = k <= WP_PISTOL;
     p.walkDebt = 0;
     const World::Base& base = world.base(i);
     const double cx = std::cos(base.facing), sx = std::sin(base.facing);
@@ -581,7 +719,14 @@ void Duel::step(const Intent in[2]) {
         u8 kept[2][IT_COUNT];
         for (int i = 0; i < 2; i++) memcpy(kept[i], players[i].items, IT_COUNT);
         restart();
-        for (int i = 0; i < 2; i++) memcpy(players[i].items, kept[i], IT_COUNT);
+        for (int i = 0; i < 2; i++) {
+          memcpy(players[i].items, kept[i], IT_COUNT);
+          players[i].smallAmmo += 60 * players[i].items[IT_SMALL_AMMO];
+          if (players[i].items[IT_AR] > 0) {
+            players[i].hasWeapon[WP_AR] = true;
+            players[i].weapon = WP_AR;
+          }
+        }
         startMatch();
       }
       break;

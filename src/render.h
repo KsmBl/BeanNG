@@ -56,6 +56,9 @@ struct Snapshot {
     bool onFoot = false, inCar = false;
     double hp = 100;
     u8 items[8] = {};
+    int weapon = 1;
+    int ammo = 0;  // for what is in the hand, -1 if it needs none
+    int has = 3;
     V3 p;
   } foot;
   // The match, as far as the instruments care.

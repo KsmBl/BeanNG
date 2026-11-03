@@ -2333,6 +2333,22 @@ struct Renderer::Impl {
       labelRight(cx0 + cw - 16 * u, cy0 + 22 * u, buf, 16 * u, s.foot.hp < 34 ? red : white);
       rrect(cx0 + 16 * u, cy0 + 40 * u, cw - 32 * u, 8 * u, 4 * u, {1, 1, 1, .15f});
       rrect(cx0 + 16 * u, cy0 + 40 * u, std::max((cw - 32 * u) * float(std::clamp(s.foot.hp / 100.0, 0.0, 1.0)), 8 * u), 8 * u, 4 * u, s.foot.hp < 34 ? red : green);
+      // What is in the hand, and with the number keys what else there is.
+      static const char* kNames[5] = {"Kampfmesser", "Pistole", "Sturmgewehr", "Scharfschützengewehr", "Raketenwerfer"};
+      const float wx = cx0, wy = cy0 - 58 * u;
+      rrect(wx, wy, cw, 50 * u, 14 * u, card);
+      snprintf(buf, sizeof buf, "%d  %s", s.foot.weapon + 1, kNames[std::clamp(s.foot.weapon, 0, 4)]);
+      label(wx + 16 * u, wy + 20 * u, buf, 15 * u, white);
+      if (s.foot.ammo >= 0) {
+        snprintf(buf, sizeof buf, "%d", s.foot.ammo);
+        labelRight(wx + cw - 16 * u, wy + 20 * u, buf, 18 * u, s.foot.ammo == 0 ? red : white);
+      }
+      float kx = wx + 16 * u;
+      for (int i = 0; i < 5; i++) {
+        snprintf(buf, sizeof buf, "%d", i + 1);
+        const bool got = s.foot.has & (1 << i);
+        kx = label(kx, wy + 40 * u, buf, 13 * u, i == s.foot.weapon ? teal : (got ? dim : Col{1, 1, 1, .15f})) + 10 * u;
+      }
     }
     // ---- Upper left: warnings, as pills with a symbol.
     {

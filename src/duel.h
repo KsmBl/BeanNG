@@ -47,6 +47,21 @@ struct VehicleFrame {
   double halfLength = 2.3, halfWidth = 1.0, height = 1.6;
 };
 
+enum WeaponKind : u8 { WP_KNIFE, WP_PISTOL, WP_AR, WP_SNIPER, WP_RPG, WP_COUNT };
+struct WeaponInfo {
+  const char* name;
+  double interval;  // seconds between shots
+  bool automatic;
+  double speed, damage, spread;  // m/s, health points, radians
+};
+inline constexpr WeaponInfo kWeapons[WP_COUNT] = {
+    {"Kampfmesser", 0.6, false, 0, 60, 0},
+    {"Pistole", 0.28, false, 360, 26, 0.006},
+    {"Sturmgewehr", 0.1, true, 800, 28, 0.009},
+    {"Scharfschützengewehr", 2.2, false, 950, 130, 0.0004},
+    {"Raketenwerfer", 4.0, false, 130, 0, 0.012},  // loose at long range: it wanders as it flies
+};
+
 class Duel {
  public:
   static constexpr double kDt = 1.0 / 2000.0;
@@ -65,6 +80,11 @@ class Duel {
     Soldier soldier;
     int vehicle = -1;  // what they sit in, -1 on foot
     double walkDebt = 0;
+    int weapon = WP_PISTOL;
+    bool hasWeapon[WP_COUNT] = {true, true, false, false, false};
+    int smallAmmo = 24;  // pistol and assault rifle: what one starts with, and what the loadout adds
+    int sniperAmmo = 0, rpgAmmo = 0;
+    double shotClock = 0;
     double repairClock = 0;  // working on a vehicle from outside, which takes a kit and being there
     int repairing = -1;
     u32 lastInput = 0;  // the input the soldier has last been moved by, for the player's prediction
@@ -75,6 +95,10 @@ class Duel {
     WalkInput walk;
     double pitch = 0;
     bool use = false;  // E: get in, get out
+    bool fireFoot = false;  // a press of the trigger
+    bool fireHeld = false;
+    int weapon = WP_PISTOL;
+    double lag = 0;         // how far in the past this player sees the others, in seconds
     bool repair = false;
     u32 seq = 0;
   };
@@ -96,6 +120,22 @@ class Duel {
   static const V3 kSoldierRest;  // where the bind pose stands
   u32 soldierFirst[2] = {};
   size_t blastsDone = 0;
+  // What flies from hand weapons. Hits are judged against where things were when the shooter fired, as they saw it.
+  struct Bullet {
+    V3 p, v;
+    int owner = 0;
+    int kind = WP_PISTOL;
+    double age = 0, lag = 0;
+  };
+  std::vector<Bullet> bullets;
+  struct Past {
+    V3 soldier[2];
+  };
+  static constexpr int kPastSteps = 32;  // every hundredth of a second
+  Past past[kPastSteps];
+  int pastAt = 0;
+  double bulletDebt = 0;
+  u32 randState = 12345;
 
   Player players[2];
   Phase phase = WAITING;
@@ -130,5 +170,8 @@ class Duel {
   void startMatch();
   void stepPlayers(const Intent in[2]);
   void boardVehicle(int p, int v);
+  void fireWeapon(int p, const Intent& in);
+  void stepBullets(double dt);
+  V3 soldierAt(int p, double lag) const;
   void leaveVehicle(int p);
 };

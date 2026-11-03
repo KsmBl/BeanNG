@@ -486,6 +486,8 @@ struct SharedInput {
   Controls c;
   bool ready = false;
   bool sprint = false;
+  bool fireHeld = false;
+  int weapon = WP_PISTOL;
   double yaw = 0, pitch = 0;
   std::string chatOut;  // the next line to say; cleared here once it is on its way
   u8 items[IT_COUNT] = {};
@@ -661,6 +663,7 @@ struct Game {
     std::vector<std::pair<int, std::string>> chatLog;
     u32 chatLogFirst = 0;
     u8 carrying[IT_COUNT] = {};
+    int weaponShown[2] = {WP_PISTOL, WP_PISTOL};
     double repairNow = 0;
     u32 ackedInput = 0;
     V3 serverP;
@@ -862,11 +865,16 @@ struct Game {
             Soldier& sd = shownSoldier[i];
             sd.p = r.getV3();
             sd.v = r.getV3();
-            float yaw = 0, pitch = 0, hp = 0, stride = 0;
+            float yaw = 0, pitch = 0, hp = 0, stride = 0, prone = 0;
+            u8 weapon = 0;
             r.get(yaw);
             r.get(pitch);
             r.get(hp);
             r.get(stride);
+            r.get(prone);
+            r.get(weapon);
+            sd.prone = prone;
+            weaponShown[i] = std::min<int>(weapon, WP_COUNT - 1);
             sd.yaw = yaw;
             sd.pitch = pitch;
             sd.hp = hp;
@@ -882,6 +890,18 @@ struct Game {
           float rc = 0;
           r.get(rc);
           repairNow = rc;
+          {
+            i16 small = 0, sniper = 0, rpg = 0;
+            u8 has = 0;
+            r.get(small);
+            r.get(sniper);
+            r.get(rpg);
+            r.get(has);
+            duel.players[mySlot].smallAmmo = small;
+            duel.players[mySlot].sniperAmmo = sniper;
+            duel.players[mySlot].rpgAmmo = rpg;
+            for (int k = 0; k < WP_COUNT; k++) duel.players[mySlot].hasWeapon[k] = has & (1 << k);
+          }
           u32 first = 0;
           u8 count = 0;
           r.get(first);
@@ -1075,6 +1095,7 @@ struct Game {
           duel.walk(me, wi, Duel::kWalkDt);
         }
         me.pitch = in.pitch;
+        me.prone = shownSoldier[mySlot].prone;
         if (freshAnswer) {
           freshAnswer = false;
           // Where it thought it was when the server's answer was made, against the answer.
@@ -1096,7 +1117,7 @@ struct Game {
       // Both soldiers drawn: oneself where one thinks one is, the other as the server last said.
       for (int i = 0; i < 2; i++) {
         const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0;
-        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, 2);
+        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot ? in.weapon : weaponShown[i]);
       }
 
       if (state == NET_IN && now >= nextInput) {
@@ -1115,6 +1136,8 @@ struct Game {
         out.yaw = float(in.yaw);
         out.pitch = float(in.pitch);
         out.sprint = in.sprint;
+        out.fireHeld = in.fireHeld;
+        out.weapon = u8(in.weapon);
         if (vehicleNow < 0) past.push_back({out.seq, me.p});
         while (past.size() > 200) past.pop_front();
         out.ready = in.ready ? 1 : 0;
@@ -1145,6 +1168,11 @@ struct Game {
       memcpy(duel.players[mySlot].items, carrying, IT_COUNT);
       {
         std::lock_guard<std::mutex> lock(snapMutex);
+        snap.foot.weapon = in.weapon;
+        const Duel::Player& who = duel.players[mySlot];
+        snap.foot.ammo = in.weapon == WP_KNIFE ? -1 : (in.weapon == WP_SNIPER ? who.sniperAmmo : (in.weapon == WP_RPG ? who.rpgAmmo : who.smallAmmo));
+        snap.foot.has = 0;
+        for (int k = 0; k < WP_COUNT; k++) snap.foot.has |= who.hasWeapon[k] ? 1 << k : 0;
         netState = state;
         netError = error;
         phase = phaseNow;
@@ -1306,6 +1334,7 @@ static void runGame() {
   int lastPhase = -1;
   bool chatting = false;
   std::string chatText;
+  int weaponPick = WP_PISTOL;
   // The map, and the point on it the artillery lays on.
   bool mapOpen = false;
   bool hasMark = false;
@@ -1352,6 +1381,8 @@ static void runGame() {
         panelKind = PANEL_NONE;
       }
       if (phase == Duel::PLAYING) {
+        if (pickItems[IT_AR] > 0) weaponPick = WP_AR;
+        else weaponPick = WP_PISTOL;
         // Looking across the yard towards the enemy. The camera's yaw is in the world.
         rig.yaw = G.world.base(slot).facing + PI;
         hasMark = false;
@@ -1456,6 +1487,7 @@ static void runGame() {
       key("Feuer", "Linke Maustaste, F");
       key("Rakete starten, fliegt mit der Maus", "G");
       key("Einsteigen und aussteigen", "E");
+      key("Waffe wählen", "1 2 3 4 5");
       key("Rennen, springen", "Umschalt, Leertaste");
       key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
       key("Karte, Ziel für die Artillerie", "K");
@@ -1650,6 +1682,11 @@ static void runGame() {
             case SDLK_G: edges.launch = true; break;
             case SDLK_K: mapOpen = !mapOpen; break;
             case SDLK_C: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.pitch = 0.22; break;
+            case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5: {
+              const int pick = int(e.key.key - SDLK_1);
+              if (view.foot.has & (1 << pick)) weaponPick = pick;
+              break;
+            }
             case SDLK_RETURN: case SDLK_KP_ENTER:
               if (netState == Game::NET_IN) chatting = true;
               break;
@@ -1800,6 +1837,8 @@ static void runGame() {
       G.input.yaw = rig.yaw;
       G.input.pitch = rig.pitch;
       G.input.sprint = sprint;
+      G.input.weapon = weaponPick;
+      G.input.fireHeld = panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK);
       if (sendC.requestGear != 99) c.requestGear = sendC.requestGear;
       G.input.ready = pickReady;
       for (int i = 0; i < IT_COUNT; i++) G.input.items[i] = pickItems[i];

@@ -81,7 +81,8 @@ void write(Writer& w, const InputMsg& m) {
   w.put(m.useCount);
   w.put(m.yaw);
   w.put(m.pitch);
-  w.put(u8(m.sprint ? 1 : 0));
+  w.put(u8((m.sprint ? 1 : 0) | (m.fireHeld ? 2 : 0)));
+  w.put(m.weapon);
   w.put(u8(m.indirect ? 1 : 0));
   w.put(m.requestGear);
   w.put(m.ready);
@@ -112,7 +113,9 @@ bool read(Reader& r, InputMsg& m) {
   r.get(m.pitch);
   u8 sprint = 0;
   r.get(sprint);
-  m.sprint = sprint != 0;
+  m.sprint = (sprint & 1) != 0;
+  m.fireHeld = (sprint & 2) != 0;
+  r.get(m.weapon);
   u8 indirect = 0;
   r.get(indirect);
   m.indirect = indirect != 0;
