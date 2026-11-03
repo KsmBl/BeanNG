@@ -7,6 +7,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include "props.h"
@@ -1745,6 +1746,72 @@ int main(int argc, char** argv) {
       snprintf(nm, sizeof nm, "Strasse %zu, Neigung %.1f", idx, std::atan(p.bank) * 57.3);
       show(nm);
     }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "one1wing")) {
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    w->clearBoxes();
+    w->flatten();
+    w->pave();
+    s->world = w;
+    Vehicle c0 = buildOne1(*s, {-400, 0, 0}, &r);
+    s->finalize();
+    const NodeGroup* wg = nullptr;
+    for (const NodeGroup& g : r.groups)
+      if (g.name == "wing") wg = &g;
+    std::set<u32> wn(wg->nodes.begin(), wg->nodes.end());
+    auto report = [&](const char* name) {
+      int total = 0, broken = 0, toBody = 0, toBodyBroken = 0;
+      double strain = 0;
+      for (const Beam& b : s->beams) {
+        const bool ia = wn.count(b.a), ib = wn.count(b.b);
+        if (!ia && !ib) continue;
+        total++;
+        broken += (b.flags & BF_BROKEN) != 0;
+        if (ia != ib) {
+          toBody++;
+          toBodyBroken += (b.flags & BF_BROKEN) != 0;
+        }
+        if (!(b.flags & BF_BROKEN)) strain = std::max(strain, std::fabs(len(s->pos[b.b] - s->pos[b.a]) / b.Lorig - 1.0));
+      }
+      // Where the wing is against the car, compared with where it was built.
+      double off = 0, vmax = 0;
+      const V3 c = (s->pos[c0.refRearL] + s->pos[c0.refRearR]) * 0.5, c1 = (s->rest[c0.refRearL] + s->rest[c0.refRearR]) * 0.5;
+      for (u32 n : wg->nodes) {
+        const V3 d = s->pos[n] - c, d0 = s->rest[n] - c1;
+        const V3 d1 = c0.fwd * d0.x + c0.left * d0.y + c0.up * d0.z;
+        off = std::max(off, len(d - d1));
+        vmax = std::max(vmax, len(s->vel[n] - c0.vCog));
+      }
+      printf("%-22s Balken %d (zum Auto %d), gerissen %d (zum Auto %d), Dehnung max %.3f, Abweichung %.3f m, Knotentempo %.2f m/s, Objekte %zu\n", name, total, toBody, broken, toBodyBroken, strain, off, vmax, s->objs.size());
+    };
+    report("gebaut");
+    settleVehicle(*s, c0, 3.0);
+    report("eingefedert");
+    Controls c;
+    for (int k = 0; k < 2000 * 12; k++) {
+      c.throttle = 1;
+      c.steer = k > 2000 * 6 ? 0.04 * std::sin(k * kDt * 2) : 0;
+      s->forces(kDt);
+      c0.update(*s, c, kDt);
+      s->finish(kDt);
+      if (k % (2000 * 3) == 5999) report("Vollgas");
+    }
+    // Pull one bolt: the whole wing must go, and come to rest on the ground, not hang on a hinge.
+    s->sever(c0.wingMountBeams[0]);
+    for (int k = 0; k < 2000 * 2; k++) {
+      c.throttle = 0.2;
+      s->forces(kDt);
+      c0.update(*s, c, kDt);
+      s->finish(kDt);
+    }
+    report("2 s nach dem Abriss");
+    printf("  Meldung: %s, Fluegel-Verbindungen uebrig: %zu, Fluegel z %.2f\n", c0.lastDamage.c_str(), c0.wingMountBeams.size(), s->pos[wg->nodes[0]].z);
+    const double e = s->maxEigenvalue(0) * 0.25 * kDt * kDt;
+    printf("Eigenwert %.2f, guard %llu, v %.0f km/h\n", e, (unsigned long long)s->clampedSteps, c0.speed * 3.6);
     return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "one1grip")) {

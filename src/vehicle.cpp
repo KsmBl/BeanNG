@@ -964,6 +964,15 @@ void Vehicle::updateBodyFrame(Sim& sim, double dt) {
 }
 
 void Vehicle::updateDamage(Sim& sim, double dt) {
+  if (!wingMountBeams.empty()) {
+    bool gone = false;
+    for (u32 id : wingMountBeams) gone |= (sim.beams[id].flags & BF_BROKEN) != 0;
+    if (gone) {
+      for (u32 id : wingMountBeams) sim.sever(id);
+      wingMountBeams.clear();
+      note("HECKFLUEGEL ABGERISSEN");
+    }
+  }
   auto plastified = [&](const std::vector<u32>& list, double strain) {
     int n = 0;
     for (u32 id : list) {

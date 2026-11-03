@@ -133,6 +133,7 @@ class Vehicle {
   u32 refFrontL = 0, refFrontR = 0, refRearL = 0, refRearR = 0;  // body frame reference
   u32 tieBeam[2] = {};
   double steerTravel = 0.066;  // rack travel at full lock [m]
+  std::vector<u32> wingMountBeams;  // all go together: a wing must not swing around its last bolt
   std::vector<u32> radiatorBeams, engineMountBeams, hydraulicBeams, engineBlockBeams, gearboxBeams, bellBeams, tankBeams;
   u32 shaftNode[2] = {};  // halfshaft flanges on the differential, left and right
   double dragArea = 0.63;      // Cd * A, Xantia ~0.30 * 2.1 m^2

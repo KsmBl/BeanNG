@@ -152,6 +152,15 @@ class Sim {
   void finish(double dt);
 
   void wake(u16 obj);
+  // Parts a beam at once, as a bolt shearing does.
+  void sever(u32 beam) {
+    Beam& b = beams[beam];
+    if (!(b.flags & BF_BROKEN)) {
+      b.flags |= BF_BROKEN;
+      brokenBeams++;
+      objs[nodeObj[b.a]].dirty = true;
+    }
+  }
   // A detonation: a pressure wave running out from c. impulse is in N s per square metre of surface
   // at 1 m from the centre, radius is where it has faded out. Tears what is nearest, throws the rest.
   void explode(V3 c, double impulse, double radius);

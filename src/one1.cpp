@@ -47,7 +47,7 @@ const Mat mSkin{0.8e6, 130, 4.5e3, 7e3, 2e4, 0.18, 11e3};
 const Mat mDoor{0.9e6, 150, 9e3, 14e3, 3e4, 0.25, 26e3};
 const Mat mHinge{1.2e6, 220, 0, 0, 0, 0, 17e3};
 const Mat mLatch{0.8e6, 160, 0, 0, 0, 0, 9e3};
-const Mat mPylon{0.8e6, 120, 0, 0, 0, 0, 5e3};
+const Mat mPylon{0.8e6, 120, 0, 0, 0, 0, 12e3};
 
 const Mat mAnchor{3.0e6, 440, 65e3, 85e3, 2e5, 0.20, 0};
 const Mat mSubframe{3.0e6, 440, 70e3, 90e3, 2e5, 0.22, 0};
@@ -430,7 +430,7 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
     wing.push_back(foot[1]);
     for (int side = 0; side < 2; side++)
       for (int s : {15, 16, 17})
-        for (int r : {5, 6}) beam(foot[side], u32(body[s][r][side]), mPylon);
+        for (int r : {5, 6}) beam(foot[side], u32(body[s][r][side]), mPylon, &veh.wingMountBeams);
   }
 
   // ---- Outer collision surface.

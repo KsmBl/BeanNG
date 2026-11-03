@@ -94,6 +94,7 @@ struct Game {
   std::atomic<bool> running{true};
   std::atomic<bool> resetVisuals{false};
   std::atomic<bool> debugWheel{false};
+  std::atomic<bool> debugWing{false};
   double realtimeFactor = 1;
 
   void applyRepair() {
@@ -436,6 +437,7 @@ struct Game {
         car.tune = input.tuning;
         tank.reloadTime = input.tankReload;
       }
+      if (debugWing.exchange(false) && !car.wingMountBeams.empty()) sim.sever(car.wingMountBeams[0]);
       if (debugWheel.exchange(false) && kind != VK_LEOPARD && car.wheels[0].deflate == 0) {
         Wheel& w = car.wheels[0];
         w.deflate = 0.001;
@@ -1494,6 +1496,19 @@ static int playSession(int kind, bool openMenu) {
           rig.pitch = 0.08;
           if (tNow > 11.5 && std::fmod(tNow, 3.0) < dt) sendC.fire = true;
           break;
+        case 27: {  // through the gauntlet and over the kerbs, watching the wing
+          const double head = std::atan2(view.carFwd.y, view.carFwd.x);
+          scriptGas = view.speedKmh < 70.0 ? 0.8 : 0.15;
+          scriptSteer = clampd(-0.05 * view.carCog.y - 0.7 * head, -0.25, 0.25);
+          break;
+        }
+        case 28:  // the wing comes off while driving: does it leave cleanly?
+          scriptGas = view.speedKmh < 50.0 ? 0.6 : 0.1;
+          if (tNow > 3.0 && !repairDone) {
+            G.debugWing = true;
+            repairDone = true;
+          }
+          break;
         case 23:  // switches vehicle in mid-game, as the menu does, and back out
           if (tNow > 4.0) {
             nextVehicle = kind == VK_XANTIA ? VK_LEOPARD : -1;
@@ -1775,6 +1790,12 @@ static int playSession(int kind, bool openMenu) {
       cam.eye = cam.target + V3{std::cos(a) * 5.6, std::sin(a) * 5.6, scriptMode == 25 ? 0.55 : 1.8};
       cam.up = {0, 0, 1};
       cam.fovY = 50.0 * PI / 180.0;
+    }
+    if (scriptMode == 27 || scriptMode == 28) {  // behind and above, to see the wing against the car
+      cam.target = view.carCog + view.carFwd * -1.8 + view.carUp * 0.6;
+      cam.eye = cam.target + view.carFwd * -4.0 + view.carLeft * 1.8 + view.carUp * 1.5;
+      cam.up = {0, 0, 1};
+      cam.fovY = 45.0 * PI / 180.0;
     }
     if (scriptMode == 19) {  // a fixed view of the tree
       const V3 t = G.world.trees()[treeIndex];
