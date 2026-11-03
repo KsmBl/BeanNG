@@ -10,7 +10,6 @@ Das Spiel startet im Hauptmenü, **ESC** öffnet es jederzeit wieder. Dort finde
 Fahrzeug-Einstellungen, Spiel-Einstellungen und die Tastenbelegung. Direkt erreichst du die Fahrzeugwahl
 mit **TAB** und die Fahrzeug-Einstellungen mit **O**.
 
-Mit **F** zündest du beim Xantia die Autobombe und feuerst beim Leopard die Kanone (auch linke
 Maustaste). Beim Leopard zielt die Maus: der Turm folgt dem Fadenkreuz, der Ring zeigt, wohin das Rohr
 gerade wirklich zeigt und wie weit das Nachladen ist.
 

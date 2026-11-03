@@ -992,7 +992,6 @@ void Duel::step(const Intent in[2]) {
     for (int p = 0; p < 2; p++)
       if (players[p].vehicle == kTanks + int(i)) {
         driven = in[p].c;
-        driven.fire = false;  // on a car that would set off a bomb under it
       }
     if (sim.objs[v.obj].awake) v.update(sim, driven, kDt);
   }

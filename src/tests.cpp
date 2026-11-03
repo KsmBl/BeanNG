@@ -2936,30 +2936,6 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
-  if (argc > 1 && !strcmp(argv[1], "bomb")) {
-    Bench b({-90, 0, 0}, 0, true);
-    b.run(1.0, [&](double, Controls&) {});
-    Controls fireNow;
-    fireNow.fire = true;
-    bool once = true;
-    for (int sec = 0; sec < 30; sec++) {
-      const double before = b.sim.plasticEnergy;
-      const auto t0 = std::chrono::steady_clock::now();
-      b.run(1.0, [&](double, Controls& c) { c.fire = once; once = false; });
-      const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-      double vmax = 0, vavg = 0;
-      int n = 0;
-      for (u32 i = 0; i < b.sim.objs[0].nodeCount; i++) {
-        const double v = len(b.sim.vel[i]);
-        vmax = std::max(vmax, v);
-        vavg += v;
-        n++;
-      }
-      int awake = int(b.sim.active.size());
-      printf("t=%2d plastic +%7.1f kJ  objs %zu awake %d  node v avg %.2f max %.1f  guard %llu  load %.0f%% sane %d\n", sec + 1, (b.sim.plasticEnergy - before) / 1e3, b.sim.objs.size(), awake, vavg / std::max(n, 1), vmax, (unsigned long long)b.sim.clampedSteps, wall * 100, b.sane());
-    }
-    return 0;
-  }
   if (argc > 1 && !strcmp(argv[1], "buckle2")) {
     for (double kmh : {25.0}) {
       Bench b({-46, 91.0, 0}, 0.45);

@@ -166,29 +166,6 @@ void Vehicle::wreck(Sim& sim) {
     }
 }
 
-void Vehicle::detonate(Sim& sim) {
-  if (exploded) return;
-  exploded = true;
-  burnTime = 0;
-  // About 5 kg of explosive under the rear seat.
-  const V3 at = cog - fwd * 0.45 - up * 0.1;
-  sim.explode(at, 3000.0, 22.0);
-  for (Wheel& w : wheels) {
-    if (w.deflate == 0) w.deflate = 0.001;
-    w.attached = false;
-  }
-  // What is left is scrap: slow jiggling is damped away and the pieces may come to rest and sleep.
-  for (Obj& o : sim.objs)
-    if (o.root == obj) {
-      o.kind = OBJ_PROP;
-      o.alwaysAwake = false;
-    }
-  dmg.hydraulics = dmg.radiator = dmg.tank = dmg.oilLeak = dmg.seized = dmg.gearbox = true;
-  engineRunning = false;
-  fuelLitres = 0;
-  note("AUTOBOMBE GEZUENDET");
-}
-
 // Electronic stability control and traction control, working the same brakes as the driver.
 void Vehicle::updateStability(const Controls& in, double dt) {
   for (Wheel& w : wheels) w.espTorque = 0;
@@ -1259,7 +1236,6 @@ void Vehicle::shapeDamping(Sim& sim, double dt) {
 }
 
 void Vehicle::update(Sim& sim, const Controls& in, double dt) {
-  if (in.fire) detonate(sim);
   if (exploded) {
     // The wreck burns for a good while, fiercely at first.
     burnTime += dt;

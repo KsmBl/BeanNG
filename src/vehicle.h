@@ -21,7 +21,7 @@ struct Controls {
   bool toggleIgnition = false;
   bool toggleActiva = false;
   int requestGear = 99;  // 99 = no request; used by the automatic's drive/reverse selection
-  bool fire = false;     // edge-triggered: detonates the car bomb, or fires the tank's gun
+  bool fire = false;     // edge-triggered: fires the tank's gun
   V3 aimPoint;           // where the turret should point, world space; a guided missile flies towards it
   bool indirect = false;  // lob the shell over whatever is in between: artillery firing at a point on the map
   bool launch = false;    // edge-triggered: sends off a guided missile
@@ -217,10 +217,8 @@ class Vehicle {
   void shiftIndices(long nodes, long beams, long objects);
   // Nobody is driving it, and it has come apart: from now on it is scrap.
   void wreck(Sim& sim);
-  // The bomb under the back seat.
-  void detonate(Sim& sim);
   bool exploded = false;
-  double burnTime = 0;   // seconds since it went off
+  double burnTime = 0;   // seconds since it was wrecked
   void settleFluid(Sim& sim);
   // Sets all rotating parts to match rolling at this speed, for test bench starts.
   void presetRolling(double v, int gearIndex);
@@ -276,6 +274,7 @@ struct CarRig {
   std::vector<VisLink> links;
   // What belongs to the vehicles parked about the place: their links come after the driven one's.
   size_t playerLinks = size_t(-1);
+  std::vector<int> linkInstance;  // which of the parked ones each link belongs to, or empty
   struct NodeRange { u32 first = 0, count = 0; };
   std::vector<NodeRange> parkedNodes;
 };
