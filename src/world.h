@@ -3,7 +3,7 @@
 #include <vector>
 #include "mathx.h"
 
-enum Surface : u8 { SURF_ASPHALT, SURF_GRASS, SURF_GRAVEL, SURF_CONCRETE, SURF_PAVE };
+enum Surface : u8 { SURF_ASPHALT, SURF_GRASS, SURF_GRAVEL, SURF_CONCRETE, SURF_PAVE, SURF_ROCK, SURF_SNOW };
 
 inline double surfaceFriction(u8 s) {
   switch (s) {
@@ -12,6 +12,8 @@ inline double surfaceFriction(u8 s) {
     case SURF_GRAVEL: return 0.65;
     case SURF_CONCRETE: return 0.95;
     case SURF_PAVE: return 0.85;
+    case SURF_ROCK: return 0.80;
+    case SURF_SNOW: return 0.40;
   }
   return 1.0;
 }
@@ -41,12 +43,13 @@ struct Road {
   std::vector<RoadPoint> pts;
   double halfWidth = 4;
   bool closed = false;
+  bool trail = false;  // a dirt track: no tarmac and no road markings
 };
 
 class World {
  public:
-  static constexpr int N = 1025;          // heightfield vertices per side
-  static constexpr double kHalf = 512.0;  // metres from centre to edge, 1 m grid
+  static constexpr int N = 2049;          // heightfield vertices per side
+  static constexpr double kHalf = 1024.0;  // metres from centre to edge, 1 m grid
 
   void build();
 
@@ -74,7 +77,12 @@ class World {
   u8 gridSurface(int ix, int iy) const { return surf_[size_t(iy) * N + ix]; }
   const std::vector<StaticBox>& boxes() const { return boxes_; }
   const std::vector<Road>& roads() const { return roads_; }
-  const std::vector<V3>& trees() const { return trees_; }  // foot of each tree, the trunk is a box
+  const std::vector<V3>& trees() const { return trees_; }  // foot of each tree
+  struct Place {
+    const char* name;
+    double x, y, yaw;
+  };
+  const std::vector<Place>& places() const { return places_; }  // where the driver can start from
 
  private:
   std::vector<float> h_;
@@ -82,11 +90,12 @@ class World {
   std::vector<StaticBox> boxes_;
   std::vector<Road> roads_;
   std::vector<V3> trees_;
+  std::vector<Place> places_;
   std::vector<Crater> craters_;
   std::vector<float> h0_;
   std::vector<u8> surf0_;
   static constexpr double kBoxCell = 8.0;
-  static constexpr int kBoxGrid = 128;
+  static constexpr int kBoxGrid = 256;
   std::vector<std::vector<u16>> boxGrid_;
 
   void addBox(V3 c, V3 half, double yaw, double pitch, u8 surf, float r, float g, float b);

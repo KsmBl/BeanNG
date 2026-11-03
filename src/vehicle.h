@@ -34,6 +34,7 @@ struct PowerSpec {
   int nGears = 5;
   double gears[8] = {3.42, 1.81, 1.28, 0.97, 0.77};
   double reverse = 3.58, finalDrive = 3.57;
+  double carrierInertia = 0.09;
   double engineInertia = 0.22, clutchCapacity = 430.0, synchroTorque = 45.0;
   double shaftRate = 8000.0, shaftDamp = 9.0, shaftShear = 6500.0;
   double upshiftLow = 2300.0, upshiftHigh = 6150.0, downshiftLow = 1250.0, downshiftHigh = 3400.0;
@@ -41,6 +42,11 @@ struct PowerSpec {
   double dentFz = 17000.0, burstFz = 32000.0;  // loads at which the rim dents and the tyre bursts
   bool conventional = false;  // no Citroen hydraulics to speak of: plain dampers, plain brakes
   bool turbo = false;
+  double boostFrom = 2200.0, boostSpan = 2000.0, offBoost = 520.0;  // where the turbo comes in, and torque without it
+  double launchRpm = 4300.0;  // what the launch control holds at full throttle
+  bool awd = false;           // both axles driven through a locked transfer case
+  double lowRange = 0;        // ratio of the low range, 0 = the car has none
+  double looseGrip = 1;       // what its tread adds on gravel, grass and rock
   double diffPreload = 0, diffRamp = 0;  // limited slip: locking torque at rest, and per N m of drive
   double frontShare = 0.58;
   double lockAngle = 0.60, wheelbase = 2.74, understeer = 0.0022;
@@ -51,6 +57,7 @@ struct PowerSpec {
 // Everything the driver can set in the overlay.
 struct Tuning {
   bool abs = true, esp = true, tcs = true;
+  bool lockDiffs = false, lowRange = false;
   double brake = 1, damper = 1, bar = 1, steer = 1;
 };
 
@@ -135,7 +142,7 @@ class Vehicle {
   double steerTravel = 0.066;  // rack travel at full lock [m]
   std::vector<u32> wingMountBeams;  // all go together: a wing must not swing around its last bolt
   std::vector<u32> radiatorBeams, engineMountBeams, hydraulicBeams, engineBlockBeams, gearboxBeams, bellBeams, tankBeams;
-  u32 shaftNode[2] = {};  // halfshaft flanges on the differential, left and right
+  u32 shaftNode[4] = {};  // halfshaft flanges on the differential, left and right (rear axle after front)
   double dragArea = 0.63;      // Cd * A, Xantia ~0.30 * 2.1 m^2
   double totalMass = 0;
 
@@ -155,10 +162,10 @@ class Vehicle {
   double crankAngle = 0;
   double manifold = 0.3;       // intake manifold fill, fraction of ambient pressure
   double combustionTorque = 0;
-  double discOmega = 85, inputOmega = 0, carrierOmega = 0, spiderOmega = 0;
+  double discOmega = 85, inputOmega = 0, carrierOmega = 0, spiderOmega = 0, spiderOmega2 = 0;
   double dampAngle = 0;        // clutch disc torsion damper wind-up [rad]
-  double shaftAngle[2] = {};   // halfshaft twist, left and right [rad]
-  double shaftLen[2] = {};     // as-built halfshaft lengths [m]
+  double shaftAngle[4] = {};   // halfshaft twist, left and right [rad]
+  double shaftLen[4] = {};     // as-built halfshaft lengths [m]
   int shiftPhase = 0;          // 0 in gear, 1 clutch opening, 2 synchronising
   int shiftTarget = 1;
   double shiftClock = 0;
@@ -257,6 +264,7 @@ struct CarRig {
 // Spawns a Citroen Xantia Activa into the sim at the given position and yaw.
 Vehicle buildXantia(Sim& sim, V3 pos, double yaw, CarRig* rig);
 Vehicle buildOne1(Sim& sim, V3 pos, CarRig* rig);
+Vehicle buildHummer(Sim& sim, V3 pos, CarRig* rig);
 
 // Runs the car for a moment so it rests at its equilibrium ride height.
 void settleVehicle(Sim& sim, Vehicle& v, double seconds);

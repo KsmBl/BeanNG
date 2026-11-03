@@ -14,6 +14,20 @@ double vnoise(double x, double y) {
                d = hash2(xi + 1, yi + 1);
   return lerpd(lerpd(a, b, fx), lerpd(c, d, fx), fy) * 2.0 - 1.0;
 }
+// The mountain: in the north-east corner, clear of the country road. Its slope flattens out at the foot, and
+// ridges and gullies run down it so that it does not look turned on a lathe.
+constexpr double kPeakX = 620, kPeakY = 620, kPeakR = 400, kPeakH = 270;
+double mountain(double x, double y) {
+  const double dx = x - kPeakX, dy = y - kPeakY, d = std::hypot(dx, dy) / kPeakR;
+  if (d >= 1.0) return 0.0;
+  const double a = std::atan2(dy, dx);
+  const double e = 1.0 - d * d;
+  const double cone = std::pow(e, 1.55);
+  const double ridges = 0.05 * std::sin(a * 3.0 + 0.7) + 0.025 * std::sin(a * 7.0 + 2.0 + d * 3.0);
+  const double rough = 6.0 * vnoise(x / 47.0 + 9.0, y / 47.0 - 3.0) + 1.6 * vnoise(x / 13.0, y / 13.0 + 21.0);
+  return kPeakH * cone * (1.0 + ridges * d * 2.2) + rough * e * (0.2 + d);
+}
+
 double baseTerrain(double x, double y) {
   return 6.5 * vnoise(x / 210.0 + 3.1, y / 210.0 - 7.7) + 2.0 * vnoise(x / 80.0, y / 80.0 + 11.0) +
          0.35 * vnoise(x / 23.0 + 5.0, y / 23.0);
@@ -193,7 +207,7 @@ void World::build() {
   // Base terrain, flattened towards the test pad.
   std::vector<float> dist(size_t(N) * N, 1e9f), roadH(size_t(N) * N, 0.f);
   auto wx = [](int i) { return double(i) - kHalf; };
-  auto baseAt = [](double x, double y) { return baseTerrain(x, y) * padBlend(x, y); };
+  auto baseAt = [](double x, double y) { return baseTerrain(x, y) * padBlend(x, y) + mountain(x, y); };
 
   // A wavy closed country road around the pad.
   Road loop;
@@ -268,7 +282,89 @@ void World::build() {
   connector(1.0);
   connector(-1.0);
 
+  // ---- The tracks up the mountain. Each is walked up the slope step by step: traversing, climbing at a set
+  // grade, and swinging round in a hairpin at the end of each traverse.
+  {
+    const Road& lp = roads_[0];
+    const auto climb = [&](double a0, double range, double grade, double turnR, std::vector<RoadPoint>& pts) {
+      // phi is the direction of travel against the contour: 0 along it one way, pi the other way, and
+      // pi/2 straight up the hill. A hairpin is phi swinging from one to the other at a fixed radius.
+      double r = kPeakR * 0.96, a = a0, phi = 0.0, phiTarget = 0.0;
+      constexpr double kStep = 1.4;
+      while (r > 16.0) {
+        phi += clampd(phiTarget - phi, -kStep / turnR, kStep / turnR);
+        const double along = std::cos(phi), up = std::sin(phi);
+        a += along * kStep * std::sqrt(1.0 - grade * grade) / std::max(r, 12.0);
+        r -= kStep * std::max(up, grade * (1.0 - std::fabs(up)));
+        const double limit = range * clampd(r / (kPeakR * 0.5), 0.25, 1.0);
+        if (a > a0 + limit) phiTarget = PI;
+        if (a < a0 - limit) phiTarget = 0.0;
+        const double x = kPeakX + std::cos(a) * r, y = kPeakY + std::sin(a) * r;
+        pts.push_back({x, y, baseAt(x, y)});
+      }
+    };
+    const auto finish = [&](std::vector<RoadPoint>& raw, double halfWidth, double maxGrade) {
+      // Graded: the track does not follow every lump of the hillside, and is never steeper than it was
+      // built for. Where the hill differs, the bank is cut away or filled up.
+      Road t;
+      t.trail = true;
+      t.halfWidth = halfWidth;
+      const int n = int(raw.size());
+      std::vector<double> z(static_cast<size_t>(n));
+      for (int i = 0; i < n; i++) {
+        double sum = 0;
+        for (int j = -22; j <= 22; j++) sum += raw[size_t(std::clamp(i + j, 0, n - 1))].z;
+        z[size_t(i)] = sum / 45.0;
+      }
+      const auto dist = [&](int i) { return std::hypot(raw[size_t(i)].x - raw[size_t(i - 1)].x, raw[size_t(i)].y - raw[size_t(i - 1)].y); };
+      for (int pass = 0; pass < 3; pass++) {
+        for (int i = 1; i < n; i++) z[size_t(i)] = clampd(z[size_t(i)], z[size_t(i - 1)] - maxGrade * dist(i), z[size_t(i - 1)] + maxGrade * dist(i));
+        for (int i = n - 2; i >= 0; i--) z[size_t(i)] = clampd(z[size_t(i)], z[size_t(i + 1)] - maxGrade * dist(i + 1), z[size_t(i + 1)] + maxGrade * dist(i + 1));
+      }
+      for (int i = 0; i < n; i++) t.pts.push_back({raw[size_t(i)].x, raw[size_t(i)].y, z[size_t(i)]});
+      roads_.push_back(t);
+    };
+    const auto connect = [&](const RoadPoint& from, double a, std::vector<RoadPoint>& pts) {
+      const double tx = kPeakX + std::cos(a) * kPeakR * 0.96, ty = kPeakY + std::sin(a) * kPeakR * 0.96;
+      const int n = int(std::hypot(tx - from.x, ty - from.y) / 1.4);
+      for (int i = 0; i < n; i++) {
+        const double t = double(i) / n;
+        const double x = lerpd(from.x, tx, t) + 16.0 * std::sin(t * 9.0) * std::sin(t * PI);
+        const double y = lerpd(from.y, ty, t) - 16.0 * std::sin(t * 9.0) * std::sin(t * PI);
+        pts.push_back({x, y, baseAt(x, y)});
+      }
+    };
+    const size_t cnt = lp.pts.size();
+    const RoadPoint& gate = lp.pts[cnt / 8];  // the point of the loop that faces the mountain
+    const double aFace = std::atan2(gate.y - kPeakY, gate.x - kPeakX);
+    // The switchbacks: long traverses at a steady 14 %.
+    std::vector<RoadPoint> easy;
+    connect(gate, aFace, easy);
+    const size_t foot = easy.size();
+    climb(aFace, 1.05, 0.14, 12.0, easy);
+    // The hard way: short and steep, about 35 %, straight up the other flank.
+    std::vector<RoadPoint> hard;
+    const double aHard = aFace - 1.55;
+    {
+      // Starts from the same foot, round the bottom of the mountain.
+      for (double a = aFace; a > aHard; a -= 1.4 / (kPeakR * 0.97)) {
+        const double x = kPeakX + std::cos(a) * kPeakR * 0.97, y = kPeakY + std::sin(a) * kPeakR * 0.97;
+        hard.push_back({x, y, baseAt(x, y)});
+      }
+      climb(aHard, 0.34, 0.33, 9.0, hard);
+    }
+    finish(easy, 2.9, 0.20);
+    finish(hard, 2.3, 0.48);
+    const Road& e = roads_[roads_.size() - 2];
+    const auto heading = [&](size_t i) { return std::atan2(e.pts[i + 3].y - e.pts[i].y, e.pts[i + 3].x - e.pts[i].x); };
+    places_.push_back({"Testgelände", -90, 0, 0});
+    places_.push_back({"Bergfuß", e.pts[foot - 40].x, e.pts[foot - 40].y, heading(foot - 40)});
+    const size_t top = e.pts.size() - 8;
+    places_.push_back({"Gipfel", e.pts[top].x, e.pts[top].y, heading(top - 3)});
+  }
+
   // Rasterise roads into the distance/height fields.
+  std::vector<u8> onTrail(size_t(N) * N, 0);
   for (const Road& r : roads_) {
     const size_t cnt = r.pts.size();
     const size_t segs = r.closed ? cnt : cnt - 1;
@@ -293,6 +389,7 @@ void World::build() {
             const double tl = std::sqrt(l2);
             const double side = clampd((-dy * px + dx * py) / tl, -(r.halfWidth + 2.0), r.halfWidth + 2.0);
             roadH[id] = float(lerpd(a.z, b.z, t) + side * lerpd(a.bank, b.bank, t));
+            onTrail[id] = r.trail ? 1 : 0;
           }
         }
     }
@@ -305,15 +402,26 @@ void World::build() {
       const double d = dist[id];
       const double blend = 1.0 - smoothstepd(0.0, 13.0, d);
       h_[id] = float(lerpd(baseAt(x, y), double(roadH[id]), blend));
+      const bool trail = onTrail[id] != 0;
       const double pr = std::hypot(x, y);
-      if (d < 0.3)
-        surf_[id] = SURF_ASPHALT;
-      else if (d < 2.0)
+      if (trail && d < 1.6) {
+        // Rutted and lumpy: this is what the long travel is for.
         surf_[id] = SURF_GRAVEL;
-      else if (pr < kPadR)
+        h_[id] += float(0.09 * (vnoise(x / 2.1, y / 2.1) - 0.5) + 0.05 * (vnoise(x / 0.9 + 4.0, y / 0.9) - 0.5));
+      } else if (!trail && d < 0.3) {
+        surf_[id] = SURF_ASPHALT;
+      } else if (d < 2.0) {
+        surf_[id] = SURF_GRAVEL;
+      } else if (pr < kPadR) {
         surf_[id] = SURF_CONCRETE;
-      else
+      } else {
         surf_[id] = SURF_GRASS;
+        // Above the tree line the mountain turns to bare rock, and to snow at the top.
+        const double z = h_[id];
+        const double line = vnoise(x / 31.0, y / 31.0 + 8.0) * 22.0;
+        if (z > 228.0 + line) surf_[id] = SURF_SNOW;
+        else if (z > 150.0 + line) surf_[id] = SURF_ROCK;
+      }
       if (x > kPaveX0 && x < kPaveX1 && y > kPaveY0 && y < kPaveY1) surf_[id] = SURF_PAVE;
       if (x > kWashX0 && x < kWashX1 && y > kWashY0 && y < kWashY1) surf_[id] = SURF_GRAVEL;
       if (x > -130 && x < -60 && y > -110 && y < -80) surf_[id] = SURF_GRASS;  // low-grip patch
@@ -344,6 +452,37 @@ void World::build() {
       if (!clear) continue;
       const double zb = height(x, y);
       trees_.push_back({x, y, zb});
+    }
+  }
+
+  // The mountain's woods and boulders, kept clear of the tracks.
+  {
+    u32 seed = 424242;
+    auto rnd = [&](double a, double b) {
+      seed = seed * 1664525u + 1013904223u;
+      return a + (b - a) * double(seed >> 16) / 65535.0;
+    };
+    const auto clearOfTracks = [&](double x, double y, double margin) {
+      for (const Road& r : roads_)
+        for (size_t k = 0; k < r.pts.size(); k += 3)
+          if (std::hypot(r.pts[k].x - x, r.pts[k].y - y) < r.halfWidth + margin) return false;
+      return true;
+    };
+    for (int n = 0; n < 340; n++) {
+      const double a = rnd(0, 6.283), rr = kPeakR * std::sqrt(rnd(0.12, 1.25));
+      const double x = kPeakX + std::cos(a) * rr, y = kPeakY + std::sin(a) * rr;
+      if (std::fabs(x) > kHalf - 8 || std::fabs(y) > kHalf - 8) continue;
+      const double zb = height(x, y);
+      if (zb > 135.0 || !clearOfTracks(x, y, 5.0)) continue;
+      trees_.push_back({x, y, zb});
+    }
+    for (int n = 0; n < 300; n++) {
+      const double a = rnd(0, 6.283), rr = kPeakR * std::sqrt(rnd(0.0, 0.92));
+      const double x = kPeakX + std::cos(a) * rr, y = kPeakY + std::sin(a) * rr;
+      const double size = 0.4 + std::pow(rnd(0, 1), 2.5) * 3.2;
+      if (!clearOfTracks(x, y, 2.0 + size)) continue;
+      const float g = float(rnd(0.28, 0.46));
+      addBox({x, y, height(x, y) + size * 0.25}, {size * rnd(0.7, 1.3), size * rnd(0.7, 1.2), size * rnd(0.5, 0.9)}, rnd(0, 3.1), rnd(-0.3, 0.3), SURF_ROCK, g, g * 0.97f, g * 0.92f);
     }
   }
 

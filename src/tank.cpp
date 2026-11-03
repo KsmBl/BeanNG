@@ -17,7 +17,7 @@ constexpr double kSprocketX = 6.46, kSprocketZ = 0.66;
 constexpr double kIdlerX = 0.32, kIdlerZ = 0.66, kIdlerR = 0.30;
 constexpr double kTopRunZ = 1.03;
 
-constexpr double kPivotYawRate = 0.75;
+constexpr double kPivotYawRate = 1.1;
 constexpr double kRatios[5] = {8.2, 3.6 * 4.2 / 1.0, 2.2 * 4.2, 1.45 * 4.2, 4.2};  // reverse, 1st..4th, to the sprocket
 
 double engineTorque(double rpm) {
@@ -445,10 +445,11 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   // from one track to the other. It works at a standstill too, which is what makes a pivot turn.
   const double Tdrive = Tconv * multiply * ratio * 0.88;
   const double B = 2.7;  // distance between the tracks
-  const double yawWant = steerAct * (absV < 3.0 ? kPivotYawRate : clampd(kPivotYawRate * 4.5 / absV, 0.22, kPivotYawRate));
+  // As tight as the grip allows at speed, about 0.8 g; a tank has no steering lock to hold it back.
+  const double yawWant = steerAct * (absV < 5.0 ? kPivotYawRate : clampd(7.5 / absV, 0.32, kPivotYawRate));
   const double dWant = yawWant * B / kSprocketR;  // right minus left track speed
   const double dNow = trackOmega[1] - trackOmega[0];
-  const double Tsteer = clampd((dWant - dNow) * 40000.0, -200000.0, 200000.0);
+  const double Tsteer = clampd((dWant - dNow) * 60000.0, -520000.0, 520000.0);
   const double Tside[2] = {0.5 * Tdrive - 0.5 * Tsteer, 0.5 * Tdrive + 0.5 * Tsteer};
 
   // Track forces, then the tracks themselves.
@@ -481,11 +482,16 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     V3 t = fwd - nBest * dot(fwd, nBest);
     t = norm(t);
     const V3 l = cross(nBest, t);
-    const double mu = 1.05 * surfaceFriction(surf);
+    // Rubber pads and a long footprint: a track holds where a tyre would slide, most of all on loose ground.
+    const double mu = 1.30 * (surf == SURF_ASPHALT || surf == SURF_CONCRETE ? surfaceFriction(surf) : 0.5 * (1.0 + surfaceFriction(surf)));
     const double Vt = trackOmega[s] * kSprocketR;
     const double slipX = Vt - dot(vC, t);
-    const double Fx = mu * Fn * clampd(slipX / 0.45, -1, 1);
-    const double Fy = -0.72 * mu * Fn * clampd(dot(vC, l) / 0.22, -1, 1);  // links scrub sideways more easily
+    // One grip for both directions: a track slipping along its length has none left to hold it sideways, which
+    // is what lets a tank turn at all. Taken separately, the scrub of 14 wheels would simply hold it straight.
+    const double sx = slipX / 0.30, sy = dot(vC, l) / 0.28;
+    const double sn = std::max(1.0, std::hypot(sx, sy));
+    const double Fx = mu * Fn * sx / sn;
+    const double Fy = -0.85 * mu * Fn * sy / sn;
     const V3 F = nBest * Fn + t * Fx + l * Fy;
     sim.force[w.in] += F * 0.5;
     sim.force[w.out] += F * 0.5;
@@ -498,7 +504,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     double Fn = 0;
     for (const RoadWheel& w : wheels)
       if ((w.left ? 0 : 1) == s) Fn += w.Fn;
-    const double Tres = (0.045 * Fn * kSprocketR + 250.0 + brakeAct * 90000.0 + in.handbrake * 90000.0);
+    const double Tres = (0.022 * Fn * kSprocketR + 120.0 + brakeAct * 90000.0 + in.handbrake * 90000.0);
     const double dv = Tres * dt / kTrackInertia;
     om = std::fabs(om) <= dv ? 0.0 : om - std::copysign(dv, om);
     trackOmega[s] = clampd(om, -60.0, 60.0);

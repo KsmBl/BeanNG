@@ -1964,6 +1964,290 @@ int main(int argc, char** argv) {
     report("durch die Hindernisse");
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "hummerbuckle")) {
+    printf("== Hummer: wie leicht knicken die Raeder? (bleibende Aenderung) ==\n");
+    struct B {
+      World w;
+      Sim s;
+      Vehicle c;
+      CarRig r;
+    };
+    auto make = [](V3 at, bool flat) {
+      B* b = new B();
+      b->w.build();
+      if (flat) b->w.flatten();
+      b->s.world = &b->w;
+      b->c = buildHummer(b->s, at, &b->r);
+      b->s.finalize();
+      settleVehicle(b->s, b->c, 4.0);
+      return b;
+    };
+    auto attitude = [](B* b, double out[4]) {
+      for (int i = 0; i < 4; i++) {
+        const Wheel& w = b->c.wheels[size_t(i)];
+        const V3 ax = norm(b->s.pos[w.axOut] - b->s.pos[w.axIn]);
+        out[i] = std::asin(clampd(dot(ax, b->c.up), -1, 1)) * 57.3 * (w.left ? 1.0 : -1.0);
+      }
+    };
+    auto run = [](B* b, double sec, std::function<void(double, Controls&)> fn) {
+      Controls c;
+      for (int k = 0, n = int(sec / kDt); k < n; k++) {
+        fn(k * kDt, c);
+        b->s.forces(kDt);
+        b->c.update(b->s, c, kDt);
+        b->s.finish(kDt);
+      }
+      b->s.events.clear();
+    };
+    auto report = [&](const char* name, B* b, double a0[4]) {
+      run(b, 3.0, [](double, Controls& c) { c.brake = 1; c.steer = 0; });
+      double a[4], worst = 0;
+      attitude(b, a);
+      for (int i = 0; i < 4; i++) worst = std::max(worst, std::fabs(a[i] - a0[i]));
+      float dent = 0;
+      int flat = 0;
+      for (const Wheel& w : b->c.wheels) {
+        for (float d : w.dent) dent = std::max(dent, d);
+        flat += w.deflate > 0;
+      }
+      printf("  %-30s Sturz +%4.1f Grad  Delle %4.1f mm  platt %d  verformt %6.1f kJ  gerissen %u  Meldung: %s\n", name, worst, dent * 1e3, flat, b->s.plasticEnergy / 1e3, b->s.brokenBeams, b->c.lastDamage.c_str());
+      delete b;
+    };
+    for (double h : {0.5, 1.0, 2.0, 3.5}) {
+      B* b = make({-400, 0, 0}, true);
+      double a0[4];
+      attitude(b, a0);
+      const Obj o = b->s.objs[0];
+      for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) b->s.pos[i].z += h;
+      run(b, 3.0, [](double, Controls&) {});
+      char nm[64];
+      snprintf(nm, sizeof nm, "Sprung aus %.1f m", h);
+      report(nm, b, a0);
+    }
+    // Over the kerbs at y = 95, the speed bumps at y = 70, and into the wall end.
+    for (double kmh : {30.0, 60.0, 90.0}) {
+      B* b = make({-46, 91, 0}, false);
+      double a0[4];
+      attitude(b, a0);
+      const Obj o = b->s.objs[0];
+      for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) b->s.vel[i] = V3{std::cos(0.45) * kmh / 3.6, std::sin(0.45) * kmh / 3.6, 0};
+      b->c.presetRolling(kmh / 3.6, 2);
+      run(b, 2.0, [](double, Controls&) {});
+      char nm[64];
+      snprintf(nm, sizeof nm, "schraeg ueber Bordstein %.0f", kmh);
+      report(nm, b, a0);
+    }
+    for (double kmh : {15.0, 30.0, 50.0}) {
+      B* b = make({-20, 92, 0}, false);
+      double a0[4];
+      attitude(b, a0);
+      const Obj o = b->s.objs[0];
+      for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) b->s.vel[i] = V3{0, kmh / 3.6, 0};
+      run(b, 1.5, [](double, Controls&) {});
+      char nm[64];
+      snprintf(nm, sizeof nm, "seitlich in Bordstein %.0f", kmh);
+      report(nm, b, a0);
+    }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "tankturn")) {
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    w->clearBoxes();
+    w->flatten();
+    w->pave();
+    s->world = w;
+    Tank t = buildLeopard(*s, V3{-120, 0, 0}, &r);
+    s->finalize();
+    t.settle(*s, 3.0);
+    auto run = [&](const char* name, double kmh, double sec) {
+      Controls c;
+      double prev = std::atan2(t.fwd.y, t.fwd.x), sum = 0, peak = 0;
+      for (int k = 0, n = int(sec / kDt); k < n; k++) {
+        c.steer = 1;
+        c.throttle = kmh > 1 ? clampd((kmh / 3.6 - t.speed) * 0.8, 0, 1) : 0;
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+        const double h = std::atan2(t.fwd.y, t.fwd.x);
+        double d = h - prev;
+        while (d > PI) d -= 2 * PI;
+        while (d < -PI) d += 2 * PI;
+        sum += d;
+        peak = std::max(peak, std::fabs(d) / kDt);
+        prev = h;
+      }
+      printf("  %-20s %5.0f Grad in %.0f s (Schnitt %.2f rad/s), Ende: %.0f km/h, Ketten %.1f / %.1f m/s, Quer %.2f g\n", name, sum * 57.3, sec, sum / sec, t.speed * 3.6, t.trackOmega[0] * Tank::kSprocketR, t.trackOmega[1] * Tank::kSprocketR, t.latAcc / 9.81);
+    };
+    run("Wenden im Stand", 0, 4);
+    {
+      Controls c;
+      for (int k = 0; k < 2000 * 2; k++) {
+        c.brake = 1;
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+      }
+    }
+    run("voll lenken 20 km/h", 20, 5);
+    run("voll lenken 40 km/h", 40, 5);
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "hummerrun")) {
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    w->clearBoxes();
+    w->flatten();
+    w->pave();
+    s->world = w;
+    Vehicle c0 = buildHummer(*s, {-400, 0, 0}, &r);
+    s->finalize();
+    settleVehicle(*s, c0, 4.0);
+    Controls c;
+    c.throttle = 1;
+    for (int i = 0; i < 2000 * 20; i++) {
+      s->forces(kDt);
+      c0.update(*s, c, kDt);
+      s->finish(kDt);
+      if (i % 1600 == 1599) {
+        printf(" t %4.1f v %5.1f g %d ph %d rpm %4.0f input %4.0f th %.2f boost %.2f T %5.0f clutch %.2f | om*R FL %5.1f RL %5.1f | Fx %6.0f %6.0f %6.0f %6.0f | Fz %5.0f %5.0f | drive %6.0f %6.0f esp %5.0f %5.0f | twist %.3f %.3f | asr %d carrier %.1f\n", (i + 1) * kDt, c0.speed * 3.6, c0.gear, c0.shiftPhase, c0.rpm(), c0.inputOmega * 9.55, c0.throttleAct, c0.boost, c0.combustionTorque, c0.clutch, c0.wheels[0].omega * c0.wheels[0].R, c0.wheels[2].omega * c0.wheels[2].R, c0.wheels[0].Fx, c0.wheels[1].Fx, c0.wheels[2].Fx, c0.wheels[3].Fx, c0.wheels[0].Fz, c0.wheels[2].Fz, c0.wheels[0].driveT, c0.wheels[2].driveT, c0.wheels[0].espTorque, c0.wheels[2].espTorque, c0.shaftAngle[0], c0.shaftAngle[2], c0.tcsActive, c0.carrierOmega);
+      }
+    }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "hummer")) {
+    printf("== Hummer H1 ==\n");
+    struct B {
+      World w;
+      Sim s;
+      Vehicle c;
+      CarRig r;
+    };
+    auto make = [](V3 at, bool flat) {
+      B* b = new B();
+      b->w.build();
+      if (flat) {
+        b->w.clearBoxes();
+        b->w.flatten();
+        b->w.pave();
+      }
+      b->s.world = &b->w;
+      b->c = buildHummer(b->s, at, &b->r);
+      b->s.finalize();
+      settleVehicle(b->s, b->c, 4.0);
+      return b;
+    };
+    auto step = [&](B* x, double sec, std::function<void(double, Controls&)> fn) {
+      Controls c;
+      for (int i = 0, n = int(sec / kDt); i < n; i++) {
+        fn(i * kDt, c);
+        x->s.forces(kDt);
+        x->c.update(x->s, c, kDt);
+        x->s.finish(kDt);
+        c.fire = false;
+        c.requestGear = 99;
+      }
+      x->s.events.clear();
+    };
+    B* a = make({-400, 0, 0}, true);
+    double low = 9;
+    for (u32 i = 0; i < a->s.objs[0].nodeCount; i++)
+      if (a->s.flags[i] & NF_COLLIDE && !(a->s.flags[i] & NF_WHEEL)) low = std::min(low, a->s.pos[i].z);
+    printf("  Masse %.0f kg  Eigenwert %.2f  Bodenfreiheit Struktur %.3f m  Radlast %.0f %.0f %.0f %.0f  Federweg L %.3f (nom %.3f)  Hub z %.3f  verformt %.0f J  gerissen %u  guard %llu\n", a->c.totalMass, a->s.maxEigenvalue(0) * 0.25 * kDt * kDt, low, a->c.wheels[0].Fz, a->c.wheels[1].Fz, a->c.wheels[2].Fz, a->c.wheels[3].Fz, a->c.axle[0].s[0].L, a->c.axle[0].s[0].Lnom, a->c.wheels[0].hub.z, a->s.plasticEnergy, a->s.brokenBeams, (unsigned long long)a->s.clampedSteps);
+    double t60 = -1, t100 = -1, tn = 0, vm = 0;
+    step(a, 45, [&](double, Controls& c) {
+      c.throttle = 1;
+      tn += kDt;
+      const double k = a->c.speed * 3.6;
+      vm = std::max(vm, k);
+      if (t60 < 0 && k > 60) t60 = tn;
+      if (t100 < 0 && k > 100) t100 = tn;
+    });
+    printf("  0-60 %.1f s  0-100 %.1f s (echt etwa 13)  Spitze %.0f km/h (echt um 130)  Gang %d  %.0f U/min\n", t60, t100, vm, a->c.gear, a->c.rpm());
+    {
+      B* b = make({-400, 0, 0}, true);
+      const Obj& o = b->s.objs[0];
+      for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) b->s.vel[i] = V3{100 / 3.6, 0, 0};
+      b->c.presetRolling(100 / 3.6, 3);
+      const V3 p0 = b->c.cog;
+      step(b, 8, [&](double, Controls& c) { c.brake = 1; });
+      printf("  100-0 %.1f m\n", len(b->c.cog - p0));
+    }
+    // The tracks: a pursuit driver from the mountain's foot to the top, for both of them.
+    for (int trailIdx = 0; trailIdx < 2; trailIdx++) {
+      for (int low2 = 0; low2 < 2; low2++) {
+        B* b = make({-90, 0, 0}, false);
+        b->c.tune.lowRange = low2 != 0;
+        b->c.tune.lockDiffs = low2 != 0;
+        const auto& roads = b->w.roads();
+        const Road& tr = roads[roads.size() - 2 + size_t(trailIdx)];
+        // Find where the track really starts to climb.
+        size_t start = 0;
+        for (size_t i = 0; i < tr.pts.size(); i++)
+          if (tr.pts[i].z > 3.0) {
+            start = i;
+            break;
+          }
+        double maxG = 0;
+        for (size_t i = start; i + 20 < tr.pts.size(); i++) {
+          double run = 0;
+          for (size_t k = i; k < i + 20; k++) run += std::hypot(tr.pts[k + 1].x - tr.pts[k].x, tr.pts[k + 1].y - tr.pts[k].y);
+          maxG = std::max(maxG, std::fabs(tr.pts[i + 20].z - tr.pts[i].z) / std::max(run, 1.0));
+        }
+        const auto& s0 = tr.pts[start];
+        const auto& s1 = tr.pts[start + 6];
+        const double yaw = std::atan2(s1.y - s0.y, s1.x - s0.x), cy = std::cos(yaw), sy = std::sin(yaw);
+        const Obj oo = b->s.objs[0];
+        const V3 at{s0.x, s0.y, b->w.height(s0.x, s0.y) + 0.30};
+        for (u32 k = oo.nodeStart; k < oo.nodeStart + oo.nodeCount; k++) {
+          const V3 q = b->s.pos[k] - V3{-90, 0, 0};
+          b->s.pos[k] = at + V3{cy * q.x - sy * q.y, sy * q.x + cy * q.y, q.z};
+          b->s.vel[k] = {};
+        }
+        step(b, 1.0, [&](double, Controls& c) { c.brake = 1; });
+        size_t best = start;
+        double tTop = -1, tt = 0, zMax = -1e9, offMax = 0;
+        const double z0 = b->c.cog.z;
+        step(b, 300, [&](double, Controls& c) {
+          tt += kDt;
+          double bd = 1e18;
+          // Follows the track forward only: the next traverse may lie just across the bank.
+          const size_t hi = std::min(best + 24, tr.pts.size() - 1);
+          for (size_t k = best; k <= hi; k++) {
+            const double d = std::hypot(tr.pts[k].x - b->c.cog.x, tr.pts[k].y - b->c.cog.y);
+            if (d < bd) {
+              bd = d;
+              best = k;
+            }
+          }
+          offMax = std::max(offMax, bd);
+          zMax = std::max(zMax, b->c.cog.z);
+          const size_t aim = std::min(best + size_t((5.0 + std::fabs(b->c.speed) * 0.35) / 1.4), tr.pts.size() - 1);
+          const RoadPoint& g = tr.pts[aim];
+          double err = std::atan2(g.y - b->c.cog.y, g.x - b->c.cog.x) - std::atan2(b->c.fwd.y, b->c.fwd.x);
+          while (err > PI) err -= 2 * PI;
+          while (err < -PI) err += 2 * PI;
+          c.steer = clampd(err * 2.2, -1, 1);
+          // Looks further ahead for the next bend, and slows for it.
+          const RoadPoint& far = tr.pts[std::min(best + 22, tr.pts.size() - 1)];
+          double bend = std::atan2(far.y - g.y, far.x - g.x) - std::atan2(b->c.fwd.y, b->c.fwd.x);
+          while (bend > PI) bend -= 2 * PI;
+          while (bend < -PI) bend += 2 * PI;
+          const double vT = std::fabs(bend) > 0.5 || std::fabs(err) > 0.3 ? 3.5 : 9.0;
+          c.throttle = clampd((vT - b->c.speed) * 0.7, 0, 1);
+          c.brake = clampd((b->c.speed - vT - 0.5) * 0.3, 0, 0.8);
+          if (tTop < 0 && best + 12 >= tr.pts.size()) tTop = tt;
+        });
+        printf("  %s, %s: Spur-Hoehe %.0f..%.0f m, max Steigung %.0f %%, Strecke %.1f km | Gipfel nach %.0f s, erreicht z +%.0f m, Fortschritt %.0f %%, abseits max %.1f m, verformt %.1f kJ, Reifen platt %d, guard %llu\n", trailIdx == 0 ? "Serpentinen" : "Steilpfad", low2 ? "Untersetzung+Sperre" : "normal", tr.pts[start].z, tr.pts.back().z, maxG * 100, double(tr.pts.size()) * 1.4 / 1000.0, tTop, zMax - z0, 100.0 * (double(best) - double(start)) / double(tr.pts.size() - start), offMax, b->s.plasticEnergy / 1e3, int(b->c.wheels[0].deflate > 0) + int(b->c.wheels[1].deflate > 0) + int(b->c.wheels[2].deflate > 0) + int(b->c.wheels[3].deflate > 0), (unsigned long long)b->s.clampedSteps);
+        delete b;
+      }
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "one1grip")) {
     // Pulling away on every surface, full throttle, with all the aids on.
     for (int surface = 0; surface < 3; surface++) {

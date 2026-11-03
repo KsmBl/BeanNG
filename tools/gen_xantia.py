@@ -22,7 +22,7 @@ from shapely.ops import unary_union
 
 # ---- Materials, shared with src/carmesh.h.
 MATS = ["paint", "glass", "black", "liner", "chrome", "lens", "tail", "amber", "rubber", "alloy",
-        "fabric", "carpet", "plate", "metal", "alu", "lhm", "dark", "disc", "white", "reflector", "rust", "olive", "olive2", "track", "pearl", "carbon", "accent"]
+        "fabric", "carpet", "plate", "metal", "alu", "lhm", "dark", "disc", "white", "reflector", "rust", "olive", "olive2", "track", "pearl", "carbon", "accent", "sand"]
 M = {n: i for i, n in enumerate(MATS)}
 
 

@@ -64,13 +64,14 @@ constexpr int kMaxStepsPerSlice = 80;  // never spiral: if we fall behind, time 
 V3 kSpawn{-90, 0, 0};
 
 // Everything the input thread hands to the physics thread.
-enum VehicleKind { VK_XANTIA, VK_LEOPARD, VK_ONE1, VK_COUNT };
+enum VehicleKind { VK_XANTIA, VK_LEOPARD, VK_ONE1, VK_HUMMER, VK_COUNT };
 
 struct SharedInput {
   Tuning tuning;
   double tankReload = 4;
   Controls c;
   bool reset = false, repair = false, resetWorld = false, paused = false;
+  int startPlace = 0;
   double timeScale = 1.0;
   int grabNode = -1;
   V3 grabTarget;
@@ -85,6 +86,7 @@ struct Game {
   Sim simStart;
   Vehicle carStart;
   int kind = VK_XANTIA;
+  int startPlace = 0;
   Tank tank, tankStart;
 
   std::mutex inputMutex;
@@ -168,6 +170,26 @@ struct Game {
       for (int s = 0; s < 2; s++) {
         Gauge g;
         g.show = {nullptr, s == 0 ? 4.f : 84.f, 34.f, 12.f, 170.f, 0.f};
+        gauges.push_back(g);
+      }
+      return;
+    }
+    if (kind == VK_HUMMER) {
+      addPart(nullptr, 6, 2, 88, 66, "body", kAll0, 1.46, 0.07, 0);
+      addPart(nullptr, 2, 70, 11, 42, "door_l", kAll0, kAll1, 0.09, 0);
+      addPart(nullptr, 87, 70, 11, 42, "door_r", kAll0, kAll1, 0.09, 0);
+      addPart(nullptr, 14, 70, 72, 104, "body", 1.46, 3.7, 0.06, 0);
+      addPart(nullptr, 4, 176, 92, 58, "body", 3.7, 99, 0.07, 0);
+      addPart(nullptr, 24, 4, 52, 8, "radiator", kAll0, kAll1, 0.06, 3);
+      addPart(nullptr, 26, 14, 48, 34, "engine", kAll0, kAll1, 0.05, 1);
+      addPart(nullptr, 34, 50, 32, 26, "gearbox", kAll0, kAll1, 0.05, 2);
+      addPart(nullptr, 22, 178, 56, 20, "tank", kAll0, kAll1, 0.05, 4);
+      const float wxh[2] = {0.f, 83.f};
+      for (int i = 0; i < 4 && i < int(car.wheels.size()); i++) {
+        const Wheel& w = car.wheels[size_t(i)];
+        Gauge g;
+        g.show = {nullptr, w.left ? wxh[0] : wxh[1], w.front ? 22.f : 186.f, 17.f, 40.f, 0.f};
+        g.wheel = i;
         gauges.push_back(g);
       }
       return;
@@ -450,6 +472,21 @@ struct Game {
         sim.restoreObjects(simStart, kind == VK_LEOPARD ? 2 : 1);
         car = carStart;
         tank = tankStart;
+        // Set down wherever the driver chose to start from, turned to face along the way.
+        if (startPlace > 0 && startPlace < int(world.places().size())) {
+          const World::Place& pl = world.places()[size_t(startPlace)];
+          const double cy = std::cos(pl.yaw), sy = std::sin(pl.yaw);
+          const u32 count = kind == VK_LEOPARD ? 2 : 1;
+          for (u32 oi = 0; oi < count; oi++) {
+            const Obj& o0 = sim.objs[oi];
+            for (u32 i = o0.nodeStart; i < o0.nodeStart + o0.nodeCount; i++) {
+              const V3 q = sim.pos[i] - V3{kSpawn.x, kSpawn.y, kSpawn.z};
+              sim.pos[i] = V3{pl.x + cy * q.x - sy * q.y, pl.y + sy * q.x + cy * q.y, world.height(pl.x, pl.y) + 0.45 + q.z};
+            }
+          }
+          resetVisuals = true;
+          return;
+        }
         // If the start itself has been blown into a crater, the car still has to come down on the ground.
         const double dip = world.height(kSpawn.x, kSpawn.y) - kSpawn.z;
         if (dip > 0.02) {
@@ -458,6 +495,7 @@ struct Game {
         }
         resetVisuals = true;
       };
+      startPlace = in.startPlace;
       if (in.resetWorld) {
         world.clearCraters();
         sim = simStart;
@@ -554,7 +592,10 @@ struct DriveFeel {
       thump = std::max(thump, clampd((delta - 2500.0) / 10000.0, 0, 1));
       fzLP[i] += (fz - fzLP[i]) * clampd(dt / 0.22, 0, 1);
     }
-    const double target = clampd(act / 4.0 / 2600.0, 0, 1);
+    // 42 tonnes hardly notice what shakes a car: a heavy vehicle reads its loads on a far coarser scale.
+    const double heavy = s.tank ? 0.14 : 1.0;
+    thump *= heavy;
+    const double target = clampd(act / 4.0 / 2600.0 * heavy, 0, 1);
     rough += (target - rough) * clampd(dt / (target > rough ? 0.04 : 0.25), 0, 1);
 
     const double dp = valid ? std::max(s.plastic - lastPlastic, 0.0) : 0.0;
@@ -750,8 +791,8 @@ struct SoundDriver {
     f.fire = s.scorch > 0 ? float(clampd(s.scorch, 0, 1)) : 0.f;
     if (s.conventional) {
       f.cylinders = 8;
-      f.exhaustPitch = 1.15f;
-      f.turbo = float(s.boost);
+      f.exhaustPitch = s.rpmMax < 5000 ? 0.72f : 1.15f;  // a big slow diesel, or the One:1
+      f.turbo = float(s.boost) * (s.rpmMax < 5000 ? 0.45f : 1.0f);
     }
     if (s.tank) {
       f.cylinders = 10;
@@ -938,6 +979,7 @@ static int playSession(int kind, bool openMenu) {
   // Script 24 stands on a road, so that the crater goes through the tarmac.
   if (kind == VK_LEOPARD) G.tank = buildLeopard(G.sim, kSpawn, &G.rig);
   else if (kind == VK_ONE1) G.car = buildOne1(G.sim, kSpawn, &G.rig);
+  else if (kind == VK_HUMMER) G.car = buildHummer(G.sim, kSpawn, &G.rig);
   else G.car = buildXantia(G.sim, kSpawn, 0.0, &G.rig);
   populateWorld(G.sim, G.world);
   G.sim.finalize();
@@ -947,7 +989,7 @@ static int playSession(int kind, bool openMenu) {
   G.simStart = G.sim;
   G.carStart = G.car;
   G.tankStart = G.tank;
-  const char* meshFile = kind == VK_LEOPARD ? "assets/leopard.mesh" : (kind == VK_ONE1 ? "assets/one1.mesh" : "assets/xantia.mesh");
+  const char* meshFile = kind == VK_LEOPARD ? "assets/leopard.mesh" : (kind == VK_ONE1 ? "assets/one1.mesh" : (kind == VK_HUMMER ? "assets/hummer.mesh" : "assets/xantia.mesh"));
   if (!G.mesh.load(meshFile)) {
     fprintf(stderr, "%s fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n", meshFile);
     return -1;
@@ -1001,6 +1043,7 @@ static int playSession(int kind, bool openMenu) {
   HudOptions hud;
   hud.crosshair = rig.tank;
   int nextVehicle = -1;
+  int startPlace = 0;
   // Panels: 0 none, 1 vehicle menu, 2 settings.
   enum { PANEL_NONE, PANEL_VEHICLE, PANEL_CAR, PANEL_GAME, PANEL_MAIN, PANEL_KEYS };
   int panelKind = openMenu ? PANEL_MAIN : PANEL_NONE;
@@ -1087,6 +1130,17 @@ static int playSession(int kind, bool openMenu) {
     if (panelKind == PANEL_MAIN) {
       page(menuSpin ? "Losfahren" : "Weiterfahren", [&] { panelKind = PANEL_NONE; menuSpin = false; if (rig.tank) rig.yaw = PI; else rig.yaw = 0; });
       page("Fahrzeug wählen", [&] { openPage(PANEL_VEHICLE); });
+      {
+        char b[64];
+        snprintf(b, sizeof b, "%s", G.world.places()[size_t(startPlace) % G.world.places().size()].name);
+        items.push_back({"Startpunkt", b, -1.f, [&](int) {
+                           startPlace = (startPlace + 1) % int(G.world.places().size());
+                           G.input.startPlace = startPlace;
+                           doReset = true;
+                           panelKind = PANEL_NONE;
+                           menuSpin = false;
+                         }});
+      }
       page("Fahrzeug-Einstellungen", [&] { openPage(PANEL_CAR); });
       page("Spiel-Einstellungen", [&] { openPage(PANEL_GAME); });
       page("Steuerung", [&] { openPage(PANEL_KEYS); });
@@ -1099,11 +1153,16 @@ static int playSession(int kind, bool openMenu) {
       items.push_back({"Citroën Xantia Activa", "V6  ·  190 PS  ·  1,5 t", -1.f, [&](int) {}});
       items.push_back({"Leopard 1", "V10  ·  830 PS  ·  42 t", -1.f, [&](int) {}});
       items.push_back({"Koenigsegg One:1", "V8 Biturbo  ·  1360 PS  ·  1,36 t", -1.f, [&](int) {}});
+      items.push_back({"Hummer H1", "V8 Diesel  ·  300 PS  ·  3,4 t  ·  Allrad", -1.f, [&](int) {}});
     } else if (panelKind == PANEL_CAR) {
       if (kind != VK_LEOPARD) {
         toggle("ABS", tuning.abs, [&] { tuning.abs = !tuning.abs; });
         toggle("ESP", tuning.esp, [&] { tuning.esp = !tuning.esp; });
         toggle("ASR", tuning.tcs, [&] { tuning.tcs = !tuning.tcs; });
+        if (kind == VK_HUMMER) {
+          toggle("Geländeuntersetzung", tuning.lowRange, [&] { tuning.lowRange = !tuning.lowRange; });
+          toggle("Differenzialsperren", tuning.lockDiffs, [&] { tuning.lockDiffs = !tuning.lockDiffs; });
+        }
         if (kind == VK_XANTIA) {
           toggle("Activa", view.activa, [&] { panelEdges.toggleActiva = true; });
           toggle("Hydractive Sport", view.sport, [&] { panelEdges.toggleSport = true; });
@@ -1636,6 +1695,7 @@ static int playSession(int kind, bool openMenu) {
       G.input.reset |= doReset;
       G.input.repair |= doRepair;
       G.input.resetWorld |= doResetWorld;
+      G.input.startPlace = startPlace;
       G.input.paused = paused || (menuPause && !menuSpin);
       G.input.timeScale = timeScale;
       G.input.grabNode = grabNode;
@@ -1830,6 +1890,14 @@ static int playSession(int kind, bool openMenu) {
       cam.up = {0, 0, 1};
       cam.fovY = 42.0 * PI / 180.0;
     }
+    if (scriptMode == 31) {  // a tour of the mountain from far away
+      const double a = 0.2 + double(shotCount) * 1.05;
+      const V3 c{620, 620, 90};
+      cam.target = c;
+      cam.eye = c + V3{std::cos(a) * 760.0, std::sin(a) * 760.0, 160.0};
+      cam.up = {0, 0, 1};
+      cam.fovY = 50.0 * PI / 180.0;
+    }
     if (scriptMode == 25 || scriptMode == 26) {  // the car from outside: walk round it, close to the ground
       const double a = 0.55 + double(shotCount) * PI / 3.0;
       cam.target = view.carCog + V3{0, 0, 0.1};
@@ -1883,7 +1951,7 @@ static int playSession(int kind, bool openMenu) {
         const bool burst = scriptMode == 7 || scriptMode == 8;
         nextShot += burst ? 0.0 : 1.0;
         if (burst && nextShot < 6.0) nextShot = 6.0;
-        if (shotCount >= (burst ? 6 : (scriptMode == 9 || scriptMode == 22 || scriptMode == 25 || scriptMode == 26 ? 7 : (scriptMode == 12 ? 13 : 19)))) quit = true;
+        if (shotCount >= (burst ? 6 : (scriptMode == 9 || scriptMode == 22 || scriptMode == 25 || scriptMode == 26 || scriptMode == 31 ? 7 : (scriptMode == 12 ? 13 : 19)))) quit = true;
         if (scriptMode == 14 && tNow > 6.0) quit = true;
         if (scriptMode == 13 && view.carCog.x > 93 && std::fabs(view.speedKmh) < 2) quit = true;
       }
@@ -1932,7 +2000,7 @@ int main(int argc, char** argv) {
     }
     if (!strcmp(argv[i], "--vehicle") && i + 1 < argc) {
       i++;
-      vehicle = !strcmp(argv[i], "leopard") ? VK_LEOPARD : (!strcmp(argv[i], "one1") ? VK_ONE1 : VK_XANTIA);
+      vehicle = !strcmp(argv[i], "leopard") ? VK_LEOPARD : (!strcmp(argv[i], "one1") ? VK_ONE1 : (!strcmp(argv[i], "hummer") ? VK_HUMMER : VK_XANTIA));
     }
     if (!strcmp(argv[i], "--help")) {
       printf("beanng [--shots DIR --script N]\n");

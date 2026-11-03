@@ -18,7 +18,6 @@ double fullLoadTorque(double rpm) {
 // Rotating inertias [kg m^2] and shaft rates [Nm/rad]. Plausible for this size of car, not OEM data.
 constexpr double kDiscInertia = 0.012;    // clutch disc
 constexpr double kInputInertia = 0.016;   // input shaft, cluster and synchro hubs
-constexpr double kCarrierInertia = 0.09;  // differential carrier and final drive
 constexpr double kSpiderInertia = 0.025;  // side gears, referred to the shafts
 constexpr double kDamperRate = 1500.0, kDamperDamp = 3.0;    // clutch torsion damper
 constexpr double kRpmToRad = 2.0 * PI / 60.0;
@@ -325,6 +324,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
 
       const double loadSens = 1.0 - 0.08 * (Fz / kFz0 - 1.0);
       double muS = spec.tyreMu * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf);
+      if (surf != SURF_ASPHALT && surf != SURF_CONCRETE) muS *= spec.looseGrip;
       if (w.deflate > 0.5) muS *= 0.45;
       const double Ftot = muS * Fz * magic(s);
       double Fx = 0, Fy = 0;
@@ -374,7 +374,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
 
       if (s > 1.3 && absV + std::fabs(w.omega * Re) > 4.0 && Fz > 800.0 &&
           (sim.stepCount & 31) == 0 && sim.events.size() < 500) {
-        const bool soft = surf == SURF_GRASS || surf == SURF_GRAVEL;
+        const bool soft = surf == SURF_GRASS || surf == SURF_GRAVEL || surf == SURF_SNOW;
         sim.events.push_back({patch, vC, float(s), soft ? EV_DUST : EV_TIRE_SMOKE});
       }
     }
@@ -702,7 +702,8 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
       starterClock = 1.2;
   }
 
-  auto ratioOf = [this](int g) { return g == 0 ? 0.0 : (g > 0 ? spec.gears[g - 1] : -spec.reverse) * spec.finalDrive; };
+  const double rangeRatio = (tune.lowRange && spec.lowRange > 0) ? spec.lowRange : 1.0;
+  auto ratioOf = [this, rangeRatio](int g) { return g == 0 ? 0.0 : (g > 0 ? spec.gears[g - 1] : -spec.reverse) * spec.finalDrive * rangeRatio; };
 
   // ---- Gear selection. A shift is a sequence of physical steps: open the clutch, pull the box into
   // neutral, let the synchro bring the input shaft to the new speed, engage, close the clutch. How
@@ -793,10 +794,10 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   }
   if (spec.turbo) {
     // The turbos need exhaust flow first: below that it is a 5-litre V8, and then the shove arrives.
-    const double wantBoost = load * clampd((rpmNow - 2200.0) / 2000.0, 0.0, 1.0);
+    const double wantBoost = load * clampd((rpmNow - spec.boostFrom) / spec.boostSpan, 0.0, 1.0);
     boost += (wantBoost - boost) * clampd(dt / (wantBoost > boost ? 0.45 : 0.12), 0, 1);
     // Off boost it is still a 5-litre engine, with about what such an engine makes unaided.
-    fullTorque = lerpd(std::min(fullTorque, 520.0), fullTorque, boost);
+    fullTorque = lerpd(std::min(fullTorque, spec.offBoost), fullTorque, boost);
   }
   double comb = ignition ? load * (fullTorque + fric) : 0.0;
   comb *= 1.0 + 0.25 * std::cos(3.0 * crankAngle);
@@ -829,11 +830,11 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
     // It only applies pulling away from rest. Once the clutch has locked, it stays out of it until the car
     // stops again: lifting or the traction control must never reopen the clutch at speed.
     if (std::fabs(speed) < 1.5 && in.throttle < 0.05) launching_ = true;
-    if (rIn > 3400.0 || (launching_ && rpmNow - rIn < 250.0 && rIn > 1150.0) || std::fabs(speed) > 20.0) launching_ = false;
+    if (rIn > spec.launchRpm * 0.8 || (launching_ && rpmNow - rIn < 250.0 && rIn > 1150.0) || std::fabs(speed) > 20.0) launching_ = false;
     if (spec.turbo && launching_ && gear == 1) {
       // How high it holds follows the driver's foot.
-      const double gate = lerpd(1500.0, 4300.0, in.throttle * in.throttle);
-      e = std::min(e, smoothstepd(gate - 1100.0, gate, rpmNow));
+      const double gate = lerpd(1500.0, spec.launchRpm, in.throttle * in.throttle);
+      e = std::min(e, smoothstepd(gate - std::min(1100.0, gate * 0.45), gate, rpmNow));
     }
     clutch = e * clutchRamp_;
   }
@@ -856,47 +857,59 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
 
   // ---- Halfshafts: torsion springs from the side gears to the wheels. Open differential: carrier
   // speed is the mean of the side gears, and the spider gears freewheel between them.
-  Wheel* wL = nullptr;
-  Wheel* wR = nullptr;
-  for (Wheel& w : wheels)
-    if (w.driven) (w.left ? wL : wR) = &w;
-  const double wsL = carrierOmega + spiderOmega, wsR = carrierOmega - spiderOmega;
+  // One differential per driven axle. With all-wheel drive both hang on the same carrier: the transfer
+  // case is locked, which is what gets a heavy truck up a loose slope.
   double TL = 0, TR = 0;
-  if (wL && wL->attached) {
-    shaftAngle[0] += (wsL - wL->omega) * dt;
-    TL = spec.shaftRate * shaftAngle[0] + spec.shaftDamp * (wsL - wL->omega);
-  }
-  if (wR && wR->attached) {
-    shaftAngle[1] += (wsR - wR->omega) * dt;
-    TR = spec.shaftRate * shaftAngle[1] + spec.shaftDamp * (wsR - wR->omega);
-  }
-  if (wL) wL->driveT = TL;
-  if (wR) wR->driveT = TR;
-
-  // A shaft shears when overloaded, typically with a locked wheel and a dropped clutch.
-  for (int i = 0; i < 2; i++) {
-    Wheel* w = i == 0 ? wL : wR;
-    if (w && w->attached && std::fabs(i == 0 ? TL : TR) > spec.shaftShear) {
-      w->attached = false;
-      note("ANTRIEBSWELLE ABGESCHERT");
+  const auto driveAxle = [&](int ax, double& spider) {
+    Wheel* wL = nullptr;
+    Wheel* wR = nullptr;
+    for (Wheel& w : wheels)
+      if (w.driven && (!spec.awd || (w.front ? 0 : 1) == ax)) (w.left ? wL : wR) = &w;
+    const double wsL = carrierOmega + spider, wsR = carrierOmega - spider;
+    double tl = 0, tr = 0;
+    const int base = ax * 2;
+    if (wL && wL->attached) {
+      shaftAngle[base] += (wsL - wL->omega) * dt;
+      tl = spec.shaftRate * shaftAngle[base] + spec.shaftDamp * (wsL - wL->omega);
     }
-  }
+    if (wR && wR->attached) {
+      shaftAngle[base + 1] += (wsR - wR->omega) * dt;
+      tr = spec.shaftRate * shaftAngle[base + 1] + spec.shaftDamp * (wsR - wR->omega);
+    }
+    if (wL) wL->driveT = tl;
+    if (wR) wR->driveT = tr;
+    // A shaft shears when overloaded, typically with a locked wheel and a dropped clutch.
+    for (int i = 0; i < 2; i++) {
+      Wheel* w = i == 0 ? wL : wR;
+      if (w && w->attached && std::fabs(i == 0 ? tl : tr) > spec.shaftShear) {
+        w->attached = false;
+        note("ANTRIEBSWELLE ABGESCHERT");
+      }
+    }
+    spider += ((tr - tl) / kSpiderInertia) * dt;
+    if (tune.lockDiffs) {
+      // Locked: both wheels of the axle turn as one, whatever grip each of them has.
+      spider = 0;
+    } else if (spec.diffPreload > 0) {
+      // Limited slip: clutch packs hold the two sides together, harder the more torque goes through.
+      // A wheel going light on a bump cannot take all the power and just spin up.
+      const double cap = spec.diffPreload + spec.diffRamp * std::fabs(tl + tr);
+      const double stop = spider * kSpiderInertia / dt;
+      spider -= clampd(stop, -cap, cap) * dt / kSpiderInertia;
+    }
+    spider *= 1.0 - clampd(dt * 0.6, 0, 1);
+    TL += tl;
+    TR += tr;
+  };
+  driveAxle(0, spiderOmega);
+  if (spec.awd) driveAxle(1, spiderOmega2);
 
-  spiderOmega += ((TR - TL) / kSpiderInertia) * dt;
-  if (spec.diffPreload > 0) {
-    // Limited slip: clutch packs hold the two sides together, harder the more torque goes through.
-    // A wheel going light on a bump cannot take all the power and just spin up.
-    const double cap = spec.diffPreload + spec.diffRamp * std::fabs(TL + TR);
-    const double stop = spiderOmega * kSpiderInertia / dt;
-    spiderOmega -= clampd(stop, -cap, cap) * dt / kSpiderInertia;
-  }
-  spiderOmega *= 1.0 - clampd(dt * 0.6, 0, 1);
 
   // Gear mesh: in gear, input shaft and final drive turn as one. Oil churning and bearing friction
   // cost torque, more of it the faster things spin.
   const double loss = 0.8 + 0.018 * std::fabs(inputOmega);
   if (ratio != 0) {
-    const double J = kCarrierInertia + kInputInertia * ratio * ratio;
+    const double J = spec.carrierInertia + kInputInertia * ratio * ratio;
     const double Tloss = std::fabs(carrierOmega) > 0.2 ? std::copysign(loss * std::fabs(ratio), carrierOmega) : 0.0;
     carrierOmega += (Td * ratio - Tloss - TL - TR) * dt / J;
     inputOmega = ratio * carrierOmega;
@@ -904,7 +917,7 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
     // Neutral: shafts run free, and the synchro is the only link while selecting a gear.
     const double r2 = ratioOf(shiftTarget);
     inputOmega += (Td + syncTorque - std::copysign(std::min(loss, std::fabs(inputOmega) * kInputInertia / dt), inputOmega)) * dt / kInputInertia;
-    carrierOmega += (-TL - TR - syncTorque * r2) * dt / kCarrierInertia;
+    carrierOmega += (-TL - TR - syncTorque * r2) * dt / spec.carrierInertia;
   }
   dampAngle += (discOmega - inputOmega) * dt;
 
@@ -1085,8 +1098,8 @@ void Vehicle::updateDamage(Sim& sim, double dt) {
   int si = 0;
   for (Wheel& w : wheels) {
     if (!w.driven) continue;
-    const int idx = w.left ? 0 : 1;
-    if (w.attached && std::fabs(len(sim.pos[w.axIn] - sim.pos[shaftNode[idx]]) - shaftLen[idx]) > 0.10) {
+    const int idx = (spec.awd && !w.front ? 2 : 0) + (w.left ? 0 : 1);
+    if (w.attached && std::fabs(len(sim.pos[w.axIn] - sim.pos[shaftNode[idx]]) - shaftLen[idx]) > (spec.awd ? 0.28 : 0.10)) {
       w.attached = false;
       note("ANTRIEBSWELLE RAUSGERISSEN");
     }

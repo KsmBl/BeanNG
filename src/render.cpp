@@ -509,6 +509,7 @@ const MatDef kMats[MM_COUNT] = {
     {0.70f, 0.71f, 0.72f, 0.72f},    // pearl white
     {0.030f, 0.031f, 0.034f, 0.60f}, // exposed carbon, lacquered
     {0.92f, 0.30f, 0.03f, 0.55f},    // orange accents
+    {0.40f, 0.33f, 0.21f, 0.22f},    // desert sand paint, matt
 };
 
 void propColor(u8 c, float& r, float& g, float& b, float& gloss) {
@@ -758,7 +759,7 @@ struct Renderer::Impl {
     for (const MeshPart& p : M.parts) {
       if (!p.bound) continue;
       // Only the outer skin takes scratches. Glass, lenses and everything inside stay as they are.
-      const bool skin = p.mat == MM_PAINT || p.mat == MM_BLACK || p.mat == MM_DARK || p.mat == MM_CHROME || p.mat == MM_PEARL || p.mat == MM_CARBON || p.mat == MM_ACCENT;
+      const bool skin = p.mat == MM_PAINT || p.mat == MM_BLACK || p.mat == MM_DARK || p.mat == MM_CHROME || p.mat == MM_PEARL || p.mat == MM_CARBON || p.mat == MM_ACCENT || p.mat == MM_SAND;
       const bool outer = p.group != "frame" && p.group != "engine" && p.group != "gearbox" && p.group != "radiator" && p.group != "battery" && p.group != "tank";
       if (!skin || !outer) continue;
       for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++) {
@@ -1020,6 +1021,8 @@ struct Renderer::Impl {
       case SURF_CONCRETE: r = .30f + n * .025f; g = .30f + n * .025f; b = .29f + n * .025f; break;
       case SURF_GRAVEL: r = .33f + n * .05f; g = .29f + n * .05f; b = .22f + n * .05f; break;
       case SURF_PAVE: r = .24f + n * .1f; g = .22f + n * .1f; b = .20f + n * .1f; break;
+      case SURF_ROCK: r = .26f + n * .10f; g = .25f + n * .09f; b = .23f + n * .08f; break;
+      case SURF_SNOW: r = .82f + n * .06f; g = .84f + n * .06f; b = .88f + n * .05f; break;
       default: r = .12f + n * .05f; g = .24f + n * .07f; b = .07f + n * .03f; break;
     }
   }
@@ -1154,6 +1157,7 @@ struct Renderer::Impl {
     std::vector<Vtx> v;
     // Road surfaces with edge lines and a dashed centre line.
     for (const Road& road : world->roads()) {
+      if (road.trail) continue;  // dirt tracks are part of the ground itself
       const size_t cnt = road.pts.size();
       const size_t segs = road.closed ? cnt : cnt - 1;
       for (size_t i = 0; i < segs; i++) {
@@ -1191,6 +1195,7 @@ struct Renderer::Impl {
     }
     // Reflector posts every 25 m along the roads, the classic cue for speed.
     for (const Road& road : world->roads()) {
+      if (road.trail) continue;
       double run = 0;
       const size_t cnt = road.pts.size();
       const size_t segs = road.closed ? cnt : cnt - 1;
@@ -1223,6 +1228,15 @@ struct Renderer::Impl {
           box(z0 + 0.80, z0 + 0.88, .95f, .55f, .15f);
         }
       }
+    }
+    // Beyond the edge of the map the land just goes on, fading into the haze.
+    {
+      constexpr double kEdge = World::kHalf - 1.0, kFar = 2400.0;
+      const float cr = .13f, cg = .26f, cb = .08f;
+      const double z = -1.5;
+      const V3 q[4] = {{-kEdge, -kEdge, z}, {kEdge, -kEdge, z}, {kEdge, kEdge, z}, {-kEdge, kEdge, z}};
+      const V3 o[4] = {{-kFar, -kFar, z}, {kFar, -kFar, z}, {kFar, kFar, z}, {-kFar, kFar, z}};
+      for (int i = 0; i < 4; i++) addQuad(v, o[i], o[(i + 1) % 4], q[(i + 1) % 4], q[i], cr, cg, cb, 0);
     }
     // Test lanes painted on the pad.
     auto line = [&](double x0, double y0, double x1, double y1, double wd, float r, float g, float b) {
@@ -1565,7 +1579,7 @@ struct Renderer::Impl {
 
   void updateProps(const Snapshot& s, const V3& camPos) {
     propVerts.clear();
-    constexpr double kDraw2 = 500.0 * 500.0;
+    constexpr double kDraw2 = 1000.0 * 1000.0;
     const u32 firstProp = sim->objs[0].nodeCount;
     for (const Tri& t : sim->tris) {
       if ((t.flags & TF_NOVIS) || t.a < firstProp) continue;
