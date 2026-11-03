@@ -4,14 +4,14 @@ Online-Panzerduell mit Soft-Body-Physik im Stil von BeamNG, in C++20 mit SDL3 un
 
 ![Die Basis: alle Panzer und Autos, dahinter die Kommandozentrale](docs/screenshots/basis.jpg)
 
-Zwei Spieler, eine große Karte, und alles, was sich bewegt oder kaputtgeht, ist ein Soft Body aus Knoten und Balken bei 2000 Physikschritten pro Sekunde. Du startest zu Fuß mit Pistole und Messer und entscheidest selbst, wie du den Gegner erwischst: mit dem Panzer, dem Auto, aus 800 m durchs Zielfernrohr oder per Lenkrakete quer über die Karte.
+Zwei bis sechs Spieler, eine große Karte, und alles, was sich bewegt oder kaputtgeht, ist ein Soft Body aus Knoten und Balken bei 2000 Physikschritten pro Sekunde. Du startest zu Fuß mit Pistole und Messer und entscheidest selbst, wie du den Gegner erwischst: mit dem Panzer, dem Auto, aus 800 m durchs Zielfernrohr oder per Lenkrakete quer über die Karte.
 
 | | |
 |---|---|
 | ![Fluss mit Brücke](docs/screenshots/bruecke.jpg) | ![Ein Haus im Dorf](docs/screenshots/haus.jpg) |
 | ![Liegend hinter dem Scharfschützengewehr](docs/screenshots/liegend.jpg) | ![Durchs Zielfernrohr: Einschlagmarke und Wind](docs/screenshots/zielfernrohr.jpg) |
 | ![Eine Lenkrakete im Flug](docs/screenshots/lenkrakete.jpg) | ![Die Karte mit markiertem Ziel](docs/screenshots/karte.jpg) |
-| ![Am Hummer: E steigt ein, R repariert](docs/screenshots/hummer.jpg) | ![Wer stirbt, fällt](docs/screenshots/gefallen.jpg) |
+| ![Am Hummer: E steigt ein, das Reparaturset liegt im Werkzeug-Overlay](docs/screenshots/hummer.jpg) | ![Wer stirbt, fällt](docs/screenshots/gefallen.jpg) |
 
 ## Bauen und starten
 
@@ -27,18 +27,18 @@ Zwei bis sechs Spieler auf einer eigenen Karte: je eine Basis im Westen und im O
 
 ```sh
 ./run.sh --help                 # baut auch den Server
-build/beanng-server 27015       # auf dem Rechner, den beide erreichen können
+build/beanng-server 27015       # auf dem Rechner, den alle erreichen können
 ```
 
 Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbinden**. Oder direkt mit `./run.sh --connect 1.2.3.4:27015`. Der Port ist UDP und muss von außen erreichbar sein.
 
-**Ablauf:** Sind beide da, wählt jeder seine Ausrüstung (20 Slots, 60 Sekunden): Tretmine 2 Slots, Panzermine 5, Reparaturset 10, Sturmgewehr 2, 60 Schuss Kleinmunition 1. Du startest zu Fuß mit Pistole und Messer in deiner Basis. Wer stirbt, verliert; nach 8 Sekunden geht es von vorn los. Ausrüstung und Beute gelten für ein Match.
+**Ablauf:** Sind alle da, wählt jeder seine Ausrüstung (20 Slots, 60 Sekunden): Tretmine 2 Slots, Panzermine 5, Reparaturset 10, Sturmgewehr 2, 60 Schuss Kleinmunition 1, Nebelgranate 1, Ghillie-Anzug 3, Tarnnetz 3. Du startest zu Fuß mit Pistole und Messer in deiner Basis. Eine Seite verliert, wenn von ihr niemand mehr lebt; nach 8 Sekunden geht es von vorn los. Ausrüstung und Beute gelten für ein Match.
 
 **Karte:** 2 km groß, ringsum Berge. Dazwischen Dörfer, Hügel, Wälder, Hecken, Erdwälle, Felsgruppen, alte Panzerwracks, ein Fluss mit drei Brücken zwei flache Furten und zwei 10 m hohe Sperrmauern, über die nur die Artillerie schießt.
 
 ![Die Karte von oben](docs/screenshots/karte-von-oben.jpg)
 
-**Fahrzeuge:** In jeder Basis stehen alle vier Panzer sowie Xantia Activa, Koenigsegg One:1 und Hummer H1. Einsteigen kannst du in jedes freie Fahrzeug, auch beim Gegner. Reparieren geht nur von außen mit einem Set.
+**Fahrzeuge:** In jeder Basis stehen zwölf Panzer, alle vier Türme auf je drei Wannen (mittel, schwer gepanzert und langsamer, schnell und dünn), sowie Xantia Activa, Koenigsegg One:1 und Hummer H1. Einsteigen kannst du in jedes freie Fahrzeug, auch beim Gegner. Reparieren geht nur von außen mit einem Set.
 
 ![Alle vier Türme](docs/screenshots/panzer.jpg)
 
@@ -47,44 +47,62 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 | 105-mm-Kanone | 8 Granaten | fünf Volltreffer bis zur Zerstörung |
 | Leichte Kanone | 120 Schuss, schnell | leicht, wenig Schaden pro Schuss |
 | Artillerie | 8 Granaten, Steilfeuer auf einen Kartenpunkt | ein Treffer zerstört jeden Panzer und reißt einen großen Krater; schwer und langsam |
-| Lenkraketen | 8 Raketen und ein schwaches Geschütz | Rakete wird mit der Maus über die ganze Karte geflogen |
+| Lenkraketen | 8 Raketen und ein schwaches Geschütz | Rakete wird mit dem Blick über die ganze Karte geflogen |
 
 **Schaden am Panzer:** Motor, Kanone, Turmkranz, Munition und Ketten nehmen einzeln Schaden. Schwachstellen wie Optik, Entfernungsmesser, Winkelspiegel, Kühler, Treibstoffleitung, Höhenrichtanlage und Antenne erreicht auch das Scharfschützengewehr, und jede nimmt dem Panzer etwas anderes.
 
 **Scharfschützengewehr:** drei Sekunden Aufbau im Liegen, Zoom 6x bis 24x, Geschossabfall, Wind und Flugzeit. Auf 1000 m sind das gut eine Sekunde und 5,5 m Abfall. Im Auto trifft es, was im Weg liegt: Tank, Ölwanne, Motor, Kühler, Getriebe, Reifen oder den Fahrer.
 
-**Finden:** In Häusern und bei Wracks stehen Kisten mit Munition, Scharfschützengewehr, Raketenwerfer, Reparatursets, Minen, Verbandskästen und Bombencodes. Ein Code holt vier ungenaue Raketen auf einen Kartenpunkt.
+**Finden:** In Häusern und bei Wracks stehen Kisten mit Munition, Scharfschützengewehr, Raketenwerfer, Reparatursets, Minen, Medikits, Nebelgranaten, Ghillie-Anzügen, Tarnnetzen, Drohnen und Bombencodes. Ein Code holt vier ungenaue Raketen auf einen Kartenpunkt, ein Medikit gibt 50 Leben zurück.
+
+**Werkzeug-Overlay:** **Q** (Controller: **RB**) listet alles, was du dabeihast: Minen, Medikit, Reparaturset, Nebel, Tarnnetz, Drohne, Bombencode und die Standortabfrage. Einzelne Tasten dafür gibt es nicht. Was gerade nicht geht, steht mit Grund dabei. Ein Bombencode öffnet die Karte, dort wählst du das Ziel.
+
+![Das Werkzeug-Overlay](docs/screenshots/werkzeug.jpg)
+
+**Tarnen und Aufklären:** Nebel versperrt eine halbe Minute lang die Sicht, als Granate oder aus dem Werfer auf dem Turm. Ein Ghillie-Anzug tarnt im Gras und liegend, ein Tarnnetz den stehenden Panzer, bis er losfährt. Eine Drohne fliegst du selbst, ihr Feuerknopf markiert den Gegner.
 
 **Computer:** Im Kommandozentrum des Gegners lässt sich der Hauptcomputer in 5 Sekunden anzapfen. Danach zeigt die Karte alle 30 Sekunden auf Anfrage ungefähr, wo er ist.
 
 **Mehr Spieler:** `beanng-server --players 4` oder `6` macht daraus 2v2 oder 3v3, ein Team pro Basis. Im Panzer gibt es zwei Plätze: Wer zuerst einsteigt, fährt, der zweite ist Richtschütze und führt Turm und Kanone. Eine Seite verliert, wenn von ihr niemand mehr lebt.
 
-**Replay:** Nach dem Verlassen eines Matches zeigt das Hauptmenü **Letztes Match ansehen**, aus der Sicht beider Spieler oder frei fliegend.
+**Replay:** Nach dem Verlassen eines Matches zeigt das Hauptmenü **Letztes Match ansehen**, aus der Sicht jedes Spielers oder frei fliegend.
 
 **Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill`, `/kick`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt beiden von Anfang an alle Waffen, zum Ausprobieren.
 
 ## Steuerung
 
+Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom Verbinden bis zum Replay. Die Hinweise auf dem Bildschirm zeigen die Tasten des Geräts, das du zuletzt benutzt hast. Die Tastennamen sind die eines Xbox-Controllers; auf anderen zählt die Position.
+
 | Aktion | Tastatur/Maus | Controller |
 |---|---|---|
-| Gas / Bremse, im Stand rückwärts | W / S | RT / LT |
-| Lenken | A / D | linker Stick |
-| Bremse | Leertaste | A |
-| Zielen, Kamera | Maus, C, Mausrad | rechter Stick, Y |
-| Feuer | linke Maustaste, F | – |
-| Rakete starten, Feuer sprengt sie | G | – |
-| Einsteigen, aussteigen | E | – |
-| Rennen, springen | Umschalt, Leertaste | – |
-| Karte: Klick markiert das Ziel | K | – |
-| Waffe wählen | 1 bis 5 | – |
-| Werkzeug-Overlay: Minen, Medikit, Reparaturset, Nebel, Tarnnetz, Drohne, Bombencode, Standortabfrage | Q, dann Zahl oder ENTER | – |
-| Anvisieren, auch im Panzer | rechte Maustaste halten | – |
-| Scharfschützengewehr aufbauen, Zielfernrohr, Zoom 6x bis 24x | X, rechte Maustaste, Mausrad | – |
-| Beim Gegner anzapfen, dann Standort abfragen (alle 30 s) | E am Computer, Q | – |
-| Visier auf Entfernung einstellen | Pfeil hoch, runter | – |
-| Chat | Enter | – |
-| Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | – |
+| Gehen, Panzer fahren, lenken | W A S D | linker Stick |
+| Auto: Gas / Bremse, im Stand rückwärts | W / S | RT / LT |
+| Rennen | Umschalt | linken Stick drücken |
+| Bremse, zu Fuß springen | Leertaste | A |
+| Zielen, umsehen, Rakete und Drohne lenken | Maus | rechter Stick |
+| Feuer | linke Maustaste, F | RT |
+| Anvisieren, auch im Panzer | rechte Maustaste halten | LT halten |
+| Einsteigen, aussteigen, nehmen, anzapfen | E | X |
+| Waffe wählen | 1 bis 5 | Steuerkreuz links, rechts |
+| Werkzeug-Overlay | Q, dann Zahl oder ENTER | RB, dann A |
+| Karte | K | LB |
+| Karte: Ziel markieren, löschen | Klick, Rechtsklick | rechter Stick und A, X |
+| Rakete starten, Feuer sprengt sie | G | B im Panzer |
+| Scharfschützengewehr aufbauen | X | B zu Fuß |
+| Zielfernrohr, Zoom 6x bis 24x | rechte Maustaste, Mausrad | LT, Steuerkreuz links, rechts |
+| Visier auf Entfernung einstellen | Pfeil hoch, runter | Steuerkreuz hoch, runter |
+| Kamera, Abstand | C, Mausrad | Y, Steuerkreuz hoch, runter |
+| Chat | Enter | Back: Schnellnachrichten oder Bildschirmtastatur |
+| Menü | ESC | Start |
+| Im Menü wählen, ändern, bestätigen, zurück | Pfeile, ENTER, ESC | Steuerkreuz oder linker Stick, A, B |
+| Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | X, LB RB |
 | Screenshot | F12 | – |
+
+**Texteingabe am Controller:** A auf einem Feld im Online-Menü oder **Eigener Text...** im Chat öffnet die Bildschirmtastatur.
+
+![Die Bildschirmtastatur](docs/screenshots/bildschirmtastatur.jpg)
+
+In den Spiel-Einstellungen lassen sich die Empfindlichkeit des Sticks und die Vibration einstellen.
 
 ## Aufbau
 
