@@ -28,6 +28,8 @@ inline void writeState(Writer& w, const Tank::NetState& n) {
   for (float m : n.mod) w.put(m);
   w.put(u8(n.missiles));
   w.put(u8(n.smokeCharges));
+  w.put(u8(n.netOn ? 1 : 0));
+  w.put(n.netClock);
   if (n.missileLive) {
     w.putV3(n.missileP);
     w.putV3(n.missileV);
@@ -61,6 +63,10 @@ inline void readState(Reader& r, Tank::NetState& n) {
   u8 charges = 0;
   r.get(charges);
   n.smokeCharges = charges;
+  u8 netOn = 0;
+  r.get(netOn);
+  n.netOn = netOn != 0;
+  r.get(n.netClock);
   if (n.missileLive) {
     n.missileP = r.getV3();
     n.missileV = r.getV3();

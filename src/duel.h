@@ -8,13 +8,13 @@
 #include "vehicle.h"
 #include "world.h"
 
-enum ItemKind : u8 { IT_FOOT_MINE, IT_AT_MINE, IT_REPAIR, IT_AR, IT_SMALL_AMMO, IT_SMOKE, IT_COUNT };
+enum ItemKind : u8 { IT_FOOT_MINE, IT_AT_MINE, IT_REPAIR, IT_AR, IT_SMALL_AMMO, IT_SMOKE, IT_GHILLIE, IT_NET, IT_COUNT };
 struct ItemInfo {
   const char* name;
   int slots;
 };
 inline constexpr ItemInfo kItems[IT_COUNT] = {
-    {"Tretmine", 2}, {"Panzermine", 5}, {"Reparaturset", 10}, {"Sturmgewehr", 2}, {"Kleinmunition (60 Schuss)", 1}, {"Nebelgranate", 1},
+    {"Tretmine", 2}, {"Panzermine", 5}, {"Reparaturset", 10}, {"Sturmgewehr", 2}, {"Kleinmunition (60 Schuss)", 1}, {"Nebelgranate", 1}, {"Ghillie-Anzug", 3}, {"Tarnnetz", 3},
 };
 inline constexpr int kLoadoutSlots = 20;
 inline int slotsUsed(const u8 items[IT_COUNT]) {
@@ -125,6 +125,7 @@ class Duel {
     bool strike = false;    // a code used on the point marked on the map
     bool query = false;     // asks a tapped computer where the enemy is
     bool smoke = false;     // a grenade on foot, the launcher in a tank
+    bool net = false;       // throws the camouflage net over the tank one sits in
     V3 strikeAt;
     bool setup = false;     // lies down behind the big rifle, or gets up again
     int weapon = WP_PISTOL;
@@ -150,7 +151,7 @@ class Duel {
   VehicleFrame frames[kVehicles];
   // Which never touch anything and only get drawn: a soldier is not part of the soft body world. A small cube of
   // nodes to each rigid part of the body, as the mesh's binding wants, and each weapon counts as a part.
-  static constexpr int kPartNodes = 8, kSoldierParts = 17, kSoldierNodes = kSoldierParts * kPartNodes;
+  static constexpr int kPartNodes = 8, kSoldierParts = 21, kSoldierNodes = kSoldierParts * kPartNodes;
   static const char* soldierPartName(int part);
   static const V3 kSoldierRest;  // where the bind pose stands
   u32 soldierFirst[2] = {};
@@ -196,6 +197,9 @@ class Duel {
   Tank wrecks[kWrecks], wrecksStart[kWrecks];
   u32 wreckFirst[kWrecks] = {};
   V3 wreckSpawn[kWrecks];
+  // A net for every tank and wreck: eight nodes that carry it, underground unless it is on.
+  u32 netFirst[kTanks + kWrecks] = {};
+  static void poseNet(Sim& sim, u32 first, const Tank& t, bool on);
   CarRig wreckRigs[kWrecks];
   struct Crate {
     V3 p;
@@ -220,7 +224,7 @@ class Duel {
   u32 mineFirst[2][kMinesEach] = {};
   bool giveAll = false;  // for trying things out: every weapon from the start
   // What can be handed out by name: from the server's shell, and what loot is made of.
-  static constexpr int kGiveKinds = 14;
+  static constexpr int kGiveKinds = 16;
   static const char* const kGiveNames[kGiveKinds];
   bool give(int player, const char* name, int count);
   static V3 eyeOf(const Soldier& s);
@@ -239,11 +243,11 @@ class Duel {
   void updateFrames();
   // weapon: 0 knife, 1 pistol, 2 assault rifle, 3 big rifle, 4 rocket launcher
   // sightsOnly: looking along one's own weapon. No body in the way, just the gun held up under the eye.
-  static void poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon, bool sightsOnly = false);
+  static void poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon, bool sightsOnly = false, bool ghillie = false);
   V3 vehicleExit(int v) const;
   static void ragdollStart(Ragdoll& r, const Soldier& s, int weapon, V3 push);
   void ragdollStep(Ragdoll& r, double dt) const;
-  static void poseRagdoll(Sim& sim, u32 first, const Ragdoll& r);
+  static void poseRagdoll(Sim& sim, u32 first, const Ragdoll& r, bool ghillie = false);
   // Pools of blood under a body: three flat discs, one after the other as it spreads.
   static constexpr int kBloodDiscs = 11;
   u32 bloodFirst[2][kBloodDiscs] = {};

@@ -99,6 +99,19 @@ void Duel::build() {
       yaw0 += 1.9;
     }
   }
+  // The nets, carried by a box of nodes around where each tank was built.
+  for (int i = 0; i < kTanks + kWrecks; i++) {
+    const Tank& t = i < kTanks ? tanks[i] : wrecks[i - kTanks];
+    sim.beginObj(OBJ_PROP, false);
+    netFirst[i] = u32(sim.pos.size());
+    const V3 o = (sim.rest[t.refFL] + sim.rest[t.refFR] + sim.rest[t.refRL] + sim.rest[t.refRR]) * 0.25;
+    for (int k = 0; k < 8; k++) {
+      const V3 r{(k & 1) ? 3.0 : -3.0, (k & 2) ? 2.0 : -2.0, (k & 4) ? 1.5 : -1.5};
+      sim.addNode(o + r + V3{0, 0, -400}, 1.0, NF_FIXED);
+      sim.rest[netFirst[i] + u32(k)] = o + r;
+    }
+    sim.endObj();
+  }
   // Crates: a couple in every house, one beside each wreck.
   const auto addCrate = [&](V3 at, bool wreck) {
     Crate c;
@@ -204,13 +217,14 @@ void Duel::updateFrames() {
 const V3 Duel::kSoldierRest{0, 0, -400};
 
 namespace {
-enum SoldierPart { SP_PELVIS, SP_TORSO, SP_HEAD, SP_THIGH_L, SP_THIGH_R, SP_SHIN_L, SP_SHIN_R, SP_UPPER_L, SP_UPPER_R, SP_FORE_L, SP_FORE_R, SP_GUN0 };
+enum SoldierPart { SP_PELVIS, SP_TORSO, SP_HEAD, SP_THIGH_L, SP_THIGH_R, SP_SHIN_L, SP_SHIN_R, SP_UPPER_L, SP_UPPER_R, SP_FORE_L, SP_FORE_R, SP_GUN0, SP_GHILLIE = SP_GUN0 + 6 };
 constexpr double kHip = 0.93, kKnee = 0.50, kShoulder = 1.42, kElbow = 1.13, kWrist = 0.87, kHipY = 0.10, kShoulderY = 0.215;
 // The middle of each part, in the bind pose: x forward, y left, z up from the ground.
 const V3 kPartMid[Duel::kSoldierParts] = {
     {0, 0, 0.93}, {0, 0, 1.25}, {0, 0, 1.62}, {0, kHipY, 0.72}, {0, -kHipY, 0.72}, {0, kHipY, 0.27}, {0, -kHipY, 0.27},
     {0, kShoulderY, 1.28}, {0, -kShoulderY, 1.28}, {0, kShoulderY, 1.0}, {0, -kShoulderY, 1.0},
     {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83},
+    {0, 0, 1.25}, {0, 0, 1.62}, {0, kHipY, 0.72}, {0, -kHipY, 0.72},  // the ghillie suit, over torso, head and thighs
 };
 // Turned about the sideways axis. A positive angle swings what hangs down forward, and lifts what points forward.
 V3 swingF(V3 q, double a) {
@@ -231,7 +245,7 @@ struct Limb {
 }  // namespace
 
 const char* Duel::soldierPartName(int part) {
-  static const char* names[kSoldierParts] = {"pelvis", "torso", "head", "thigh_l", "thigh_r", "shin_l", "shin_r", "upper_l", "upper_r", "fore_l", "fore_r", "gun_knife", "gun_pistol", "gun_ar", "gun_sniper", "gun_rpg", "gun_none"};
+  static const char* names[kSoldierParts] = {"pelvis", "torso", "head", "thigh_l", "thigh_r", "shin_l", "shin_r", "upper_l", "upper_r", "fore_l", "fore_r", "gun_knife", "gun_pistol", "gun_ar", "gun_sniper", "gun_rpg", "gun_none", "gh_torso", "gh_head", "gh_thigh_l", "gh_thigh_r"};
   return names[part];
 }
 
@@ -322,7 +336,7 @@ V3 partCorner(int part, int k) {
 }
 }  // namespace
 
-void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int weapon, bool sightsOnly) {
+void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int weapon, bool sightsOnly, bool ghillie) {
   const bool hidden = hiddenIn || sightsOnly;
   const BodyLimbs L = bodyPose(s, weapon);
   const auto place = [&](int part, const Limb* limb) {
@@ -342,7 +356,11 @@ void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int
   place(SP_UPPER_R, &L.upperR);
   place(SP_FORE_L, &L.foreL);
   place(SP_FORE_R, &L.foreR);
-  for (int g = 0; g < kSoldierParts - SP_GUN0; g++) {
+  place(SP_GHILLIE, ghillie ? &L.torso : nullptr);
+  place(SP_GHILLIE + 1, ghillie ? &L.head : nullptr);
+  place(SP_GHILLIE + 2, ghillie ? &L.thighL : nullptr);
+  place(SP_GHILLIE + 3, ghillie ? &L.thighR : nullptr);
+  for (int g = 0; g < SP_GHILLIE - SP_GUN0; g++) {
     const int part = SP_GUN0 + g;
     if (sightsOnly && g == weapon && !hiddenIn) {
       // Held out under the eye, a little to the right, pointing where it looks.
@@ -481,7 +499,7 @@ void Duel::ragdollStep(Ragdoll& r, double dt) const {
   }
 }
 
-void Duel::poseRagdoll(Sim& sim, u32 first, const Ragdoll& r) {
+void Duel::poseRagdoll(Sim& sim, u32 first, const Ragdoll& r, bool ghillie) {
   const V3 shoulders = r.p[J_SHOULDER_L] - r.p[J_SHOULDER_R], hips = r.p[J_HIP_L] - r.p[J_HIP_R];
   const V3 restSide{0, 1, 0};
   const auto bone = [&](int a, int b, V3 side) { return makeBone(kJointRest[a], kJointRest[b], restSide, r.p[a], r.p[b], side); };
@@ -495,8 +513,19 @@ void Duel::poseRagdoll(Sim& sim, u32 first, const Ragdoll& r) {
     for (int k = 0; k < kPartNodes; k++) {
       const u32 n = first + u32(part * kPartNodes + k);
       // Nothing to hold it any more: what was in the hand is put away.
-      sim.pos[n] = body ? bones[part].at(partCorner(part, k)) : kSoldierRest + partCorner(part, k);
+      static constexpr int kGhillieBone[4] = {1, 2, 3, 4};
+      if (part >= SP_GHILLIE && ghillie) sim.pos[n] = bones[kGhillieBone[part - SP_GHILLIE]].at(partCorner(part, k));
+      else sim.pos[n] = body ? bones[part].at(partCorner(part, k)) : kSoldierRest + partCorner(part, k);
     }
+  }
+}
+
+void Duel::poseNet(Sim& sim, u32 first, const Tank& t, bool on) {
+  const V3 rest0 = (sim.rest[t.refFL] + sim.rest[t.refFR] + sim.rest[t.refRL] + sim.rest[t.refRR]) * 0.25;
+  const V3 now = (sim.pos[t.refFL] + sim.pos[t.refFR] + sim.pos[t.refRL] + sim.pos[t.refRR]) * 0.25;
+  for (u32 n = 0; n < 8; n++) {
+    const V3 r = sim.rest[first + n] - rest0;
+    sim.pos[first + n] = on ? now + t.fwd * r.x + t.left * r.y + t.up * r.z : sim.rest[first + n] + V3{0, 0, -400};
   }
 }
 
@@ -669,7 +698,7 @@ void Duel::rollLoot() {
   static const Roll kTable[] = {
       {"kleinmunition", 26, 60}, {"granaten", 13, 4}, {"lenkraketen", 7, 2}, {"raketen", 8, 2}, {"raketenwerfer", 7, 1},
       {"scharfschuetzengewehr", 6, 1}, {"scharfschuetzenmunition", 8, 5}, {"reparaturset", 8, 1}, {"tretmine", 6, 2},
-      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"leben", 6, 50}, {"nebelgranate", 7, 2},
+      {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"leben", 6, 50}, {"nebelgranate", 7, 2}, {"ghillie", 4, 1}, {"tarnnetz", 4, 1},
   };
   int total = 0;
   for (const Roll& r : kTable) total += r.weight;
@@ -712,14 +741,14 @@ int Duel::nearCrate(V3 p) const {
 }
 
 const char* Duel::crateLabel(const Crate& c, char* buf, size_t n) {
-  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Verbandskasten", "Nebelgranaten"};
+  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Verbandskasten", "Nebelgranaten", "Ghillie-Anzug", "Tarnnetz"};
   snprintf(buf, n, c.count > 1 ? "%s  x%d" : "%s", kLabels[c.what], c.count);
   return buf;
 }
 
 const char* const Duel::kGiveNames[kGiveKinds] = {
     "tretmine", "panzermine", "reparaturset", "sturmgewehr", "kleinmunition", "scharfschuetzengewehr", "scharfschuetzenmunition",
-    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "leben", "nebelgranate",
+    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "leben", "nebelgranate", "ghillie", "tarnnetz",
 };
 
 bool Duel::give(int player, const char* name, int count) {
@@ -728,6 +757,8 @@ bool Duel::give(int player, const char* name, int count) {
   const std::string n = name;
   const auto addItem = [&](ItemKind k) { p.items[k] = u8(std::min(int(p.items[k]) + count, 99)); };
   if (n == "nebelgranate") addItem(IT_SMOKE);
+  else if (n == "ghillie") addItem(IT_GHILLIE);
+  else if (n == "tarnnetz") addItem(IT_NET);
   else if (n == "tretmine") addItem(IT_FOOT_MINE);
   else if (n == "panzermine") addItem(IT_AT_MINE);
   else if (n == "reparaturset") addItem(IT_REPAIR);
@@ -1261,6 +1292,10 @@ void Duel::stepPlayers(const Intent in[2]) {
     s.prone = clampd(s.prone + (pl.wantProne ? 1.0 : -1.5) * kDt / kSetupTime * (pl.wantProne ? 1.0 : 3.0), 0.0, 1.0);
     if (in[i].strike && phase == PLAYING) callStrike(i, in[i].strikeAt);
     if (in[i].smoke && phase == PLAYING) useSmoke(i);
+    if (in[i].net && phase == PLAYING && pl.vehicle >= 0 && pl.vehicle < kTanks && pl.items[IT_NET] > 0) {
+      Tank& t = tanks[pl.vehicle];
+      if (!t.netOn && t.netClock <= 0 && std::fabs(t.speed) < 1.0) t.netClock = 3.0;
+    }
     if (pl.vehicle < 0 && phase == PLAYING) {
       fireWeapon(i, in[i]);
       if (in[i].placeFoot) placeMine(i, 0);
@@ -1481,6 +1516,24 @@ void Duel::step(const Intent in[2]) {
     } else {
       t.tickFire(sim, kDt);
     }
+  }
+  // Putting a net up takes a moment and a tank that stands still; and driving off leaves it behind.
+  for (int v = 0; v < kTanks; v++) {
+    Tank& t = tanks[v];
+    if (t.netClock > 0) {
+      if (std::fabs(t.speed) > 1.5) {
+        t.netClock = 0;
+      } else {
+        t.netClock -= kDt;
+        if (t.netClock <= 0) {
+          t.netClock = 0;
+          t.netOn = true;
+          for (Player& pl : players)
+            if (pl.vehicle == v && pl.items[IT_NET] > 0) pl.items[IT_NET]--;
+        }
+      }
+    }
+    if (t.netOn && std::fabs(t.speed) > 1.5) t.netOn = false;
   }
   // A tank that has just lost armour: whoever sits in it feels it, the one on the other side gets the credit.
   for (int v = 0; v < kTanks; v++) {

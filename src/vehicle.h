@@ -32,6 +32,7 @@ struct Controls {
   bool strike = false;    // edge-triggered: a strike code used on strikeAt
   bool query = false;     // edge-triggered: asks the tapped computer where the enemy is
   bool smoke = false;     // edge-triggered: a smoke grenade or the tank's launcher
+  bool net = false;       // edge-triggered: the camouflage net
   V3 strikeAt;
 };
 
@@ -279,6 +280,7 @@ struct CarRig {
   std::vector<int> linkInstance;  // which of the parked ones each link belongs to, or empty
   struct NodeRange { u32 first = 0, count = 0; };
   std::vector<NodeRange> parkedNodes;
+  std::vector<NodeRange> parkedExtra;  // nodes of the same one lying elsewhere, or a count of 0
 };
 
 

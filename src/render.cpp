@@ -514,6 +514,13 @@ const MatDef kMats[MM_COUNT] = {
     {0.92f, 0.30f, 0.03f, 0.55f},    // orange accents
     {0.40f, 0.33f, 0.21f, 0.22f},    // desert sand paint, matt
     {0.52f, 0.34f, 0.24f, 0.10f},    // skin
+    {0.145f, 0.265f, 0.085f, 0.0f},  // grass, as the ground has it
+    {0.205f, 0.27f, 0.105f, 0.0f},   // drier grass
+    {0.25f, 0.205f, 0.125f, 0.0f},   // earth
+    // Leaves hanging down catch little of the sun: lighter than the ground, so that they end up looking like it.
+    {0.235f, 0.405f, 0.135f, 0.0f},
+    {0.335f, 0.42f, 0.165f, 0.0f},
+    {0.385f, 0.33f, 0.19f, 0.0f},
 };
 
 void propColor(u8 c, float& r, float& g, float& b, float& gloss) {
@@ -1064,19 +1071,72 @@ struct Renderer::Impl {
     glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Vtx), (void*)24);
   }
 
+  // Smooth noise, -1 to 1, for where things change on the ground.
+  static double blot(double x, double y) {
+    const int xi = int(std::floor(x)), yi = int(std::floor(y));
+    const auto hash = [](int a, int c) {
+      u32 h = u32(a) * 374761393u + u32(c) * 668265263u;
+      h = (h ^ (h >> 13)) * 1274126177u;
+      return double((h ^ (h >> 16)) & 0xffffff) / double(0xffffff);
+    };
+    const double fx = x - xi, fy = y - yi;
+    const double sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    const double A = hash(xi, yi), B = hash(xi + 1, yi), C = hash(xi, yi + 1), D = hash(xi + 1, yi + 1);
+    return (A + (B - A) * sx + (C - A) * sy + (A - B - C + D) * sx * sy) * 2.0 - 1.0;
+  }
   void terrainColor(int ix, int iy, float& r, float& g, float& b) {
     const u8 s = world->gridSurface(ix, iy);
     const u32 h = u32(ix) * 374761393u + u32(iy) * 668265263u;
     const float n = float((h ^ (h >> 13)) * 1274126177u >> 24) / 255.f;
+    const double x = double(ix), y = double(iy);
+    // Things of many sizes, laid over each other: nothing out here is one colour for long.
+    const float big = float(blot(x / 53.0 + 11.0, y / 53.0 - 3.0) + 0.5 * blot(x / 19.0 - 7.0, y / 19.0 + 5.0));
+    const float mid = float(blot(x / 7.1 + 3.0, y / 7.1 + 9.0) + 0.5 * blot(x / 2.9 - 1.0, y / 2.9 - 6.0));
+    const auto mix3 = [&](float t, float mr, float mg, float mb) {
+      t = std::clamp(t, 0.f, 1.f);
+      r += (mr - r) * t;
+      g += (mg - g) * t;
+      b += (mb - b) * t;
+    };
     switch (s) {
-      case SURF_ASPHALT: r = .10f; g = .10f; b = .105f; break;
-      case SURF_CONCRETE: r = .30f + n * .025f; g = .30f + n * .025f; b = .29f + n * .025f; break;
-      case SURF_GRAVEL: r = .33f + n * .05f; g = .29f + n * .05f; b = .22f + n * .05f; break;
+      case SURF_ASPHALT:
+        r = .10f; g = .10f; b = .105f;
+        mix3(.5f * (mid - .5f), .055f, .055f, .06f);   // patches of newer tarmac
+        mix3(.4f * (big - .6f), .17f, .155f, .13f);    // dust washed onto it
+        break;
+      case SURF_CONCRETE:
+        r = .30f + n * .025f; g = .30f + n * .025f; b = .29f + n * .025f;
+        mix3(.6f * (big - .25f), .20f, .185f, .155f);  // old stains and earth carried in
+        mix3(.7f * (mid - .85f), .10f, .095f, .09f);   // oil, and cracks
+        break;
+      case SURF_GRAVEL:
+        r = .33f + n * .05f; g = .29f + n * .05f; b = .22f + n * .05f;
+        mix3(.6f * (mid + .1f), .22f, .18f, .12f);     // mud
+        mix3(.5f * (big - .3f), .17f, .22f, .09f);     // weeds coming through
+        break;
       case SURF_PAVE: r = .24f + n * .1f; g = .22f + n * .1f; b = .20f + n * .1f; break;
-      case SURF_ROCK: r = .26f + n * .10f; g = .25f + n * .09f; b = .23f + n * .08f; break;
+      case SURF_ROCK:
+        r = .26f + n * .10f; g = .25f + n * .09f; b = .23f + n * .08f;
+        mix3(.6f * (mid - .1f), .18f, .17f, .14f);
+        mix3(.45f * (big - .5f), .17f, .23f, .10f);    // moss
+        break;
       case SURF_SNOW: r = .82f + n * .06f; g = .84f + n * .06f; b = .88f + n * .05f; break;
-      default: r = .12f + n * .05f; g = .24f + n * .07f; b = .07f + n * .03f; break;
+      default: {
+        r = .12f + n * .05f; g = .24f + n * .07f; b = .07f + n * .03f;
+        mix3(.8f * (big + .05f), .215f, .27f, .10f);   // dry grass over whole slopes
+        mix3(.6f * (-big - .25f), .075f, .17f, .055f); // damp hollows, dark
+        mix3(1.1f * (big * .45f + mid - .42f), .25f, .205f, .125f);  // bare earth
+        mix3(.45f * (mid - .3f), .30f, .29f, .13f);    // withered patches
+        // Where it is steep, the turf gives way to earth.
+        const int xm = std::max(ix - 2, 0), xp = std::min(ix + 2, World::N - 1), ym = std::max(iy - 2, 0), yp = std::min(iy + 2, World::N - 1);
+        const double slope = std::hypot(world->gridHeight(xp, iy) - world->gridHeight(xm, iy), world->gridHeight(ix, yp) - world->gridHeight(ix, ym)) / 4.0;
+        mix3(float((slope - .42) * 2.5), .23f, .19f, .12f);
+        break;
+      }
     }
+    r *= 1.f + (n - .5f) * .18f;
+    g *= 1.f + (n - .5f) * .18f;
+    b *= 1.f + (n - .5f) * .18f;
   }
 
   void buildTerrain() {
@@ -1352,6 +1412,70 @@ struct Renderer::Impl {
             addQuad(v, c - ua + va, c + ua + va, c + ua - va, c - ua - va, b.r, b.g, b.b, 0);
         }
     }
+    // Tufts, bushes and stones, each its own shape.
+    for (const World::Scrub& sc : world->scrub()) {
+      u32 seed = sc.seed;
+      const auto rnd = [&](float a, float c) {
+        seed = seed * 1664525u + 1013904223u;
+        return a + (c - a) * float(seed >> 16) / 65535.f;
+      };
+      const V3 at{sc.x, sc.y, sc.z};
+      const auto tri = [&](V3 a, V3 c, V3 d, float cr, float cg, float cb, V3 normal) {
+        for (const V3* p : {&a, &c, &d}) {
+          Vtx q{};
+          q.x = float(p->x);
+          q.y = float(p->y);
+          q.z = float(p->z);
+          q.nx = float(normal.x);
+          q.ny = float(normal.y);
+          q.nz = float(normal.z);
+          q.r = U8(cr);
+          q.g = U8(cg);
+          q.b = U8(cb);
+          v.push_back(q);
+        }
+      };
+      if (sc.kind == 0) {
+        // Blades leaning all ways, in the colours the ground has.
+        const float dry = rnd(0.f, 1.f);
+        const float cr = .13f + dry * .13f, cg = .26f + dry * .05f, cb = .07f + dry * .04f;
+        for (int k = 0; k < 4; k++) {
+          const float a = rnd(0.f, 6.28f), wid = sc.size * .22f, lean = sc.size * rnd(.1f, .6f);
+          const V3 side{std::cos(a) * wid, std::sin(a) * wid, 0};
+          const V3 foot = at + V3{rnd(-.15f, .15f), rnd(-.15f, .15f), -0.05};
+          tri(foot - side, foot + side, foot + V3{std::sin(a) * lean, -std::cos(a) * lean, sc.size * rnd(.7f, 1.2f)}, cr, cg, cb, V3{0, 0, 1});
+        }
+      } else if (sc.kind == 1) {
+        // A bush: long narrow leaves standing up and leaning out from the middle, all lit from above like the ground.
+        const float dry = rnd(0.f, 1.f);
+        const int blades = 26 + int(sc.size * 26.f);
+        for (int k = 0; k < blades; k++) {
+          const float a = rnd(0.f, 6.28f), out = sc.size * rnd(.25f, .95f), tall = sc.size * rnd(.55f, 1.15f), wid = sc.size * rnd(.05f, .11f);
+          const V3 foot = at + V3{std::cos(a) * out * .35f, std::sin(a) * out * .35f, -0.05};
+          const V3 tip = at + V3{std::cos(a) * out, std::sin(a) * out, tall};
+          const float across = a + rnd(1.0f, 2.1f);
+          const V3 side{std::cos(across) * wid, std::sin(across) * wid, 0};
+          const float d = dry + rnd(-.25f, .25f);
+          const float cr = .10f + d * .13f, cg = .23f + d * .07f, cb = .06f + d * .04f;
+          tri(foot - side, foot + side, tip, cr, cg, cb, V3{0, 0, 1});
+        }
+      } else {
+        // A stone: flat, and mostly in the ground. Only what shows of it.
+        const float d = rnd(.22f, .38f);
+        const float rad = sc.size;
+        const V3 mid = at + V3{0, 0, -0.02};
+        V3 ring[6];
+        for (int k = 0; k < 6; k++) {
+          const float a = 1.047f * float(k) + rnd(-.3f, .3f), rr = rad * rnd(.65f, 1.1f);
+          ring[k] = at + V3{std::cos(a) * rr, std::sin(a) * rr * .8f, -0.03};
+        }
+        const V3 top = mid + V3{rnd(-.2f, .2f) * rad, rnd(-.2f, .2f) * rad, rad * rnd(.25f, .5f)};
+        for (int k = 0; k < 6; k++) {
+          const V3 a = ring[k], c = ring[(k + 1) % 6];
+          tri(a, c, top, d, d * .96f, d * .86f, norm(cross(c - a, top - a)));
+        }
+      }
+    }
     staticCount = GLsizei(v.size());
     builtBoxGeneration = world->boxGeneration();
     if (!staticVao) {
@@ -1482,6 +1606,8 @@ struct Renderer::Impl {
       const auto& range = rig->parkedNodes[k];
       V3 sum{};
       for (u32 n = range.first; n < range.first + range.count; n++) sum += pos[n];
+      if (k < rig->parkedExtra.size())
+        for (u32 n = rig->parkedExtra[k].first; n < rig->parkedExtra[k].first + rig->parkedExtra[k].count; n++) sum += pos[n];
       parkedDirty[k] = !(sum.x == parkedPrint[k].x && sum.y == parkedPrint[k].y && sum.z == parkedPrint[k].z);
       parkedPrint[k] = sum;
       if (parkedDirty[k]) anyParkedDirty = true;

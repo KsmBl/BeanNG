@@ -94,6 +94,8 @@ class Tank {
 
   // A guided missile is flown by hand towards aimPoint, one at a time. Firing again sets it off early.
   int smokeCharges = 3;  // the launcher on the turret
+  bool netOn = false;    // under its camouflage net, which it loses by moving off
+  double netClock = 0;   // the crew is putting it up
   int missiles = 0;
   bool missileLive = false;
   V3 missileP, missileV;
@@ -117,6 +119,8 @@ class Tank {
     bool destroyed = false, trackOff[2] = {};
     float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
     int missiles = 0, smokeCharges = 0;
+    bool netOn = false;
+    float netClock = 0;
     bool missileLive = false;
     V3 missileP, missileV;
   };

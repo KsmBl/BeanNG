@@ -85,6 +85,7 @@ void write(Writer& w, const InputMsg& m) {
   w.put(m.strikeCount);
   w.put(m.queryCount);
   w.put(m.smokeCount);
+  w.put(m.netCount);
   w.put(m.strikeX);
   w.put(m.strikeY);
   w.put(m.yaw);
@@ -123,6 +124,7 @@ bool read(Reader& r, InputMsg& m) {
   r.get(m.strikeCount);
   r.get(m.queryCount);
   r.get(m.smokeCount);
+  r.get(m.netCount);
   r.get(m.strikeX);
   r.get(m.strikeY);
   r.get(m.yaw);

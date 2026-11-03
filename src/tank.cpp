@@ -962,6 +962,8 @@ Tank::NetState Tank::netState() const {
   for (int i = 0; i < TM_COUNT; i++) n.mod[i] = float(mod[i]);
   n.missiles = missiles;
   n.smokeCharges = smokeCharges;
+  n.netOn = netOn;
+  n.netClock = float(netClock);
   n.missileLive = missileLive;
   n.missileP = missileP;
   n.missileV = missileV;
@@ -1003,6 +1005,8 @@ void Tank::applyNetState(Sim& sim, const NetState& n, double dt) {
   for (int i = 0; i < TM_COUNT; i++) mod[i] = n.mod[i];
   missiles = n.missiles;
   smokeCharges = n.smokeCharges;
+  netOn = n.netOn;
+  netClock = n.netClock;
   missileLive = n.missileLive;
   missileP = n.missileP;
   missileV = n.missileV;

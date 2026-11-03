@@ -14,7 +14,7 @@ from scipy.spatial import ConvexHull
 
 MATS = ["paint", "glass", "black", "liner", "chrome", "lens", "tail", "amber", "rubber", "alloy",
         "fabric", "carpet", "plate", "metal", "alu", "lhm", "dark", "disc", "white", "reflector", "rust",
-        "olive", "olive2", "track", "pearl", "carbon", "accent", "sand"]
+        "olive", "olive2", "track", "pearl", "carbon", "accent", "sand", "skin", "grass", "grass2", "dirt"]
 M = {n: i for i, n in enumerate(MATS)}
 parts = []
 
@@ -292,6 +292,65 @@ else:
     cyl(G, "olive2", tr + [-0.4, 0, 0], muzzle, r, 16)
     cyl(G, "dark", muzzle + [0.25, 0, 0], muzzle, r * 1.5, 16)
 G.finish("gun")
+
+
+# ---- The camouflage net: thrown over the whole tank, hanging down to the ground, with gaps in it. Its own group, so
+# that it can be there or not.
+N = Group("net")
+_nseed = 4242
+
+
+def _nrnd():
+    global _nseed
+    _nseed = (_nseed * 1664525 + 1013904223) % (1 << 32)
+    return (_nseed >> 16) / 65535.0
+
+
+def net_height(x, y):
+    # Over the hull, and up over the turret in the middle, then down to the ground at the sides.
+    d = math.hypot((x - C[0]) / 2.4, y / 2.0)
+    over = 1.5 + 1.1 * max(0.0, 1.0 - d * d)
+    edge = max(abs(y) - 1.75, 0.0) / 0.55 + max(0.0, -x - 0.1) / 0.6 + max(0.0, x - 7.1) / 0.6
+    return max(0.05, over - 1.5 * edge * edge)
+
+
+nx, ny = 44, 26
+# One sheet: the corners of neighbouring pieces are the same points, so nothing opens or overlaps as it is looked at.
+corners = {}
+for i in range(nx + 1):
+    for j in range(ny + 1):
+        x, y = -0.5 + 8.2 * i / nx, -2.3 + 4.6 * j / ny
+        corners[(i, j)] = (x + 0.05 * (_nrnd() - 0.5), y + 0.05 * (_nrnd() - 0.5), net_height(x, y) + 0.11 * (_nrnd() - 0.5))
+
+
+def patch(i, j):
+    # Colours in irregular patches, the size of what lies about on the ground, and never in a pattern.
+    u = math.sin(i * 0.61 + j * 0.27) + math.sin(i * 0.23 - j * 0.71 + 1.7) + 0.7 * (_nrnd() - 0.5)
+    return "grass" if u < 0.35 else ("grass2" if u < 1.15 else "dirt")
+
+
+cells = {"grass": [], "grass2": [], "dirt": []}
+for i in range(nx):
+    for j in range(ny):
+        # A few holes, and an uneven lower edge.
+        if _nrnd() < 0.06:
+            continue
+        cells[patch(i, j)].append((i, j))
+for mat, list_ in cells.items():
+    v, f = [], []
+    for i, j in list_:
+        base = len(v)
+        v += [corners[(i, j)], corners[(i + 1, j)], corners[(i + 1, j + 1)], corners[(i, j + 1)]]
+        f += [[base, base + 1, base + 2], [base, base + 2, base + 3]]
+    v = np.asarray(v, float)
+    f = np.asarray(f, int)
+    n = np.zeros_like(v)
+    fn = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
+    for k in range(3):
+        np.add.at(n, f[:, k], fn)
+    n /= np.linalg.norm(n, axis=1, keepdims=True) + 1e-12
+    N.add(mat, v, n, f)
+N.finish("net")
 
 
 def write(path):

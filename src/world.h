@@ -81,6 +81,12 @@ class World {
   }
   const std::vector<V3>& wreckSites() const { return wreckSites_; }
   const std::vector<V3>& bridges() const { return bridges_; }
+  struct Scrub {
+    float x = 0, y = 0, z = 0, size = 0;
+    u32 seed = 0;
+    u8 kind = 0;  // 0 a tuft of grass, 1 a bush, 2 a stone
+  };
+  const std::vector<Scrub>& scrub() const { return scrub_; }
   static constexpr double kArenaLimit = 880.0;  // beyond this the rim is too steep for any vehicle
 
   // Physics queries (hot path).
@@ -130,6 +136,7 @@ class World {
   Base bases_[2];
   std::vector<V3> houseSites_, wreckSites_, bridges_;
   std::vector<House> houses_;
+  std::vector<Scrub> scrub_;
   void addVisualBox(V3 c, V3 half, double yaw, float r, float g, float b);  // seen, but nothing touches it
   void rasteriseRoads(std::vector<float>& dist, std::vector<float>& roadH, std::vector<u8>& onTrail) const;
   void addCommandCentre(Base& b);

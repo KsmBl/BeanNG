@@ -13,7 +13,7 @@ import numpy as np
 
 MATS = ["paint", "glass", "black", "liner", "chrome", "lens", "tail", "amber", "rubber", "alloy",
         "fabric", "carpet", "plate", "metal", "alu", "lhm", "dark", "disc", "white", "reflector", "rust",
-        "olive", "olive2", "track", "pearl", "carbon", "accent", "sand", "skin"]
+        "olive", "olive2", "track", "pearl", "carbon", "accent", "sand", "skin", "grass", "grass2", "dirt", "leaf", "leaf2", "leaf3"]
 M = {n: i for i, n in enumerate(MATS)}
 CLOTH = sys.argv[2] if len(sys.argv) > 2 else "olive"
 CLOTH2 = sys.argv[3] if len(sys.argv) > 3 else "olive2"
@@ -182,6 +182,45 @@ GZ = 0.17
 rod("gun_rpg", "olive2", w(-0.55, 0, GZ), w(0.5, 0, GZ), [(0, 0.05), (0.08, 0.042), (0.92, 0.042), (1, 0.046)], 14)
 rod("gun_rpg", "dark", w(0.5, 0, GZ), w(0.82, 0, GZ), [(0, 0.03), (0.3, 0.05), (0.75, 0.05), (1, 0.008)], 14)
 box("gun_rpg", "black", w(0.0, 0, 0.0), (0.04, 0.03, 0.15))
+
+
+# ---- The ghillie suit: a shaggy mass of leaves and rags over the body, shown only on whoever wears one.
+_seed = 12345
+
+
+def _rnd(lo, hi):
+    global _seed
+    _seed = (_seed * 1664525 + 1013904223) % (1 << 32)
+    return lo + (hi - lo) * ((_seed >> 16) / 65535.0)
+
+
+def tufts(group, count, cx, cy, z0, z1, rx, ry):
+    """Rags and leaves hanging from a body like a jacket over it: thin narrow strips, pointing down and out."""
+    pieces = {"leaf": ([], []), "leaf2": ([], []), "leaf3": ([], [])}
+    for i in range(count):
+        a = _rnd(0, 6.283)
+        z = _rnd(z0, z1)
+        wob = _rnd(0.95, 1.2)
+        px, py = cx + math.cos(a) * rx * wob, cy + math.sin(a) * ry * wob
+        out = np.array([math.cos(a), math.sin(a), 0.0])
+        across = np.array([-math.sin(a), math.cos(a), 0.0])
+        length, width = _rnd(0.1, 0.26), _rnd(0.025, 0.05)
+        top = np.array([px, py, z])
+        tip = top + out * _rnd(0.02, 0.09) + np.array([_rnd(-0.03, 0.03), _rnd(-0.03, 0.03), -length])
+        mat = "leaf" if i % 2 == 0 else ("leaf2" if i % 4 == 1 else "leaf3")
+        v, f = pieces[mat]
+        base = len(v)
+        v += [top - across * width, top + across * width, tip + across * width * 0.4, tip - across * width * 0.4]
+        f += [[base, base + 1, base + 2], [base, base + 2, base + 3]]
+    for mat, (v, f) in pieces.items():
+        if v:
+            add(group, mat, v, f)
+
+
+tufts("gh_torso", 340, 0.02, 0.0, 1.0, 1.5, 0.2, 0.22)
+tufts("gh_head", 110, -0.01, 0.0, 1.62, 1.82, 0.13, 0.12)
+tufts("gh_thigh_l", 80, 0.0, 0.1, 0.55, 0.93, 0.1, 0.1)
+tufts("gh_thigh_r", 80, 0.0, -0.1, 0.55, 0.93, 0.1, 0.1)
 
 
 def write(path):

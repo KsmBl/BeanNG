@@ -736,6 +736,7 @@ struct Game {
     u8 carrying[IT_COUNT] = {};
     int weaponShown[2] = {WP_PISTOL, WP_PISTOL};
     V3 blowShown[2];
+    bool ghillieShown[2] = {};
     Ragdoll bodies[2];
     double repairNow = 0;
     // A part just lost is said out loud for a few seconds.
@@ -828,7 +829,7 @@ struct Game {
         in = input;
         input.chatOut.clear();
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = input.c.smoke = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = input.c.placeFoot = input.c.placeTank = input.c.strike = input.c.query = input.c.smoke = input.c.net = false;
       }
       if (!in.chatOut.empty() && state == NET_IN) {
         saying = in.chatOut;
@@ -853,6 +854,7 @@ struct Game {
       if (in.c.placeTank) out.mineTankCount++;
       if (in.c.query) out.queryCount++;
       if (in.c.smoke) out.smokeCount++;
+      if (in.c.net) out.netCount++;
       if (in.c.strike) {
         out.strikeCount++;
         out.strikeX = float(in.c.strikeAt.x);
@@ -974,6 +976,9 @@ struct Game {
             sd.prone = prone;
             weaponShown[i] = std::min<int>(weapon, WP_COUNT - 1);
             blowShown[i] = r.getV3();
+            u8 wearing = 0;
+            r.get(wearing);
+            ghillieShown[i] = wearing != 0;
             sd.yaw = yaw;
             sd.pitch = pitch;
             sd.hp = hp;
@@ -1302,6 +1307,7 @@ struct Game {
       } else {
         me = duel.players[mySlot].soldier;
       }
+      for (int t = 0; t < Duel::kTanks; t++) Duel::poseNet(sim, duel.netFirst[t], duel.tanks[t], duel.tanks[t].netOn);
       // A guided missile is a real thing to look at, for whoever is flying it and whoever it comes for.
       for (int side = 0; side < 2; side++) {
         const Tank& launcher = duel.tanks[Duel::tankIndex(side, TK_MISSILE)];
@@ -1332,7 +1338,7 @@ struct Game {
         }
         if (bodies[i].on) {
           duel.ragdollStep(bodies[i], dt);
-          Duel::poseRagdoll(sim, duel.soldierFirst[i], bodies[i]);
+          Duel::poseRagdoll(sim, duel.soldierFirst[i], bodies[i], ghillieShown[i]);
           // Blood spreads out from under it once it lies, on what is beneath the middle of it.
           const V3 mid = bodies[i].p[0];
           for (int d = 0; d < Duel::kBloodDiscs; d++) {
@@ -1351,7 +1357,7 @@ struct Game {
           continue;
         }
         const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0 || (i == mySlot && in.scoped);
-        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot ? in.weapon : weaponShown[i], i == mySlot && in.aiming && !in.scoped);
+        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot ? in.weapon : weaponShown[i], i == mySlot && in.aiming && !in.scoped, ghillieShown[i]);
       }
 
       if (state == NET_IN && now >= nextInput) {
@@ -1432,6 +1438,7 @@ struct Game {
           snprintf(msg, sizeof msg, "%s  ·  %s %u : %u %s", winner < 0 ? "Unentschieden" : (winner == mySlot ? "Sieg!" : "Niederlage"), names[mySlot].c_str(), wins[mySlot], wins[1 - mySlot], names[1 - mySlot].c_str());
         }
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
+        else if (mine && mine->netClock > 0) snprintf(msg, sizeof msg, "Tarnnetz wird aufgezogen  ·  %.0f s", mine->netClock);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
         else if (vehicleNow >= 0) snprintf(msg, sizeof msg, "E: aussteigen");
         else if (duel.players[mySlot].tapClock > 0) snprintf(msg, sizeof msg, "Hauptcomputer wird angezapft  ·  %.0f s", duel.players[mySlot].tapClock);
@@ -1544,6 +1551,11 @@ static void runGame() {
     }
     G.mesh.addParked(other, k, G.duel.spawn[k], r.noseX, origin, hubs);
     for (const NodeGroup& g : r.groups) G.rig.groups.push_back({std::to_string(k) + ":" + g.name, g.nodes});
+    if (isTank) {
+      std::vector<u32> net;
+      for (u32 n = 0; n < 8; n++) net.push_back(G.duel.netFirst[k] + n);
+      G.rig.groups.push_back({std::to_string(k) + ":net", net});
+    }
     G.rig.links.insert(G.rig.links.end(), r.links.begin(), r.links.end());
     G.rig.linkInstance.resize(G.rig.links.size(), k);
     u32 first, end;
@@ -1554,7 +1566,9 @@ static void runGame() {
       first = G.simStart.objs[G.duel.carsStart[size_t(k - Duel::kTanks)].obj].nodeStart;
       end = k + 1 < Duel::kVehicles ? G.simStart.objs[G.duel.carsStart[size_t(k + 1 - Duel::kTanks)].obj].nodeStart : G.duel.carsEnd;
     }
+    // A tank's mesh is skinned when anything of it moves, and its net is a node of its own.
     G.rig.parkedNodes.push_back({first, end - first});
+    G.rig.parkedExtra.push_back(isTank ? CarRig::NodeRange{G.duel.netFirst[k], 8} : CarRig::NodeRange{0, 0});
   }
   // Two soldiers, each part held by its own few nodes.
   for (int i = 0; i < 2; i++) {
@@ -1573,6 +1587,7 @@ static void runGame() {
       G.rig.groups.push_back({std::to_string(k) + ":" + Duel::soldierPartName(part), nodes});
     }
     G.rig.parkedNodes.push_back({first, u32(Duel::kSoldierNodes)});
+    G.rig.parkedExtra.push_back({0, 0});
   }
   // And the old wrecks, after them.
   for (int i = 0; i < Duel::kWrecks; i++) {
@@ -1582,9 +1597,15 @@ static void runGame() {
     const CarRig& r = G.duel.wreckRigs[i];
     G.mesh.addParked(wreck, k, G.duel.wreckSpawn[i], r.noseX, origin, {});
     for (const NodeGroup& g : r.groups) G.rig.groups.push_back({std::to_string(k) + ":" + g.name, g.nodes});
+    {
+      std::vector<u32> net;
+      for (u32 n = 0; n < 8; n++) net.push_back(G.duel.netFirst[Duel::kTanks + i] + n);
+      G.rig.groups.push_back({std::to_string(k) + ":net", net});
+    }
     G.rig.links.insert(G.rig.links.end(), r.links.begin(), r.links.end());
     G.rig.linkInstance.resize(G.rig.links.size(), k);
     G.rig.parkedNodes.push_back({G.duel.wreckFirst[i], G.duel.tankNodes});
+    G.rig.parkedExtra.push_back({0, 0});
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
   // Blood on the ground: flat discs, each a little wider than the last.
@@ -1667,6 +1688,7 @@ static void runGame() {
   int weaponPick = WP_PISTOL;
   bool scriptAim = false;
   double hurtFlash = 0;
+  bool sprintScript = false;
   // What a heavy shot does to whoever fires it, as far as the eye can tell.
   double gunKick = 0;
   int kickAmmo = -1, kickWeapon = -1;
@@ -1834,6 +1856,7 @@ static void runGame() {
       key("Einsteigen und aussteigen", "E");
       key("Waffe wählen", "1 2 3 4 5");
       key("Nebel: Granate zu Fuß, Werfer im Panzer", "H");
+      key("Tarnnetz über den stehenden Panzer", "V");
       key("Anvisieren, in jedem Panzer und mit jedem Gewehr", "Rechte Maustaste halten");
       key("Tretmine, Panzermine legen", "M, N");
       key("Bombencode auf den Punkt der Karte", "K, Klick, B");
@@ -2059,6 +2082,7 @@ static void runGame() {
               break;
             case SDLK_J: edges.query = true; break;
             case SDLK_H: edges.smoke = true; break;
+            case SDLK_V: edges.net = true; break;
             case SDLK_M: edges.placeFoot = true; break;
             case SDLK_N: edges.placeTank = true; break;
             case SDLK_F12: wantShot = true; break;
@@ -2109,7 +2133,7 @@ static void runGame() {
       const double keyRate = (keyDir != 0 && keyDir * keySteer >= 0) ? 2.4 : 4.0;
       keySteer += clampd(keyTarget - keySteer, -keyRate * dt, keyRate * dt);
     }
-    const bool sprint = keys[SDL_SCANCODE_LSHIFT];
+    const bool sprint = keys[SDL_SCANCODE_LSHIFT] || sprintScript;
     double steer = inVehicle && myVehicle >= Duel::kTanks ? keySteer : keyDir, hb = keys[SDL_SCANCODE_SPACE] ? 1.0 : 0.0;
 
     hud.gamepad = false;
@@ -2227,6 +2251,42 @@ static void runGame() {
         }
       }
     }
+    if (scriptMode == 57 && netState == Game::NET_IN) {
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickItems[IT_GHILLIE] = 1;
+        pickReady = true;
+      }
+      panelKind = PANEL_NONE;
+      if (inMatch) {
+        rig.yaw = G.world.base(slot).facing + PI;
+        rig.pitch = 0.1;
+        sprintScript = true;
+        if (tNow < 4.5) rig.yaw += 1.0;  // first out past the row of vehicles
+        gas = 1.0;
+      }
+    }
+    if (scriptMode == 56 && netState == Game::NET_IN) {
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickItems[IT_GHILLIE] = 1;
+        pickItems[IT_NET] = 1;
+        pickReady = true;
+      }
+      panelKind = PANEL_NONE;
+      if (inMatch) {
+        const V3 to = G.world.base(slot).slot(0) - view.foot.p;
+        if (onFoot) {
+          rig.yaw = std::atan2(-to.y, -to.x);
+          gas = 1.0;
+          if (len(V3{to.x, to.y, 0}) < 4.5) sendC.use = true;
+        } else {
+          static double last = -100;
+          if (tNow - last > 2.0) {
+            sendC.net = true;
+            last = tNow;
+          }
+        }
+      }
+    }
     if (scriptMode == 55 && netState == Game::NET_IN) {
       // Smoke, thrown and from a tank.
       if (phase == Duel::CHOOSING && !pickReady) {
@@ -2311,6 +2371,7 @@ static void runGame() {
       c.placeTank |= sendC.placeTank;
       c.query |= sendC.query;
       c.smoke |= sendC.smoke;
+      c.net |= sendC.net;
       if (sendC.strike) {
         c.strike = true;
         c.strikeAt = sendC.strikeAt;
@@ -2493,6 +2554,8 @@ static void runGame() {
             "Sturmgewehr: Dauerfeuer auf mittlere Entfernung. Schießt mit der Kleinmunition. Gegen Panzer fast wirkungslos. Taste 3.",
             "Kleinmunition: 60 Schuss für Pistole und Sturmgewehr, zusätzlich zu den 24, die du immer hast.",
             "Nebelgranate: eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen. Werfen mit H. Jeder Panzer hat außerdem 3 Ladungen im Werfer.",
+            "Ghillie-Anzug: ein zottiger Blätteranzug. Wer ihn trägt, ist im Gras und liegend kaum zu erkennen. Wirkt von selbst, solange du lebst.",
+            "Tarnnetz: im stehenden Panzer mit V drübergezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.",
         };
         if (panelSel >= 1 && panelSel <= IT_COUNT) hud.panel.detail = kAbout[panelSel - 1];
         else if (panelSel == 0) hud.panel.detail = "Das hast du immer dabei: Pistole mit 24 Schuss und Kampfmesser. Alles andere findest du in Kisten in Häusern und bei Wracks: Scharfschützengewehr, Raketenwerfer, Granaten und Bombencodes.";
@@ -2720,6 +2783,13 @@ static void runGame() {
       cam.target = cam.eye + V3{std::cos(a), std::sin(a), 0.03} * 100.0;
       cam.up = {0, 0, 1};
       cam.fovY = 45.0 * PI / 180.0;
+    }
+    if (scriptMode == 57 && inMatch) {
+      // A ghillie suit out on the grass, and what grows around it.
+      cam.target = view.foot.p + V3{0, 0, 0.8};
+      cam.eye = cam.target + V3{3.5, 3.5, 1.2};
+      cam.up = {0, 0, 1};
+      cam.fovY = 55.0 * PI / 180.0;
     }
     if (scriptMode == 44) {
       panelKind = PANEL_NONE;

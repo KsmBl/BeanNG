@@ -42,7 +42,9 @@ double padBlend(double x, double y) { return smoothstepd(kPadR, kPadR + 70.0, st
 constexpr double kBaseX = 730.0, kYardHalfX = 42.0, kYardHalfY = 62.0, kYardZ = 16.0;
 // The river runs north to south through the middle, in a gully too steep to climb out of: the bridges are the only
 // way across. Far out it dies away into the rim.
-constexpr double kWaterZ = 2.5, kBedZ = -1.5, kRiverHalf = 13.0, kBankOuter = 21.0;
+constexpr double kWaterZ = 2.5, kBedZ = 0.9, kRiverHalf = 13.0, kBankOuter = 20.0;
+// The land falls away gently to a valley along the river, so that it runs just below the ground and not in a gorge.
+constexpr double kValleyZ = kWaterZ + 1.6;
 double riverX(double y) { return 34.0 * std::sin(y / 170.0 + 0.6) + 12.0 * std::sin(y / 61.0); }
 // Two places where the banks lie flat and the water is shallow: anything can cross here, slowly, and in plain sight.
 constexpr double kFords[2] = {-330.0, 345.0};
@@ -105,6 +107,9 @@ double arenaTerrain(double x, double y) {
     const double t = out / 200.0;
     h += 300.0 * t * t * (1.0 + 0.15 * vnoise(x / 70.0, y / 70.0)) + 90.0 * t * (0.5 + 0.5 * vnoise(x / 150.0 + 40.0, y / 150.0 - 11.0));
   }
+  // Long and flat beside the water, whatever the hills do further off.
+  const double valley = (1.0 - smoothstepd(16.0, 170.0, std::fabs(x - riverX(y)))) * (1.0 - smoothstepd(760.0, 860.0, std::fabs(y)));
+  h = lerpd(h, kValleyZ, valley);
   const double yard = yardBlend(x, y);
   return lerpd(h, kYardZ, yard);
 }
@@ -747,8 +752,8 @@ void World::buildArena() {
     for (int i = 1; i < n; i++) {
       const double a = pts[size_t(i - 1)].x - riverX(pts[size_t(i - 1)].y), b = pts[size_t(i)].x - riverX(pts[size_t(i)].y);
       if ((a < 0) == (b < 0)) continue;
-      constexpr int kFlat = 32, kRamp = 40;
-      const double deck = std::max(z[size_t(i)], kWaterZ + 5.0);
+      constexpr int kFlat = 24, kRamp = 40;
+      const double deck = std::max(z[size_t(i)], kWaterZ + 3.0);
       for (int j = -kFlat - kRamp; j <= kFlat + kRamp; j++) {
         if (i + j < 0 || i + j >= n) continue;
         const double t = clampd((std::abs(j) - double(kFlat)) / kRamp, 0, 1);
@@ -773,7 +778,9 @@ void World::buildArena() {
       const double d = dist[id];
       const double blend = 1.0 - smoothstepd(0.0, 13.0, d);
       const double yard = yardBlend(x, y);
-      h_[id] = float(yard > 0.98 ? kYardZ : lerpd(arenaTerrain(x, y), double(roadH[id]), blend));
+      // Ground that nobody has levelled: lumps, hollows and ruts, gone where a road or a yard has been made flat.
+      const double lumps = (0.34 * vnoise(x / 8.3 + 13.0, y / 8.3 - 4.0) + 0.14 * vnoise(x / 3.1 - 7.0, y / 3.1 + 2.0)) * (1.0 - yard) * (1.0 - blend);
+      h_[id] = float(yard > 0.98 ? kYardZ : lerpd(arenaTerrain(x, y), double(roadH[id]), blend) + lumps);
       const bool flatYard = (std::fabs(std::fabs(x) - kBaseX) < kYardHalfX && std::fabs(y) < kYardHalfY);
       if (flatYard) surf_[id] = SURF_CONCRETE;
       else if (onTrail[id] && d < 1.6) surf_[id] = SURF_GRAVEL;
@@ -931,6 +938,33 @@ void World::buildArena() {
       const double x = cx + rnd(-5, 5), y = cy + rnd(-5, 5), size = rnd(1.6, 3.6);
       addBox({x, y, height(x, y) + size * 0.45}, {size * rnd(0.8, 1.3), size * rnd(0.7, 1.2), size * rnd(0.8, 1.2)}, rnd(0, 3.1), rnd(-0.2, 0.2), SURF_ROCK, g, g * 0.97f, g * 0.92f);
     }
+  }
+
+  // What grows and lies about between all that: tufts of grass, bushes, stones. Drawn only; a bush hides someone but
+  // stops nobody, and is no more than something to look at for a bullet.
+  for (int n = 0; n < 75000; n++) {
+    const double x = rnd(-860, 860), y = rnd(-860, 860);
+    if (nearBase(x, y, 50.0) || std::fabs(x - riverX(y)) < kRiverHalf + 2.0) continue;
+    const double r = rnd(0, 1);
+    Scrub sc;
+    sc.x = float(x);
+    sc.y = float(y);
+    sc.seed = u32(n) * 2654435761u + 13u;
+    if (r < 0.74) {
+      sc.kind = 0;
+      sc.size = float(rnd(0.3, 0.8));
+    } else if (r < 0.9) {
+      sc.kind = 2;
+      sc.size = float(rnd(0.05, 0.2));
+    } else {
+      sc.kind = 1;
+      sc.size = float(rnd(0.5, 1.3));
+    }
+    // Clumped: more where the land already has something growing.
+    if (vnoise(x / 37.0 + 3.0, y / 37.0) < -0.15 && rnd(0, 1) < 0.75) continue;
+    if (nearRoad(x, y, 1.0 + sc.size)) continue;
+    sc.z = float(height(x, y));
+    scrub_.push_back(sc);
   }
 
   // Boulders, thicker towards the rim.
