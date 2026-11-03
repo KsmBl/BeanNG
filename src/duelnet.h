@@ -27,8 +27,6 @@ inline void writeState(Writer& w, const Tank::NetState& n) {
   w.put(u8((n.destroyed ? 1 : 0) | (n.trackOff[0] ? 2 : 0) | (n.trackOff[1] ? 4 : 0) | (n.missileLive ? 16 : 0)));
   for (float m : n.mod) w.put(m);
   w.put(u8(n.missiles));
-  w.put(u8(n.repairKits));
-  w.put(n.repairClock);
   if (n.missileLive) {
     w.putV3(n.missileP);
     w.putV3(n.missileV);
@@ -56,12 +54,9 @@ inline void readState(Reader& r, Tank::NetState& n) {
   n.trackOff[1] = flags & 4;
   n.missileLive = flags & 16;
   for (float& m : n.mod) r.get(m);
-  u8 missiles = 0, kits = 0;
+  u8 missiles = 0;
   r.get(missiles);
-  r.get(kits);
   n.missiles = missiles;
-  n.repairKits = kits;
-  r.get(n.repairClock);
   if (n.missileLive) {
     n.missileP = r.getV3();
     n.missileV = r.getV3();

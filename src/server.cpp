@@ -227,6 +227,9 @@ int main(int argc, char** argv) {
       w.put(float(pl.soldier.stride));
     }
     w.put(duel->players[slot].lastInput);
+    // What this player carries, as it stands now.
+    for (int k = 0; k < IT_COUNT; k++) w.put(duel->players[slot].items[k]);
+    w.put(float(duel->players[slot].repairClock));
     // Blasts stay in the packet until the player says they have gone off there.
     const auto& log = duel->sim.blastLog;
     const u32 ack = c.in.ackMatch == duel->matchId ? c.in.ackBlasts : 0;
@@ -327,9 +330,9 @@ int main(int argc, char** argv) {
         k.indirect = c.in.indirect;
         if (c.in.requestGear == 1 || c.in.requestGear == -1) k.requestGear = c.in.requestGear;
         k.launch = c.launch;
-        k.repair = c.repair;
         k.fire = c.fire;
         in[i].use = c.use;
+        in[i].repair = c.repair;
         in[i].seq = c.in.seq;
         in[i].pitch = c.in.pitch;
         in[i].walk.forward = c.in.throttle - c.in.brake;

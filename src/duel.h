@@ -64,6 +64,8 @@ class Duel {
     Soldier soldier;
     int vehicle = -1;  // what they sit in, -1 on foot
     double walkDebt = 0;
+    double repairClock = 0;  // working on a vehicle from outside, which takes a kit and being there
+    int repairing = -1;
     u32 lastInput = 0;  // the input the soldier has last been moved by, for the player's prediction
   };
   // What a player does this step beyond the pedals of a vehicle.
@@ -72,6 +74,7 @@ class Duel {
     WalkInput walk;
     double pitch = 0;
     bool use = false;  // E: get in, get out
+    bool repair = false;
     u32 seq = 0;
   };
 
@@ -110,6 +113,8 @@ class Duel {
   // Moves a soldier one time step. Used by the server, and by a player's own machine to answer at once.
   void walk(Soldier& s, const WalkInput& in, double dt) const;
   static constexpr double kWalkDt = 0.01;
+  static constexpr double kRepairTime = 6.0;
+  int nearestToRepair(V3 p) const;
   void restart();
   void placePlayers();
   bool choose(int player, const u8 items[IT_COUNT], bool ready);  // false if it does not fit

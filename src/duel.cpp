@@ -272,6 +272,22 @@ int Duel::nearestVehicle(V3 p, double reach) const {
   return best;
 }
 
+int Duel::nearestToRepair(V3 p) const {
+  int best = -1;
+  double bestD = 3.0;
+  for (int v = 0; v < kVehicles; v++) {
+    if (vehicleDead(v)) continue;
+    const VehicleFrame& f = frames[v];
+    const V3 q = p - f.cog;
+    const double d = std::hypot(std::max(std::fabs(dot(q, f.fwd)) - f.halfLength, 0.0), std::max(std::fabs(dot(q, f.left)) - f.halfWidth, 0.0));
+    if (d < bestD) {
+      best = v;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
 void Duel::boardVehicle(int p, int v) {
   players[p].vehicle = v;
   const u16 a = v < kTanks ? tanks[v].hullObj : cars[size_t(v - kTanks)].obj;
@@ -329,6 +345,38 @@ void Duel::stepPlayers(const Intent in[2]) {
       s.pitch = in[i].pitch;
       continue;
     }
+    // Repairs are done on foot, beside the thing, and it has to hold still for them.
+    if (in[i].repair && pl.repairClock <= 0 && pl.items[IT_REPAIR] > 0 && phase == PLAYING) {
+      const int v = nearestToRepair(s.p);
+      if (v >= 0) {
+        pl.repairing = v;
+        pl.repairClock = kRepairTime;
+      }
+    }
+    if (pl.repairClock > 0) {
+      const VehicleFrame& f = frames[pl.repairing];
+      const V3 q = s.p - f.cog;
+      const double off = std::hypot(std::max(std::fabs(dot(q, f.fwd)) - f.halfLength, 0.0), std::max(std::fabs(dot(q, f.left)) - f.halfWidth, 0.0));
+      if (off > 3.0 || std::fabs(f.speed) > 1.0 || vehicleDead(pl.repairing)) {
+        pl.repairClock = 0;
+      } else {
+        pl.repairClock -= kDt;
+        if (pl.repairClock <= 0) {
+          pl.repairClock = 0;
+          pl.items[IT_REPAIR]--;
+          if (pl.repairing < kTanks) {
+            tanks[pl.repairing].repair(sim);
+          } else {
+            Vehicle& car = cars[size_t(pl.repairing - kTanks)];
+            car.dmg = decltype(car.dmg){};
+            for (Wheel& w : car.wheels) {
+              w.deflate = 0;
+              w.runoutX = w.runoutZ = 0;
+            }
+          }
+        }
+      }
+    }
     pl.walkDebt += kDt;
     while (pl.walkDebt >= kWalkDt) {
       pl.walkDebt -= kWalkDt;
@@ -365,6 +413,8 @@ void Duel::placePlayers() {
     Player& p = players[i];
     p.vehicle = -1;
     p.ready = false;
+    p.repairClock = 0;
+    p.repairing = -1;
     p.walkDebt = 0;
     const World::Base& base = world.base(i);
     const double cx = std::cos(base.facing), sx = std::sin(base.facing);

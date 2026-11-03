@@ -25,7 +25,7 @@ struct Controls {
   V3 aimPoint;           // where the turret should point, world space; a guided missile flies towards it
   bool indirect = false;  // lob the shell over whatever is in between: artillery firing at a point on the map
   bool launch = false;    // edge-triggered: sends off a guided missile
-  bool repair = false;    // edge-triggered: starts on the repair kit
+  bool repair = false;    // edge-triggered: starts on a repair, from outside the vehicle
   bool use = false;       // edge-triggered: getting in and out
 };
 

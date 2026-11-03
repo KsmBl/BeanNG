@@ -652,18 +652,7 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   }
 }
 
-void Tank::updateRepair(Sim& sim, const Controls& in, double dt) {
-  if (in.repair && repairClock <= 0 && repairKits > 0 && std::fabs(speed) < 1.0) repairClock = kRepairTime;
-  if (repairClock <= 0) return;
-  // Only a tank that stands still can be worked on.
-  if (std::fabs(speed) > 1.5) {
-    repairClock = 0;
-    return;
-  }
-  repairClock -= dt;
-  if (repairClock > 0) return;
-  repairClock = 0;
-  repairKits--;
+void Tank::repair(Sim& sim) {
   for (double& m : mod) m = std::max(m, 0.6);
   trackOff[0] = trackOff[1] = false;
   damage = std::max(0.0, damage - 0.15);
@@ -837,7 +826,6 @@ void Tank::update(Sim& sim, const Controls& in, double dt) {
   updateDrive(sim, in, dt);
   updateShells(sim, dt);
   updateMissile(sim, in, dt);
-  updateRepair(sim, in, dt);
 }
 
 void Tank::updateWheelLift(const Sim& sim, double dt) {
@@ -884,8 +872,6 @@ Tank::NetState Tank::netState() const {
   n.destroyed = destroyed;
   for (int i = 0; i < TM_COUNT; i++) n.mod[i] = float(mod[i]);
   n.missiles = missiles;
-  n.repairKits = repairKits;
-  n.repairClock = float(repairClock);
   n.missileLive = missileLive;
   n.missileP = missileP;
   n.missileV = missileV;
@@ -926,8 +912,6 @@ void Tank::applyNetState(Sim& sim, const NetState& n, double dt) {
   destroyed = n.destroyed;
   for (int i = 0; i < TM_COUNT; i++) mod[i] = n.mod[i];
   missiles = n.missiles;
-  repairKits = n.repairKits;
-  repairClock = n.repairClock;
   missileLive = n.missileLive;
   missileP = n.missileP;
   missileV = n.missileV;

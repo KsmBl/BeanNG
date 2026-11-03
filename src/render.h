@@ -59,7 +59,6 @@ struct Snapshot {
   bool missileLive = false;
   V3 missileP, missileV;
   int missiles = -1, repairKits = 0;
-  double repairClock = 0;
   double tankArmour = 1;
   int tankAmmo = -1;
   V3 enemyCog;

@@ -65,7 +65,9 @@ Im Spiel: **Online spielen**, Adresse und Port eintragen, **Verbinden**. Oder di
 | Zielen, Kamera | Maus, C, Mausrad | rechter Stick, Y |
 | Feuer | linke Maustaste, F | – |
 | Rakete starten, Feuer sprengt sie | G | – |
-| Reparaturset, im Stand | R | – |
+| Einsteigen, aussteigen | E | – |
+| Rennen, springen | Umschalt, Leertaste | – |
+| Reparaturset, zu Fuß neben dem Fahrzeug | R | – |
 | Karte: Klick markiert das Ziel | K | – |
 | Screenshot | F12 | – |
 

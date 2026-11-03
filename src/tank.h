@@ -93,13 +93,10 @@ class Tank {
   V3 missileP, missileV;
   double missileAge = 0;
 
-  // A repair takes a kit and standing still for a while.
-  int repairKits = 0;
-  double repairClock = 0;
-  static constexpr double kRepairTime = 6.0;
   V3 trackWidthDir(int side) const { return trackOff[side] ? thrownLeft_[side] : left; }
 
   void update(Sim& sim, const Controls& in, double dt);
+  void repair(Sim& sim);  // what a kit can do: everything working again, though not as new
   void tickFire(Sim& sim, double dt);  // goes on burning while the wreck itself sleeps
   void shiftIndices(long nodes, long beams, long objects);
 
@@ -112,8 +109,7 @@ class Tank {
     int gear = 1, ammo = -1;
     bool destroyed = false, trackOff[2] = {};
     float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1};
-    int missiles = 0, repairKits = 0;
-    float repairClock = 0;
+    int missiles = 0;
     bool missileLive = false;
     V3 missileP, missileV;
   };
@@ -147,7 +143,6 @@ class Tank {
   void addToHull(Sim& sim, V3 point, V3 force);
   void damageModules(Sim& sim, V3 c, double impulse);
   void updateMissile(Sim& sim, const Controls& in, double dt);
-  void updateRepair(Sim& sim, const Controls& in, double dt);
   bool pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at) const;
   V3 ring_;
 };

@@ -608,8 +608,7 @@ struct Game {
     s.missileP = tank.missileP;
     s.missileV = tank.missileV;
     s.missiles = tank.missiles;
-    s.repairKits = tank.repairKits;
-    s.repairClock = tank.repairClock;
+    s.repairKits = duel.players[slot].items[IT_REPAIR];
   }
 
   struct NetFrame {
@@ -646,6 +645,8 @@ struct Game {
     };
     std::deque<Past> past;
     double walkDebt = 0;
+    u8 carrying[IT_COUNT] = {};
+    double repairNow = 0;
     u32 ackedInput = 0;
     V3 serverP;
     bool freshAnswer = false;
@@ -839,6 +840,14 @@ struct Game {
           }
           u32 ack = 0;
           r.get(ack);
+          for (int i = 0; i < IT_COUNT; i++) {
+            u8 count = 0;
+            r.get(count);
+            carrying[i] = count;
+          }
+          float rc = 0;
+          r.get(rc);
+          repairNow = rc;
           u32 first = 0;
           u8 count = 0;
           r.get(first);
@@ -1045,14 +1054,16 @@ struct Game {
         if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf den zweiten Spieler");
         else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
         else if (phaseNow == Duel::FINISHED) snprintf(msg, sizeof msg, "%s  ·  Stand %u : %u", winner < 0 ? "Unentschieden" : (winner == mySlot ? "Sieg!" : "Niederlage"), wins[mySlot], wins[1 - mySlot]);
-        else if (mine && mine->repairClock > 0) snprintf(msg, sizeof msg, "Reparatur  ·  %.0f s", mine->repairClock);
+        else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
         else if (vehicleNow >= 0) snprintf(msg, sizeof msg, "E: aussteigen");
         else if (phaseNow == Duel::PLAYING) {
           const int v = duel.nearestVehicle(me.p, 2.5);
-          if (v >= 0) snprintf(msg, sizeof msg, "E: einsteigen  ·  %s", v < Duel::kTanks ? duel.tanks[v].spec().name : (v - Duel::kTanks) % Duel::kCarKinds == 0 ? "Xantia" : ((v - Duel::kTanks) % Duel::kCarKinds == 1 ? "One:1" : "Hummer"));
+          const char* name = v < 0 ? "" : (v < Duel::kTanks ? duel.tanks[v].spec().name : (v - Duel::kTanks) % Duel::kCarKinds == 0 ? "Xantia" : ((v - Duel::kTanks) % Duel::kCarKinds == 1 ? "One:1" : "Hummer"));
+          if (v >= 0) snprintf(msg, sizeof msg, carrying[IT_REPAIR] > 0 ? "E: einsteigen  ·  R: reparieren  ·  %s" : "E: einsteigen  ·  %s", name);
         }
       }
+      memcpy(duel.players[mySlot].items, carrying, IT_COUNT);
       {
         std::lock_guard<std::mutex> lock(snapMutex);
         netState = state;
@@ -1358,7 +1369,7 @@ static void runGame() {
       key("Rakete starten, fliegt mit der Maus", "G");
       key("Einsteigen und aussteigen", "E");
       key("Rennen, springen", "Umschalt, Leertaste");
-      key("Reparaturset, im Stand", "R");
+      key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
       key("Karte, Ziel für die Artillerie", "K");
       key("Kamera", "C");
       key("Screenshot", "F12");
@@ -1762,7 +1773,6 @@ static void runGame() {
       view.missileV = G.snap.missileV;
       view.missiles = G.snap.missiles;
       view.repairKits = G.snap.repairKits;
-      view.repairClock = G.snap.repairClock;
       view.trackLeft[0] = G.snap.trackLeft[0];
       view.trackLeft[1] = G.snap.trackLeft[1];
       for (int i = 0; i < 16; i++) view.parkedScorch[i] = G.snap.parkedScorch[i];
