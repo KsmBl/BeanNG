@@ -493,6 +493,7 @@ struct SharedInput {
   bool ready = false;
   bool sprint = false;
   bool fireHeld = false;
+  bool aiming = false;
   bool scoped = false;
   int weapon = WP_PISTOL;
   double yaw = 0, pitch = 0;
@@ -1218,11 +1219,12 @@ struct Game {
         past.clear();
       } else if (playingNow) {
         WalkInput wi;
+        const double aimSlow = in.aiming ? 0.55 : 1.0;
         if (canWalk) {
-          wi.forward = in.c.throttle - in.c.brake;
-          wi.strafe = in.c.steer;
+          wi.forward = (in.c.throttle - in.c.brake) * aimSlow;
+          wi.strafe = in.c.steer * aimSlow;
           wi.jump = in.c.handbrake > 0.5;
-          wi.sprint = in.sprint;
+          wi.sprint = in.sprint && !in.aiming;
         }
         wi.yaw = in.yaw;
         walkDebt += dt;
@@ -1251,11 +1253,16 @@ struct Game {
       } else {
         me = duel.players[mySlot].soldier;
       }
+      // A guided missile is a real thing to look at, for whoever is flying it and whoever it comes for.
+      for (int side = 0; side < 2; side++) {
+        const Tank& launcher = duel.tanks[Duel::tankIndex(side, TK_MISSILE)];
+        Duel::poseMissile(sim, duel.missileFirst[side], launcher.missileLive, launcher.missileP, launcher.missileV);
+      }
       // Both soldiers drawn: oneself where one thinks one is, the other as the server last said.
       for (int i = 0; i < 2; i++) {
         // Through the scope one's own head would be in the way.
         const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0 || (i == mySlot && in.scoped);
-        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot ? in.weapon : weaponShown[i]);
+        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot ? in.weapon : weaponShown[i], i == mySlot && in.aiming && !in.scoped);
       }
 
       if (state == NET_IN && now >= nextInput) {
@@ -1275,6 +1282,7 @@ struct Game {
         out.pitch = float(in.pitch);
         out.sprint = in.sprint;
         out.fireHeld = in.fireHeld;
+        out.aiming = in.aiming;
         out.weapon = u8(in.weapon);
         if (vehicleNow < 0) past.push_back({out.seq, me.p});
         while (past.size() > 200) past.pop_front();
@@ -1466,6 +1474,14 @@ static void runGame() {
     G.rig.parkedNodes.push_back({G.duel.wreckFirst[i], G.duel.tankNodes});
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
+  // A guided missile: body, nose and fins.
+  for (int i = 0; i < 2; i++) {
+    const u32 f = G.duel.missileFirst[i];
+    G.rig.links.push_back({f, f + 1, 0.13f, MM_WHITE, 2});
+    G.rig.links.push_back({f + 1, f + 2, 0.07f, MM_ACCENT, 2});
+    G.rig.links.push_back({f + 3, f + 4, 0.025f, MM_DARK, 0});
+    G.rig.links.push_back({f + 5, f + 6, 0.025f, MM_DARK, 0});
+  }
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());
 
   SDL_GL_SetSwapInterval(gSet.vsync ? 1 : 0);
@@ -1528,9 +1544,13 @@ static void runGame() {
   bool chatting = false;
   std::string chatText;
   int weaponPick = WP_PISTOL;
+  bool scriptAim = false;
   // What a heavy shot does to whoever fires it, as far as the eye can tell.
   double gunKick = 0;
   int kickAmmo = -1, kickWeapon = -1;
+  // Along the sights, with the right mouse button: every gun, on foot and in a tank. A short weapon just comes up to
+  // the eye; the big rifle's scope is its own thing, once it is set up.
+  double aimBlend = 0;
   // The big rifle's scope: right mouse button once it is set up.
   bool scoped = false;
   double scopeZoom = 6.0;
@@ -1689,6 +1709,7 @@ static void runGame() {
       key("Rakete starten, fliegt mit der Maus", "G");
       key("Einsteigen und aussteigen", "E");
       key("Waffe wählen", "1 2 3 4 5");
+      key("Anvisieren, in jedem Panzer und mit jedem Gewehr", "Rechte Maustaste halten");
       key("Tretmine, Panzermine legen", "M, N");
       key("Bombencode auf den Punkt der Karte", "K, Klick, B");
       key("Beim Gegner anzapfen, dann Standort abfragen", "E am Computer, J");
@@ -1920,7 +1941,7 @@ static void runGame() {
           if (e.button.button == SDL_BUTTON_RIGHT && onFoot && weaponPick == WP_SNIPER && view.foot.prone > 0.99) scoped = !scoped;
           break;
         case SDL_EVENT_MOUSE_MOTION: {
-          const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse / (scoped ? scopeZoom * 0.5 : 1.0);
+          const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse / (scoped ? scopeZoom * 0.5 : 1.0) * lerpd(1.0, inTank ? 0.3 : 0.55, aimBlend);
           if (!mapOpen) {
             rig.yaw -= e.motion.xrel * sens;
             rig.pitch = clampd(rig.pitch + e.motion.yrel * sens, -0.30, 1.2);
@@ -1934,6 +1955,14 @@ static void runGame() {
         default:
           break;
       }
+    }
+
+    // Holding the right button brings the sights up, as far as there are any for what is in hand.
+    {
+      const bool held = panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK);
+      const bool canAim = (onFoot && weaponPick != WP_KNIFE && weaponPick != WP_SNIPER) || (inTank && !view.foot.noSight && !view.missileLive);
+      const double want = (held || scriptAim) && canAim ? 1.0 : 0.0;
+      aimBlend += clampd(want - aimBlend, -dt * 7.0, dt * 7.0);
     }
 
     // Continuous inputs.
@@ -2034,7 +2063,29 @@ static void runGame() {
         }
       }
     }
-    if ((scriptMode == 41 || scriptMode == 48) && netState == Game::NET_IN) {
+    if (scriptMode == 49 && netState == Game::NET_IN && inVehicle) {
+      static double launchedAt = -100;
+      if (tNow - launchedAt > 25.0) {
+        sendC.launch = true;
+        launchedAt = tNow;
+      }
+      // Up and away while it flies, and between times through the gunner's sight.
+      if (view.missileLive) rig.pitch = -0.25;
+      else rig.pitch = 0.02;
+      scriptAim = !view.missileLive && std::fmod(tNow, 4.0) > 2.0;
+    }
+    if (scriptMode == 50 && inMatch) {
+      // Each way of aiming in turn: on foot with the pistol, then the rifle.
+      panelKind = PANEL_NONE;
+      scriptAim = std::fmod(tNow, 4.0) > 2.0;
+      weaponPick = tNow < 8.0 ? WP_PISTOL : WP_AR;
+      rig.yaw = G.world.base(slot).facing + PI + 0.5;
+      rig.pitch = 0.05;
+    } else if (scriptMode == 50 && phase == Duel::CHOOSING && !pickReady) {
+      pickReady = true;
+      panelKind = PANEL_NONE;
+    }
+    if ((scriptMode == 41 || scriptMode == 48 || scriptMode == 49) && netState == Game::NET_IN) {
       {
         // Says something once, to see it arrive on both screens.
         static bool said = false;
@@ -2068,9 +2119,9 @@ static void runGame() {
         } else {
           static double boarded = tNow;
           gas = tNow - boarded < 12.0 ? 0.5 : 0.0;
-          if (std::fmod(tNow, 3.0) < dt) sendC.fire = true;
+          if (std::fmod(tNow, 3.0) < dt && !view.missileLive) sendC.fire = true;
           static bool leftOnce = false;
-          if (tNow - boarded > 16.0 && !leftOnce) {
+          if (tNow - boarded > 16.0 && !leftOnce && scriptMode != 49) {
             leftOnce = true;
             sendC.use = true;
             printf("Aussteigen bei t=%.1f\n", tNow);
@@ -2103,6 +2154,7 @@ static void runGame() {
       G.input.sprint = sprint;
       G.input.weapon = weaponPick;
       G.input.scoped = scoped;
+      G.input.aiming = aimBlend > 0.5;
       G.input.fireHeld = panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK);
       if (sendC.requestGear != 99) c.requestGear = sendC.requestGear;
       G.input.ready = pickReady;
@@ -2330,6 +2382,27 @@ static void runGame() {
       kickAmmo = ammoNow;
       kickWeapon = weaponPick;
     }
+    if (aimBlend > 0.001) {
+      const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+      const double k = smooth01(aimBlend);
+      if (inTank) {
+        // Through the gunner's sight: from the camera on the turret down into it.
+        const V3 eye = view.sight;
+        cam.eye = cam.eye + (eye - cam.eye) * k;
+        cam.target = cam.target + ((eye - back * 50.0) - cam.target) * k;
+        const double wide = myVehicle % TK_COUNT == TK_LIGHT ? 26.0 : 18.0;
+        cam.fovY = lerpd(cam.fovY, wide * PI / 180.0, k);
+      } else if (onFoot) {
+        // Over the sights: right behind the weapon, and half as wide a view.
+        Soldier at;
+        at.p = view.foot.p;
+        at.yaw = rig.yaw;
+        const V3 eye = Duel::eyeOf(at);
+        cam.eye = cam.eye + (eye - cam.eye) * k;
+        cam.target = cam.target + ((eye - back * 30.0) - cam.target) * k;
+        cam.fovY = lerpd(cam.fovY, (weaponPick == WP_AR ? 30.0 : (weaponPick == WP_RPG ? 28.0 : 40.0)) * PI / 180.0, k);
+      }
+    }
     hud.scope = scoped ? scopeZoom : 0.0;
     if (scoped) {
       const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
@@ -2353,6 +2426,15 @@ static void runGame() {
       gunKick *= std::exp(-dt * 7.0);
     } else {
       gunKick = 0;
+    }
+    if (scriptMode == 49 && (inTank || view.missileLive)) {
+      // Beside a guided missile in the air.
+      if (view.missileLive) {
+        cam.target = view.missileP;
+        cam.eye = view.missileP + V3{5.0, 5.0, 1.5};
+        cam.up = {0, 0, 1};
+        cam.fovY = 45.0 * PI / 180.0;
+      }
     }
     if (scriptMode == 48 && inVehicle) {
       // Beside a car on the move, to see its wheels go round.

@@ -13,7 +13,7 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 16;
+constexpr u16 kProtocol = 17;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1200;  // safely under any path's MTU
 constexpr int kNameBytes = 24;
@@ -116,6 +116,7 @@ struct InputMsg {
   float yaw = 0, pitch = 0;  // the camera: where one walks and looks on foot
   bool sprint = false;
   bool fireHeld = false;
+  bool aiming = false;
   u8 weapon = 1;
   bool indirect = false;  // aim is a point marked on the map
   i8 requestGear = 0;  // 0 nothing, otherwise forward or reverse, for as long as it is wanted

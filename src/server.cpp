@@ -649,6 +649,7 @@ int main(int argc, char** argv) {
         in[i].strikeAt = V3{c.in.strikeX, c.in.strikeY, 0};
         in[i].fireFoot = c.fire;
         in[i].fireHeld = c.in.fireHeld;
+        in[i].aiming = c.in.aiming;
         in[i].weapon = c.in.weapon;
         // How far behind this player's screen is: their picture is a tenth of a second late and half a ping old.
         in[i].lag = std::clamp((double(tick) - double(c.in.viewTick)) / kSendRate, 0.0, 0.3);

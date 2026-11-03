@@ -107,6 +107,7 @@ class Duel {
     bool use = false;  // E: get in, get out
     bool fireFoot = false;  // a press of the trigger
     bool fireHeld = false;
+    bool aiming = false;    // along the sights: steadier, and slower on the feet
     bool placeFoot = false, placeTank = false;
     bool strike = false;    // a code used on the point marked on the map
     bool query = false;     // asks a tapped computer where the enemy is
@@ -209,7 +210,8 @@ class Duel {
   void step(const Intent in[2]);
   void updateFrames();
   // weapon: 0 knife, 1 pistol, 2 assault rifle, 3 big rifle, 4 rocket launcher
-  static void poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon);
+  // sightsOnly: looking along one's own weapon. No body in the way, just the gun held up under the eye.
+  static void poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon, bool sightsOnly = false);
   V3 vehicleExit(int v) const;
   int nearestVehicle(V3 p, double reach) const;
   bool occupied(int v) const { return players[0].vehicle == v || players[1].vehicle == v; }
@@ -217,6 +219,10 @@ class Duel {
   // Moves a soldier one time step. Used by the server, and by a player's own machine to answer at once.
   void walk(Soldier& s, const WalkInput& in, double dt) const;
   static constexpr double kWalkDt = 0.01;
+  // A few fixed nodes for the one guided missile each launcher tank can have in the air, drawn as rods.
+  static constexpr int kMissileNodes = 7;
+  u32 missileFirst[2] = {};
+  static void poseMissile(Sim& sim, u32 first, bool live, V3 at, V3 dir);
   static constexpr double kTapTime = 5.0, kQueryWait = 30.0, kFixError = 70.0, kComputerReach = 2.6;
   bool atEnemyComputer(int p, V3 at) const { return len(at + V3{0, 0, 1.0} - world.base(1 - p).computer) < kComputerReach; }
   static constexpr double kSetupTime = 3.0;  // to get down and have the big rifle on its bipod

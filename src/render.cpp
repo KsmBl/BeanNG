@@ -1862,7 +1862,7 @@ struct Renderer::Impl {
         }
         case EV_BLAST: {
           const float R = e.strength;  // the blast's radius in metres
-          flash = std::max(flash, 1.f);
+          flash = std::max(flash, std::min(1.f, (R * 2.5f) / (1.f + float(len(e.p - lastCamEye)))));
           // Fireball.
           for (int i = 0; i < 90; i++) {
             Particle q;
@@ -1978,7 +1978,8 @@ struct Renderer::Impl {
           break;
         }
         case EV_MUZZLE: {
-          flash = std::max(flash, .35f * e.strength);
+          // A flash lights up what is near it; a shot a kilometre away is no reason for the whole picture to go white.
+          flash = std::max(flash, .35f * e.strength / (1.f + float(len(e.p - lastCamEye)) / 15.f));
           for (int i = 0; i < 26; i++) {
             Particle q;
             const V3 d = norm(e.v + V3{rnd(-.35f, .35f), rnd(-.35f, .35f), rnd(-.35f, .35f)});

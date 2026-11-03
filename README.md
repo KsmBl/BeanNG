@@ -77,6 +77,7 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 | Reparaturset, zu Fuß neben dem Fahrzeug | R | – |
 | Karte: Klick markiert das Ziel | K | – |
 | Waffe wählen | 1 bis 5 | – |
+| Anvisieren, auch im Panzer | rechte Maustaste halten | – |
 | Tretmine, Panzermine legen | M, N | – |
 | Bombencode auf den markierten Kartenpunkt: vier Raketen, ungenau | K, Klick, B | – |
 | Scharfschützengewehr aufbauen, Zielfernrohr, Zoom 6x bis 24x | X, rechte Maustaste, Mausrad | – |

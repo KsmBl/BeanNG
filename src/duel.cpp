@@ -60,6 +60,14 @@ void Duel::build() {
     for (int k = 0; k < kSoldierNodes; k++) sim.rest[soldierFirst[i] + u32(k)] = sim.pos[soldierFirst[i] + u32(k)];
     sim.endObj();
   }
+  for (int i = 0; i < 2; i++) {
+    sim.beginObj(OBJ_PROP, false);
+    missileFirst[i] = u32(sim.pos.size());
+    for (int k = 0; k < kMissileNodes; k++) sim.addNode(V3{}, 1.0, NF_FIXED);
+    poseMissile(sim, missileFirst[i], false, V3{}, V3{1, 0, 0});
+    for (int k = 0; k < kMissileNodes; k++) sim.rest[missileFirst[i] + u32(k)] = sim.pos[missileFirst[i] + u32(k)];
+    sim.endObj();
+  }
   sim.firstSceneryNode = u32(sim.pos.size());
   for (int k = 0; k < 2; k++)
     for (int i = 0; i < kMinesEach; i++) mineFirst[k][i] = addMarker(sim, k == 0 ? V3{0.13, 0.13, 0.035} : V3{0.24, 0.24, 0.06}, COL_STEEL);
@@ -204,7 +212,8 @@ const char* Duel::soldierPartName(int part) {
   return names[part];
 }
 
-void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon) {
+void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int weapon, bool sightsOnly) {
+  const bool hidden = hiddenIn || sightsOnly;
   const double moving = std::min(std::hypot(s.v.x, s.v.y) / 2.0, 1.0);
   const double run = std::min(std::hypot(s.v.x, s.v.y) / 8.5, 1.0);
   const double phase = s.stride * 2.1;
@@ -293,8 +302,29 @@ void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int w
   place(SP_FORE_R, &foreR);
   for (int g = 0; g < kSoldierParts - SP_GUN0; g++) {
     const int part = SP_GUN0 + g;
+    if (sightsOnly && g == weapon && !hiddenIn) {
+      // Held out under the eye, a little to the right, pointing where it looks.
+      const Limb held{grip, V3{0.62, -0.17, 1.45 - 0.2}, look};
+      for (int k = 0; k < kPartNodes; k++) sim.pos[first + u32(part * kPartNodes + k)] = world(held.at(corner(part, k)));
+      continue;
+    }
     place(part, g == weapon ? &gun : nullptr);
   }
+}
+
+void Duel::poseMissile(Sim& sim, u32 first, bool live, V3 at, V3 dir) {
+  // Tail, the body's end, the tip, and two pairs of fins across the tail. Always the same shape, underground when idle.
+  if (!live) {
+    at = V3{0, 0, -395.0};
+    dir = V3{1, 0, 0};
+  }
+  dir = norm(dir);
+  V3 u = cross(dir, std::fabs(dir.z) < 0.9 ? V3{0, 0, 1} : V3{1, 0, 0});
+  u = norm(u);
+  const V3 v = cross(dir, u);
+  const V3 tail = at - dir * 1.1;
+  const V3 nodes[kMissileNodes] = {tail, at + dir * 0.75, at + dir * 1.15, tail + u * 0.42, tail - u * 0.42, tail + v * 0.42, tail - v * 0.42};
+  for (int k = 0; k < kMissileNodes; k++) sim.pos[first + u32(k)] = nodes[k];
 }
 
 void Duel::walk(Soldier& s, const WalkInput& in, double dt) const {
@@ -565,7 +595,7 @@ void Duel::fireWeapon(int p, const Intent& in) {
     randState = randState * 1664525u + 1013904223u;
     return double(randState >> 16) / 65535.0 * 2.0 - 1.0;
   };
-  const double spread = kWeapons[w].spread * (1.0 + (w == WP_SNIPER ? 0.0 : std::min(len(s.v) * 0.5, 2.0)));
+  const double spread = kWeapons[w].spread * (in.aiming ? 0.35 : 1.0) * (1.0 + (w == WP_SNIPER ? 0.0 : std::min(len(s.v) * 0.5, 2.0)));
   dir = norm(dir + V3{chance(), chance(), chance()} * spread);
   Bullet b;
   b.p = eye + dir * 0.7;
@@ -959,6 +989,7 @@ void Duel::stepPlayers(const Intent in[2]) {
       pl.walkDebt -= kWalkDt;
       // Whoever lies down, or is getting up, is not going anywhere; only turning the rifle a little.
       WalkInput wi = in[i].walk;
+      if (in[i].aiming) wi.sprint = false, wi.forward *= 0.55, wi.strafe *= 0.55;
       // Before and after the match itself one waits where one stands.
       if (phase != PLAYING) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
       if (s.prone > 0) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
