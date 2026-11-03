@@ -544,6 +544,16 @@ struct Game {
   bool playing = false;  // connected, and the match on
   Soldier me;            // on foot: where this machine thinks it is, ahead of what the server has answered
 
+  // Where the other player's vehicle is, if they sit in one. Read by the window's thread, roughly, for the ears.
+  bool enemyVehicleFrame(int me, V3& at, double& speed) {
+    std::lock_guard<std::mutex> lock(snapMutex);
+    const int v = duel.players[1 - me].vehicle;
+    if (v < 0) return false;
+    at = duel.frames[v].cog;
+    speed = std::fabs(duel.frames[v].speed);
+    return true;
+  }
+
   void fillSnapshot(const char* message) {
     std::lock_guard<std::mutex> lock(snapMutex);
     Snapshot& s = snap;
@@ -2597,6 +2607,29 @@ static void runGame() {
       lastHp = view.foot.hp;
       hurtFlash = std::max(0.0, hurtFlash - dt * 1.4);
       hud.hurt = float(hurtFlash);
+    }
+    // What one can hear of the others, on the screen as well: shots and blasts as they happen, engines as long as they run.
+    {
+      for (HudOptions::Heard& h : hud.heard) h.life -= float(dt);
+      hud.heard.erase(std::remove_if(hud.heard.begin(), hud.heard.end(), [](const HudOptions::Heard& h) { return h.life <= 0 || h.life > 99.f; }), hud.heard.end());
+      for (const SimEvent& e : view.events) {
+        if (e.kind != EV_MUZZLE && e.kind != EV_BLAST) continue;
+        const double d = len(e.p - cam.eye);
+        // One's own are no news.
+        if (d < 12.0 && e.kind == EV_MUZZLE) continue;
+        const double reach = e.kind == EV_BLAST ? 1400.0 : (e.strength > 0.4f ? 1100.0 : (e.strength > 0.12f ? 500.0 : 280.0));
+        if (d > reach) continue;
+        hud.heard.push_back({e.p, float(std::clamp(1.0 - d / reach, 0.25, 1.0)), 2.0f, true});
+      }
+      if (hud.heard.size() > 12) hud.heard.erase(hud.heard.begin(), hud.heard.end() - 12);
+      if (inMatch) {
+        V3 who;
+        double speed = 0;
+        if (G.enemyVehicleFrame(slot, who, speed) && speed > 1.5) {
+          const double d = len(who - cam.eye);
+          if (d < 420.0) hud.heard.push_back({who, float(std::clamp(1.0 - d / 420.0, 0.2, 1.0)), 0.05f, false});
+        }
+      }
     }
     hud.vehicleHud = inVehicle;
     hud.crosshair = inMatch && !mapOpen && !view.missileLive && !view.foot.inCar;

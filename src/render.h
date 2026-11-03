@@ -177,6 +177,14 @@ struct HudOptions {
   int scopeZero = 100;
   float hurt = 0;  // being hit: how red the picture goes
   float hitMark = 0;   // a hit landed
+  // Something heard: which way, how loud, and how long ago it faded.
+  struct Heard {
+    V3 at;
+    float strength;
+    float life;
+    bool shot;
+  };
+  std::vector<Heard> heard;
   float hurtDir = 0;   // a hit taken, seconds left to show from where
   V3 hurtFrom;
   UiPanel panel;

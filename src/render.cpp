@@ -2870,6 +2870,17 @@ struct Renderer::Impl {
             rrect(cx + sx * d - 1.1f * u, cy + sy * d - 1.1f * u, 2.2f * u, 2.2f * u, 0, c);
           }
     }
+    // What can be heard: a pale mark around the middle, on the side it comes from, stronger the louder it is.
+    for (const HudOptions::Heard& h : o.heard) {
+      const V3 f = norm(camTarget - camEye);
+      const V3 to = h.at - camEye;
+      const double ahead = to.x * f.x + to.y * f.y, right = to.x * f.y - to.y * f.x;
+      const float ang = float(std::atan2(right, ahead));
+      const float cx = W * .5f, cy = H * .5f, r = (h.shot ? 92.f : 104.f) * u;
+      const float wide = h.shot ? .22f : .4f;
+      const Col c = h.shot ? Col{1.f, .85f, .55f, h.strength * std::min(h.life, 1.f) * .85f} : Col{.7f, .85f, 1.f, h.strength * std::min(h.life, 1.f) * .6f};
+      arc(cx, cy, r, 3.5f * u, ang - 1.5708f - wide, ang - 1.5708f + wide, c);
+    }
     // A hit taken: a red mark around the middle, on the side it came from.
     if (o.hurtDir > 0) {
       const V3 f = norm(camTarget - camEye);
