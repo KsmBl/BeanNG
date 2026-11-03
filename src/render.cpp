@@ -535,6 +535,10 @@ void propColor(u8 c, float& r, float& g, float& b, float& gloss) {
 }
 }  // namespace
 
+// Skid marks belong to the road, not to the renderer of the moment: they outlast a change of vehicle.
+static std::vector<LineV> gMarks;
+static size_t gMarkNext = 0, gMarkCount = 0;
+
 struct Renderer::Impl {
   const World* world = nullptr;
   const Sim* sim = nullptr;
@@ -988,8 +992,12 @@ struct Renderer::Impl {
         q[4] = v(r, a);
         q[5] = v(t.r, t.a);
         glBufferSubData(GL_ARRAY_BUFFER, GLintptr(markNext * sizeof(LineV)), sizeof q, q);
+        gMarks.resize(kMarkVerts);
+        std::copy(q, q + 6, gMarks.begin() + std::ptrdiff_t(markNext));
         markNext = (markNext + 6) % kMarkVerts;
         markCount = std::min(kMarkVerts, markCount + 6);
+        gMarkNext = markNext;
+        gMarkCount = markCount;
       }
       t = {true, l, r, a};
     }
@@ -1040,6 +1048,55 @@ struct Renderer::Impl {
           buildChunk(ch);
           chunks[lod].push_back(ch);
         }
+  }
+  // The land beyond the map: the same hills as the physics, on a coarser grid, slipping just under the edge
+  // of the detailed terrain so that no gap can open between the two.
+  GLuint outerVao = 0, outerVbo = 0, outerIbo = 0;
+  GLsizei outerCount = 0;
+  void buildOuter() {
+    constexpr double kStep = 16.0, kFar = 3300.0;
+    const int n = int(2.0 * kFar / kStep) + 1;
+    std::vector<Vtx> v(size_t(n) * n);
+    std::vector<u32> idx;
+    for (int j = 0; j < n; j++)
+      for (int i = 0; i < n; i++) {
+        const double x = -kFar + i * kStep, y = -kFar + j * kStep;
+        const bool under = std::fabs(x) < World::kHalf && std::fabs(y) < World::kHalf;
+        const double z = world->outerHeight(x, y) - (under ? 0.3 : 0.0);
+        const double e = 8.0;
+        const V3 nr = norm({world->outerHeight(x - e, y) - world->outerHeight(x + e, y), world->outerHeight(x, y - e) - world->outerHeight(x, y + e), 2.0 * e});
+        const u32 h = u32(i) * 374761393u + u32(j) * 668265263u;
+        const float t = float((h ^ (h >> 13)) * 1274126177u >> 24) / 255.f;
+        Vtx& q = v[size_t(j) * n + i];
+        q.x = float(x);
+        q.y = float(y);
+        q.z = float(z);
+        q.nx = float(nr.x);
+        q.ny = float(nr.y);
+        q.nz = float(nr.z);
+        q.r = U8(.12f + t * .05f);
+        q.g = U8(.24f + t * .07f);
+        q.b = U8(.07f + t * .03f);
+        q.a = 0;
+      }
+    for (int j = 0; j + 1 < n; j++)
+      for (int i = 0; i + 1 < n; i++) {
+        const double x0 = -kFar + i * kStep, y0 = -kFar + j * kStep;
+        // Nothing where the detailed terrain covers it completely.
+        if (x0 > -World::kHalf + kStep && x0 + kStep < World::kHalf - kStep && y0 > -World::kHalf + kStep && y0 + kStep < World::kHalf - kStep) continue;
+        const u32 a = u32(j * n + i), b = a + 1, c = a + u32(n), d = c + 1;
+        idx.insert(idx.end(), {a, b, c, b, d, c});
+      }
+    outerCount = GLsizei(idx.size());
+    glGenVertexArrays(1, &outerVao);
+    glGenBuffers(1, &outerVbo);
+    glGenBuffers(1, &outerIbo);
+    glBindVertexArray(outerVao);
+    glBindBuffer(GL_ARRAY_BUFFER, outerVbo);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(Vtx)), v.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, outerIbo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(idx.size() * sizeof(u32)), idx.data(), GL_STATIC_DRAW);
+    setupVtxAttribs();
   }
   void buildChunk(Chunk& ch) {
     constexpr int kChunk = 64;
@@ -1228,15 +1285,6 @@ struct Renderer::Impl {
           box(z0 + 0.80, z0 + 0.88, .95f, .55f, .15f);
         }
       }
-    }
-    // Beyond the edge of the map the land just goes on, fading into the haze.
-    {
-      constexpr double kEdge = World::kHalf - 1.0, kFar = 2400.0;
-      const float cr = .13f, cg = .26f, cb = .08f;
-      const double z = -1.5;
-      const V3 q[4] = {{-kEdge, -kEdge, z}, {kEdge, -kEdge, z}, {kEdge, kEdge, z}, {-kEdge, kEdge, z}};
-      const V3 o[4] = {{-kFar, -kFar, z}, {kFar, -kFar, z}, {kFar, kFar, z}, {-kFar, kFar, z}};
-      for (int i = 0; i < 4; i++) addQuad(v, o[i], o[(i + 1) % 4], q[(i + 1) % 4], q[i], cr, cg, cb, 0);
     }
     // Test lanes painted on the pad.
     auto line = [&](double x0, double y0, double x1, double y1, double wd, float r, float g, float b) {
@@ -2449,6 +2497,7 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   d->buildTerrain();
+  d->buildOuter();
   d->buildStatic();
   d->buildWheelParts();
   d->buildRod();
@@ -2502,7 +2551,9 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   glGenBuffers(1, &d->markVbo);
   glBindVertexArray(d->markVao);
   glBindBuffer(GL_ARRAY_BUFFER, d->markVbo);
-  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(Impl::kMarkVerts * sizeof(LineV)), nullptr, GL_DYNAMIC_DRAW);
+  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(Impl::kMarkVerts * sizeof(LineV)), gMarkCount > 0 ? gMarks.data() : nullptr, GL_DYNAMIC_DRAW);
+  d->markNext = gMarkNext;
+  d->markCount = gMarkCount;
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LineV), (void*)0);
   glEnableVertexAttribArray(1);
@@ -2526,6 +2577,7 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
 
 void Renderer::clearSkidMarks() {
   d->markNext = d->markCount = 0;
+  gMarkNext = gMarkCount = 0;
   for (auto& t : d->trail) t.valid = false;
 }
 
@@ -2752,6 +2804,8 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     glBindVertexArray(ch.vao);
     glDrawElements(GL_TRIANGLES, ch.count, GL_UNSIGNED_INT, nullptr);
   }
+  glBindVertexArray(D.outerVao);
+  glDrawElements(GL_TRIANGLES, D.outerCount, GL_UNSIGNED_INT, nullptr);
   glUniform1f(glGetUniformLocation(D.progMesh, "uRoadCut"), 1.f);
   glBindVertexArray(D.staticVao);
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);

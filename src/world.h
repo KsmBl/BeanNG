@@ -55,6 +55,8 @@ class World {
 
   // Physics queries (hot path).
   double height(double x, double y) const;
+  // The land beyond the detailed part of the map: the same hills carried on, for ever.
+  double outerHeight(double x, double y) const;
   V3 terrainNormal(double x, double y) const;
   bool contact(V3 p, Contact& out) const;
   u8 surfaceAt(double x, double y) const;
@@ -90,6 +92,7 @@ class World {
   std::vector<StaticBox> boxes_;
   std::vector<Road> roads_;
   std::vector<V3> trees_;
+  bool levelled_ = false;
   std::vector<Place> places_;
   std::vector<Crater> craters_;
   std::vector<float> h0_;

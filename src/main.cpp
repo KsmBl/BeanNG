@@ -501,6 +501,7 @@ struct Game {
         sim = simStart;
         car = carStart;
         tank = tankStart;
+        if (startPlace > 0) restoreVehicle();
         resetVisuals = true;
       } else if (in.reset || (kind == VK_LEOPARD && in.repair)) {
         restoreVehicle();
@@ -946,6 +947,15 @@ static std::vector<float> wavSamples;
 static double wavDebt = 0;
 
 // One vehicle in one world. Returns the vehicle to continue with, or -1 to quit.
+// What outlasts a change of vehicle: it counts as a respawn in the same world.
+struct CarriedWorld {
+  World world;
+  Sim sim;
+  u32 cars = 1;
+};
+static CarriedWorld* gCarried = nullptr;
+static int gStartPlace = 0;
+
 static int playSession(int kind, bool openMenu) {
   kSpawn = gSpawnBase;
   // Every session has its own GL context: closing it frees everything the renderer ever made.
@@ -989,6 +999,18 @@ static int playSession(int kind, bool openMenu) {
   G.simStart = G.sim;
   G.carStart = G.car;
   G.tankStart = G.tank;
+  const bool carried = gCarried != nullptr;
+  if (carried) {
+    // Everything but the vehicle goes on where it left off. The start state stays as built, for the reset of
+    // the whole world, and the ground is taken over only now: the vehicle settled on the level.
+    G.world = gCarried->world;
+    if (!G.sim.adoptWorld(gCarried->sim, gCarried->cars, kind == VK_LEOPARD ? 2 : 1)) fprintf(stderr, "Welt konnte nicht uebernommen werden\n");
+    delete gCarried;
+    gCarried = nullptr;
+  }
+  // Back at the chosen start point, on whatever the ground has become.
+  G.input.startPlace = gStartPlace;
+  G.input.reset = carried || gStartPlace > 0;
   const char* meshFile = kind == VK_LEOPARD ? "assets/leopard.mesh" : (kind == VK_ONE1 ? "assets/one1.mesh" : (kind == VK_HUMMER ? "assets/hummer.mesh" : "assets/xantia.mesh"));
   if (!G.mesh.load(meshFile)) {
     fprintf(stderr, "%s fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n", meshFile);
@@ -1043,7 +1065,7 @@ static int playSession(int kind, bool openMenu) {
   HudOptions hud;
   hud.crosshair = rig.tank;
   int nextVehicle = -1;
-  int startPlace = 0;
+  int startPlace = gStartPlace;
   // Panels: 0 none, 1 vehicle menu, 2 settings.
   enum { PANEL_NONE, PANEL_VEHICLE, PANEL_CAR, PANEL_GAME, PANEL_MAIN, PANEL_KEYS };
   int panelKind = openMenu ? PANEL_MAIN : PANEL_NONE;
@@ -1615,6 +1637,27 @@ static int playSession(int kind, bool openMenu) {
           }
           scriptGas = tNow > 5.0 && tNow < 9.0 ? 0.6 : 0.0;
           break;
+        case 33: {  // wreck the gauntlet, blow up on the way, change vehicle: all of it must still be there
+          if (kind == VK_XANTIA) {
+            const double head = std::atan2(view.carFwd.y, view.carFwd.x);
+            scriptGas = 0.9;
+            scriptSteer = clampd(-0.05 * view.carCog.y - 0.7 * head, -0.25, 0.25);
+            if (view.carCog.x > 30 && !repairDone) {
+              sendC.fire = true;
+              repairDone = true;
+            }
+            if (tNow > 9.0) {
+              nextVehicle = VK_HUMMER;
+              quit = true;
+            }
+          } else {
+            rig.mode = CAM_ORBIT;
+            rig.dist = 60.0;
+            rig.pitch = 0.35;
+            rig.yaw = PI + 0.1;
+          }
+          break;
+        }
         case 23:  // switches vehicle in mid-game, as the menu does, and back out
           if (tNow > 4.0) {
             nextVehicle = kind == VK_XANTIA ? VK_LEOPARD : -1;
@@ -1923,6 +1966,21 @@ static int playSession(int kind, bool openMenu) {
       cam.up = {0, 0, 1};
       cam.fovY = 45.0 * PI / 180.0;
     }
+    if (scriptMode == 33 && kind == VK_HUMMER) {  // down the gauntlet, from high up
+      cam.eye = V3{-30, -55, 34};
+      cam.target = V3{55, 0, 0};
+      cam.up = {0, 0, 1};
+      cam.fovY = 60.0 * PI / 180.0;
+    }
+    if (scriptMode == 34) {  // the edge of the map from the ground, looking along it and out across it
+      const double x = World::kHalf - 40.0;
+      cam.eye = V3{x, shotCount % 2 ? -30.0 : 200.0, G.world.height(x, 0.0) + 2.0};
+      cam.target = cam.eye + (shotCount % 2 ? V3{300, 200, 0} : V3{200, -300, 0});
+      cam.eye.z = G.world.height(cam.eye.x, cam.eye.y) + 2.2;
+      cam.target.z = cam.eye.z - 0.5;
+      cam.up = {0, 0, 1};
+      cam.fovY = 60.0 * PI / 180.0;
+    }
     if (scriptMode == 19) {  // a fixed view of the tree
       const V3 t = G.world.trees()[treeIndex];
       cam.target = t + V3{0, 0, 3.5};
@@ -1963,7 +2021,7 @@ static int playSession(int kind, bool openMenu) {
         const bool burst = scriptMode == 7 || scriptMode == 8;
         nextShot += burst ? 0.0 : 1.0;
         if (burst && nextShot < 6.0) nextShot = 6.0;
-        if (shotCount >= (burst ? 6 : (scriptMode == 9 || scriptMode == 22 || scriptMode == 25 || scriptMode == 26 || scriptMode == 31 ? 7 : (scriptMode == 12 ? 13 : 19)))) quit = true;
+        if (shotCount >= (burst ? 6 : (scriptMode == 9 || scriptMode == 22 || scriptMode == 25 || scriptMode == 26 || scriptMode == 31 || scriptMode == 34 ? 7 : (scriptMode == 12 ? 13 : 19)))) quit = true;
         if (scriptMode == 14 && tNow > 6.0) quit = true;
         if (scriptMode == 13 && view.carCog.x > 93 && std::fabs(view.speedKmh) < 2) quit = true;
       }
@@ -1986,6 +2044,10 @@ static int playSession(int kind, bool openMenu) {
   }
   G.running = false;
   physics.join();
+  gStartPlace = startPlace;
+  if (nextVehicle >= 0) {
+    gCarried = new CarriedWorld{G.world, G.sim, u32(kind == VK_LEOPARD ? 2 : 1)};
+  }
   if (gamepad) SDL_CloseGamepad(gamepad);
   SDL_SetWindowRelativeMouseMode(window, false);
   SDL_GL_DestroyContext(ctx);

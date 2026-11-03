@@ -54,7 +54,11 @@ double World::micro(double x, double y) const {
   return 0.0;
 }
 
+double World::outerHeight(double x, double y) const { return levelled_ ? 0.0 : baseTerrain(x, y); }
+
 double World::height(double x, double y) const {
+  // The grid ends at exactly these hills, so the two meet without a step.
+  if (x <= -kHalf || x >= kHalf || y <= -kHalf || y >= kHalf) return outerHeight(x, y);
   const double fx = clampd(x + kHalf, 0.0, double(N - 1) - 1e-6);
   const double fy = clampd(y + kHalf, 0.0, double(N - 1) - 1e-6);
   const int ix = int(fx), iy = int(fy);
@@ -130,6 +134,7 @@ bool World::contact(V3 p, Contact& out) const {
 }
 
 void World::flatten() {
+  levelled_ = true;
   std::fill(h_.begin(), h_.end(), 0.f);
 }
 

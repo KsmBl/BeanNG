@@ -155,6 +155,9 @@ class Sim {
   // Puts the first count objects back as they were in start, wherever pieces of them have got to, and
   // leaves everything else in the world exactly as it is.
   void restoreObjects(const Sim& start, u32 count);
+  // Takes over the state of everything but the vehicle from a simulation of the same world, in which the
+  // vehicle had oldCars objects where this one has newCars. Returns false if the worlds do not match.
+  bool adoptWorld(const Sim& old, u32 oldCars, u32 newCars);
   u32 carResets = 0;  // goes up each time that happens: the visible mesh must rebind too
   // Parts a beam at once, as a bolt shearing does.
   void sever(u32 beam) {

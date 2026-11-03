@@ -2050,6 +2050,74 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "adopt")) {
+    // Wreck the scenery with one vehicle and carry on with another: the scenery must be just as it was.
+    auto* w = new World();
+    w->build();
+    auto* a = new Sim();
+    CarRig ra;
+    a->world = w;
+    Vehicle ca = buildXantia(*a, {-90, 0, 0}, 0, &ra);
+    populateWorld(*a, *w);
+    a->finalize();
+    settleVehicle(*a, ca, 3.0);
+    Controls c;
+    c.throttle = 0.9;
+    for (int k = 0; k < 2000 * 11; k++) {
+      c.steer = clampd(-0.05 * ca.cog.y - 0.7 * std::atan2(ca.fwd.y, ca.fwd.x), -0.25, 0.25);
+      a->forces(kDt);
+      ca.update(*a, c, kDt);
+      a->finish(kDt);
+    }
+    const u32 oldCars = 1;
+    int brokenA = 0, piecesA = 0;
+    for (u32 i = a->objs[oldCars].beamStart; i < a->beams.size(); i++) brokenA += (a->beams[i].flags & BF_BROKEN) != 0;
+    for (const Obj& o : a->objs) piecesA += o.root != 0 && (&o - a->objs.data()) != o.root;
+    printf("alt: Umgebung gerissen %d, abgerissene Stuecke %d, Objekte %zu, wach %zu, Auto bei x %.0f\n", brokenA, piecesA, a->objs.size(), a->active.size(), ca.cog.x);
+    for (int which = 0; which < 3; which++) {
+      auto* b = new Sim();
+      CarRig rb;
+      b->world = w;
+      Vehicle cb;
+      Tank tb;
+      if (which == 0) cb = buildHummer(*b, {-90, 0, 0}, &rb);
+      else if (which == 1) cb = buildOne1(*b, {-90, 0, 0}, &rb);
+      else tb = buildLeopard(*b, {-90, 0, 0}, &rb);
+      populateWorld(*b, *w);
+      b->finalize();
+      if (which == 2) tb.settle(*b, 2.0);
+      else settleVehicle(*b, cb, 2.0);
+      const u32 newCars = which == 2 ? 2 : 1;
+      const bool ok = b->adoptWorld(*a, oldCars, newCars);
+      int brokenB = 0;
+      for (u32 i = b->objs[newCars].beamStart; i < b->beams.size(); i++) brokenB += (b->beams[i].flags & BF_BROKEN) != 0;
+      double off = 0;
+      const u32 na = a->objs[oldCars].nodeStart, nb = b->objs[newCars].nodeStart;
+      for (u32 i = 0; i + nb < b->pos.size(); i++) off = std::max(off, len(b->pos[nb + i] - a->pos[na + i]));
+      Controls cc;
+      cc.throttle = 0.3;
+      for (int k = 0; k < 2000 * 4; k++) {
+        b->forces(kDt);
+        if (which == 2) tb.update(*b, cc, kDt);
+        else cb.update(*b, cc, kDt);
+        b->finish(kDt);
+      }
+      int brokenAfter = 0;
+      for (u32 i = b->objs[newCars].beamStart; i < b->beams.size(); i++) brokenAfter += (b->beams[i].flags & BF_BROKEN) != 0;
+      printf("%s: uebernommen %d, gerissen %d (war %d), Abweichung %.6f m, Objekte %zu | nach 4 s: gerissen %d, wach %zu, guard %llu, Fahrzeug %.0f km/h\n", which == 0 ? "Hummer" : (which == 1 ? "One:1 " : "Leopard"), ok, brokenB, brokenA, off, b->objs.size(), brokenAfter, b->active.size(), (unsigned long long)b->clampedSteps, (which == 2 ? tb.speed : cb.speed) * 3.6);
+      delete b;
+    }
+    // The edge of the map: is the ground continuous across it?
+    double step = 0;
+    for (double t = -1000; t < 1000; t += 3.7) {
+      const double in = w->height(1023.99, t), out = w->height(1024.01, t);
+      step = std::max(step, std::fabs(in - out));
+      const double in2 = w->height(t, -1023.99), out2 = w->height(t, -1024.01);
+      step = std::max(step, std::fabs(in2 - out2));
+    }
+    printf("Kartenrand: groesster Hoehensprung %.3f m\n", step);
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "tankrun")) {
     auto* w = new World();
     auto* s = new Sim();

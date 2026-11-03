@@ -273,6 +273,76 @@ void Sim::forces(double dt) {
   }
 }
 
+bool Sim::adoptWorld(const Sim& old, u32 oldCars, u32 newCars) {
+  const u32 oldNode = old.objs[oldCars].nodeStart, newNode = objs[newCars].nodeStart;
+  const u32 oldBeam = old.objs[oldCars].beamStart, newBeam = objs[newCars].beamStart;
+  if (old.pos.size() - oldNode != pos.size() - newNode || old.beams.size() - oldBeam != beams.size() - newBeam) return false;
+  if (old.blocks.size() != blocks.size()) return false;
+  const long dNode = long(newNode) - long(oldNode), dBeam = long(newBeam) - long(oldBeam);
+  // Originals keep their order. Pieces torn off them come after, and pieces of the old vehicle go.
+  std::vector<int> objMap(old.objs.size(), -1);
+  const size_t originals = objs.size();
+  std::vector<Obj> keep(objs.begin(), objs.begin() + newCars);
+  int next = int(newCars);
+  for (size_t i = oldCars; i < old.objs.size(); i++)
+    if (old.objs[i].root >= oldCars) objMap[i] = next++;
+  (void)originals;
+  objs = std::move(keep);
+  objs.resize(size_t(next));
+  for (size_t i = oldCars; i < old.objs.size(); i++) {
+    if (objMap[i] < 0) continue;
+    Obj o = old.objs[i];
+    o.nodeStart = u32(long(o.nodeStart) + dNode);
+    o.beamStart = u32(long(o.beamStart) + dBeam);
+    for (u32& n : o.nodes) n = u32(long(n) + dNode);
+    for (u32& b : o.beamList) b = u32(long(b) + dBeam);
+    o.root = u16(objMap[o.root]);
+    objs[size_t(objMap[i])] = std::move(o);
+  }
+  for (size_t i = oldNode; i < old.pos.size(); i++) {
+    const size_t k = size_t(long(i) + dNode);
+    pos[k] = old.pos[i];
+    vel[k] = old.vel[i];
+    force[k] = old.force[i];
+    mass[k] = old.mass[i];
+    invMass[k] = old.invMass[i];
+    flags[k] = old.flags[i];
+    nodeObj[k] = u16(objMap[old.nodeObj[i]] >= 0 ? objMap[old.nodeObj[i]] : 0);
+  }
+  for (size_t i = oldBeam; i < old.beams.size(); i++) {
+    Beam b = old.beams[i];
+    b.a = u32(long(b.a) + dNode);
+    b.b = u32(long(b.b) + dNode);
+    beams[size_t(long(i) + dBeam)] = b;
+  }
+  // The scenery's triangles, in the same order in both. Those of the vehicle stay as they are.
+  size_t oi = 0;
+  for (Tri& t : tris) {
+    if (t.a < newNode) continue;
+    while (oi < old.tris.size() && old.tris[oi].a < oldNode) oi++;
+    if (oi >= old.tris.size()) return false;
+    t = old.tris[oi++];
+    t.a = u32(long(t.a) + dNode);
+    t.b = u32(long(t.b) + dNode);
+    t.c = u32(long(t.c) + dNode);
+    t.obj = u16(objMap[t.obj] >= 0 ? objMap[t.obj] : t.obj);
+  }
+  for (size_t i = 0; i < blocks.size(); i++) {
+    Block b = old.blocks[i];
+    for (u32& n : b.n) n = u32(long(n) + dNode);
+    b.obj = u16(objMap[b.obj] >= 0 ? objMap[b.obj] : b.obj);
+    blocks[i] = b;
+  }
+  active.clear();
+  for (size_t i = 0; i < objs.size(); i++)
+    if (objs[i].awake) active.push_back(u32(i));
+  blasts.clear();
+  plasticEnergy = 0;
+  triObjDirty = true;
+  stamp.assign(tris.size() + blocks.size(), 0xffffffffu);
+  return true;
+}
+
 void Sim::restoreObjects(const Sim& start, u32 count) {
   const Obj& last = start.objs[count - 1];
   const u32 nodeEnd = last.nodeStart + last.nodeCount, beamEnd = last.beamStart + last.beamCount;
