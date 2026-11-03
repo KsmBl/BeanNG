@@ -30,6 +30,7 @@ struct Soldier {
   double yaw = 0, pitch = 0;  // where the camera looks; yaw as the camera's, in the world
   double hp = 100;
   double stride = 0;          // how far the legs have walked, for drawing them
+  double prone = 0;           // 0 standing .. 1 flat on the ground, behind the big rifle
   bool grounded = true;
   static constexpr double kRadius = 0.32, kHeight = 1.8;
 };
@@ -88,8 +89,11 @@ class Duel {
   u32 tankFirst[kTanks] = {}, tankNodes = 0, tanksEnd = 0, carsEnd = 0;
   u32 carFirst[kCars] = {};
   VehicleFrame frames[kVehicles];
-  // Eight nodes each, which only ever get drawn: a soldier is not part of the soft body world.
-  static constexpr int kSoldierNodes = 8;
+  // Which never touch anything and only get drawn: a soldier is not part of the soft body world. A small cube of
+  // nodes to each rigid part of the body, as the mesh's binding wants, and each weapon counts as a part.
+  static constexpr int kPartNodes = 8, kSoldierParts = 17, kSoldierNodes = kSoldierParts * kPartNodes;
+  static const char* soldierPartName(int part);
+  static const V3 kSoldierRest;  // where the bind pose stands
   u32 soldierFirst[2] = {};
   size_t blastsDone = 0;
 
@@ -105,6 +109,7 @@ class Duel {
   void build();
   void step(const Intent in[2]);
   void updateFrames();
+  // weapon: 0 knife, 1 pistol, 2 assault rifle, 3 big rifle, 4 rocket launcher
   static void poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon);
   V3 vehicleExit(int v) const;
   int nearestVehicle(V3 p, double reach) const;

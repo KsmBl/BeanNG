@@ -511,6 +511,7 @@ const MatDef kMats[MM_COUNT] = {
     {0.030f, 0.031f, 0.034f, 0.60f}, // exposed carbon, lacquered
     {0.92f, 0.30f, 0.03f, 0.55f},    // orange accents
     {0.40f, 0.33f, 0.21f, 0.22f},    // desert sand paint, matt
+    {0.52f, 0.34f, 0.24f, 0.10f},    // skin
 };
 
 void propColor(u8 c, float& r, float& g, float& b, float& gloss) {

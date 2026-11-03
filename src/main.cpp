@@ -1096,7 +1096,7 @@ struct Game {
       // Both soldiers drawn: oneself where one thinks one is, the other as the server last said.
       for (int i = 0; i < 2; i++) {
         const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0;
-        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, 1);
+        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, 2);
       }
 
       if (state == NET_IN && now >= nextInput) {
@@ -1225,19 +1225,25 @@ static void runGame() {
     }
     G.rig.parkedNodes.push_back({first, end - first});
   }
-  G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
-  // A soldier is rods between its eight nodes: body, head, legs, arms and what it holds.
+  // Two soldiers, each part held by its own few nodes.
   for (int i = 0; i < 2; i++) {
-    const u32 f = G.duel.soldierFirst[i];
-    const u8 cloth = i == 0 ? MM_OLIVE : MM_SAND;
-    G.rig.links.push_back({f, f + 1, 0.19f, cloth, 0});
-    G.rig.links.push_back({f + 1, f + 2, 0.11f, MM_DARK, 0});
-    G.rig.links.push_back({f, f + 3, 0.09f, cloth, 0});
-    G.rig.links.push_back({f, f + 4, 0.09f, cloth, 0});
-    G.rig.links.push_back({f + 1, f + 5, 0.055f, cloth, 0});
-    G.rig.links.push_back({f + 1, f + 6, 0.055f, cloth, 0});
-    G.rig.links.push_back({f + 6, f + 7, 0.03f, MM_BLACK, 0});
+    CarMesh body;
+    const char* file = i == 0 ? "assets/soldier.mesh" : "assets/soldier2.mesh";
+    if (!body.load(file)) {
+      fprintf(stderr, "%s fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n", file);
+      return;
+    }
+    const int k = Duel::kVehicles + i;
+    G.mesh.addParked(body, k, Duel::kSoldierRest, 0.0, origin, {});
+    const u32 first = G.duel.soldierFirst[i];
+    for (int part = 0; part < Duel::kSoldierParts; part++) {
+      std::vector<u32> nodes;
+      for (int n = 0; n < Duel::kPartNodes; n++) nodes.push_back(first + u32(part * Duel::kPartNodes + n));
+      G.rig.groups.push_back({std::to_string(k) + ":" + Duel::soldierPartName(part), nodes});
+    }
+    G.rig.parkedNodes.push_back({first, u32(Duel::kSoldierNodes)});
   }
+  G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());
 
   SDL_GL_SetSwapInterval(gSet.vsync ? 1 : 0);
@@ -1679,7 +1685,7 @@ static void runGame() {
     if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) keyDir -= 1;
     double gas = (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) ? 1.0 : 0.0;
     double brake = (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) ? 1.0 : 0.0;
-    const bool sprint = keys[SDL_SCANCODE_LSHIFT];
+    const bool sprint = keys[SDL_SCANCODE_LSHIFT] || (scriptMode == 45 && tNow > 8.0);
     double steer = keyDir, hb = keys[SDL_SCANCODE_SPACE] ? 1.0 : 0.0;
 
     hud.gamepad = false;
@@ -1722,6 +1728,19 @@ static void runGame() {
     if (!inMatch && panelKind != 0) rig.yaw += dt * 0.12;
 
     // Scripted runs, for trying out the real thing without anyone at the controls.
+    if (scriptMode == 45 && netState == Game::NET_IN) {
+      // A look at the figure: standing, walking, running.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      if (inMatch) {
+        panelKind = PANEL_NONE;
+        rig.yaw = PI * 0.5;
+        rig.pitch = -0.2 + 0.2 * std::sin(tNow);
+        gas = tNow < 5.0 ? 0.0 : 1.0;
+      }
+    }
     if (scriptMode == 41 && netState == Game::NET_IN) {
       {
         // Says something once, to see it arrive on both screens.
@@ -1968,6 +1987,12 @@ static void runGame() {
       cam.up = {0, 0, 1};
       cam.inside = false;
       cam.fovY = 62.0 * PI / 180.0 + gSet.fov * PI / 180.0;
+    }
+    if (scriptMode == 45) {
+      const double a = 0.6 + double(shotCount) * 0.9;
+      cam.target = view.foot.p + V3{0, 0, 1.0};
+      cam.eye = cam.target + V3{std::cos(a) * 2.4, std::sin(a) * 2.4, 0.3};
+      cam.fovY = 55.0 * PI / 180.0;
     }
     hud.motionBlur = gSet.motionBlur;
     hud.damageView = gSet.damageView && inTank;

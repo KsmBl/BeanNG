@@ -53,10 +53,8 @@ void Duel::build() {
   for (int i = 0; i < 2; i++) {
     sim.beginObj(OBJ_PROP, false);
     soldierFirst[i] = u32(sim.pos.size());
-    Soldier rest;
-    rest.p = V3{0, 0, -400};
     for (int k = 0; k < kSoldierNodes; k++) sim.addNode(V3{}, 1.0, NF_FIXED);
-    poseSoldier(sim, soldierFirst[i], rest, false, 0);
+    poseSoldier(sim, soldierFirst[i], Soldier{}, true, 0);
     for (int k = 0; k < kSoldierNodes; k++) sim.rest[soldierFirst[i] + u32(k)] = sim.pos[soldierFirst[i] + u32(k)];
     sim.endObj();
   }
@@ -131,25 +129,112 @@ void Duel::updateFrames() {
   }
 }
 
+const V3 Duel::kSoldierRest{0, 0, -400};
+
+namespace {
+enum SoldierPart { SP_PELVIS, SP_TORSO, SP_HEAD, SP_THIGH_L, SP_THIGH_R, SP_SHIN_L, SP_SHIN_R, SP_UPPER_L, SP_UPPER_R, SP_FORE_L, SP_FORE_R, SP_GUN0 };
+constexpr double kProneAngle = 1.5;
+constexpr double kHip = 0.93, kKnee = 0.50, kShoulder = 1.42, kElbow = 1.13, kWrist = 0.87, kHipY = 0.10, kShoulderY = 0.215;
+// The middle of each part, in the bind pose: x forward, y left, z up from the ground.
+const V3 kPartMid[Duel::kSoldierParts] = {
+    {0, 0, 0.93}, {0, 0, 1.25}, {0, 0, 1.62}, {0, kHipY, 0.72}, {0, -kHipY, 0.72}, {0, kHipY, 0.27}, {0, -kHipY, 0.27},
+    {0, kShoulderY, 1.28}, {0, -kShoulderY, 1.28}, {0, kShoulderY, 1.0}, {0, -kShoulderY, 1.0},
+    {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83}, {0, -kShoulderY, 0.83},
+};
+// Turned about the sideways axis. A positive angle swings what hangs down forward, and lifts what points forward.
+V3 swingF(V3 q, double a) {
+  const double c = std::cos(a), s = std::sin(a);
+  return V3{q.x * c - q.z * s, q.y, q.x * s + q.z * c};
+}
+// A part in the body's own frame, moved from the bind pose by turning it about a joint and bringing that joint along.
+struct Limb {
+  V3 joint, to;
+  double angle;
+  double inward = 0;  // turned about the vertical first: an arm reaching across the chest
+  V3 at(V3 q) const {
+    const V3 d = q - joint;
+    const double c = std::cos(inward), s = std::sin(inward);
+    return to + swingF(V3{d.x * c - d.y * s, d.x * s + d.y * c, d.z}, angle);
+  }
+};
+}  // namespace
+
+const char* Duel::soldierPartName(int part) {
+  static const char* names[kSoldierParts] = {"pelvis", "torso", "head", "thigh_l", "thigh_r", "shin_l", "shin_r", "upper_l", "upper_r", "fore_l", "fore_r", "gun_knife", "gun_pistol", "gun_ar", "gun_sniper", "gun_rpg", "gun_none"};
+  return names[part];
+}
+
 void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon) {
-  // Standing, with the legs swinging as far as it has walked, and whatever is in the hands pointing where it looks.
-  V3 at = s.p;
-  if (hidden) at = V3{0, 0, -400};
+  const double moving = std::min(std::hypot(s.v.x, s.v.y) / 2.0, 1.0);
+  const double run = std::min(std::hypot(s.v.x, s.v.y) / 7.0, 1.0);
+  const double phase = s.stride * 2.1;
+  const double swingAmp = (0.45 + 0.35 * run) * moving;
+  const double aL = std::sin(phase) * swingAmp, aR = -std::sin(phase) * swingAmp;
+  // The knee bends as the leg comes through, more at a run.
+  const double kneeL = std::max(0.0, -std::cos(phase)) * (0.7 + 0.5 * run) * moving + 0.05, kneeR = std::max(0.0, std::cos(phase)) * (0.7 + 0.5 * run) * moving + 0.05;
+  const double dropByStride = 0.02 * moving * std::fabs(std::sin(phase));
+  // Where it looks: positive upward. The body follows a little, the head and the weapon all the way.
+  const double look = clampd(-s.pitch, -0.9, 0.9);
+  const bool longGun = weapon >= 2;
+  const double lean = look * 0.25 + 0.06 * run + (longGun ? 0.05 : 0.0);
+  const V3 pelvisJoint{0, 0, kHip};
+  const Limb torso{pelvisJoint, pelvisJoint, lean};
+  const Limb head{V3{0, 0, 1.5}, torso.at(V3{0, 0, 1.5}), look + s.prone * 1.3};
+  const Limb thighL{V3{0, kHipY, kHip}, V3{0, kHipY, kHip}, aL}, thighR{V3{0, -kHipY, kHip}, V3{0, -kHipY, kHip}, aR};
+  const Limb shinL{V3{0, kHipY, kKnee}, thighL.at(V3{0, kHipY, kKnee}), aL - kneeL}, shinR{V3{0, -kHipY, kKnee}, thighR.at(V3{0, -kHipY, kKnee}), aR - kneeR};
+  // The arms hold what is carried up in front: a long gun with both hands, a short one further out, nothing swings them.
+  const double raiseR = weapon == 0 ? 0.25 + aL * 0.5 : (longGun ? 0.55 : 1.15);
+  const double bendR = weapon == 0 ? 0.5 : (longGun ? 1.15 : 0.35);
+  const double raiseL = weapon == 0 ? aR * 0.8 : (longGun ? 1.0 : 1.0);
+  const double bendL = weapon == 0 ? 0.3 : (longGun ? 0.55 : 0.6);
+  const V3 shoulderL{0, kShoulderY, kShoulder}, shoulderR{0, -kShoulderY, kShoulder};
+  const double acrossL = weapon == 0 ? 0.0 : (longGun ? 0.9 : 0.75), acrossR = weapon == 0 ? 0.0 : 0.35;
+  const Limb upperL{shoulderL, torso.at(shoulderL), raiseL + (weapon ? look : 0.0), acrossL}, upperR{shoulderR, torso.at(shoulderR), raiseR + (weapon ? look : 0.0), acrossR};
+  const V3 elbowL{0, kShoulderY, kElbow}, elbowR{0, -kShoulderY, kElbow};
+  const Limb foreL{elbowL, upperL.at(elbowL), upperL.angle + bendL, acrossL}, foreR{elbowR, upperR.at(elbowR), upperR.angle + bendR, acrossR};
+  const V3 grip{0, -kShoulderY, kWrist - 0.04};
+  // Lying down turns the figure forward, and what it looks along has to come back up by as much.
+  const double liftBack = s.prone * kProneAngle;
+  const Limb gun{grip, foreR.at(grip), weapon == 0 ? foreR.angle - 1.2 : look + liftBack};
+
+  // Then the whole figure: turned to where it faces, and laid down when it is lying.
   const double cy = std::cos(s.yaw), sy = std::sin(s.yaw);
-  const V3 ahead{-cy, -sy, 0}, side{-sy, cy, 0};
-  const double swing = std::sin(s.stride * 2.6) * 0.32 * (len2(s.v) > 0.2 ? 1.0 : 0.0);
-  const V3 aim = ahead * std::cos(s.pitch) - V3{0, 0, 1} * std::sin(s.pitch);
-  const V3 hip = at + V3{0, 0, 0.92};
-  const V3 neck = at + V3{0, 0, 1.46} + ahead * 0.05;
-  const V3 shoulder = neck - V3{0, 0, 0.08};
-  const V3 handR = shoulder - side * 0.16 + aim * 0.52;
-  const V3 handL = shoulder + side * 0.06 + aim * 0.62;
-  const V3 nodes[kSoldierNodes] = {
-      hip, neck, neck + V3{0, 0, 0.30},
-      at + ahead * swing + side * 0.13, at - ahead * swing - side * 0.13,
-      handL, handR, handR + aim * (weapon == 0 ? 0.16 : (weapon >= 3 ? 1.5 : 0.9)),
+  const V3 ahead{-cy, -sy, 0};
+  const V3 left = V3{-ahead.y, ahead.x, 0};
+  const auto world = [&](V3 q) {
+    if (s.prone > 0) {
+      // About the feet, flat onto the belly with the head towards where it looks.
+      q = swingF(q, -s.prone * kProneAngle);
+      q.z += s.prone * 0.18;
+    }
+    q.z -= dropByStride;
+    return s.p + ahead * q.x + left * q.y + V3{0, 0, q.z};
   };
-  for (int k = 0; k < kSoldierNodes; k++) sim.pos[first + u32(k)] = nodes[k];
+  const auto corner = [](int part, int k) {
+    return kPartMid[part] + V3{(k & 1) ? 0.06 : -0.06, (k & 2) ? 0.06 : -0.06, (k & 4) ? 0.06 : -0.06};
+  };
+  const auto place = [&](int part, const Limb* limb) {
+    for (int k = 0; k < kPartNodes; k++) {
+      const u32 n = first + u32(part * kPartNodes + k);
+      sim.pos[n] = hidden || !limb ? kSoldierRest + corner(part, k) : world(limb->at(corner(part, k)));
+    }
+  };
+  const Limb still{V3{}, V3{}, 0.0};
+  place(SP_PELVIS, &still);
+  place(SP_TORSO, &torso);
+  place(SP_HEAD, &head);
+  place(SP_THIGH_L, &thighL);
+  place(SP_THIGH_R, &thighR);
+  place(SP_SHIN_L, &shinL);
+  place(SP_SHIN_R, &shinR);
+  place(SP_UPPER_L, &upperL);
+  place(SP_UPPER_R, &upperR);
+  place(SP_FORE_L, &foreL);
+  place(SP_FORE_R, &foreR);
+  for (int g = 0; g < kSoldierParts - SP_GUN0; g++) {
+    const int part = SP_GUN0 + g;
+    place(part, g == weapon ? &gun : nullptr);
+  }
 }
 
 void Duel::walk(Soldier& s, const WalkInput& in, double dt) const {

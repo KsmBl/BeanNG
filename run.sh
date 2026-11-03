@@ -18,6 +18,10 @@ fi
 if [[ ! -f assets/leopard.mesh || tools/gen_leopard.py -nt assets/leopard.mesh ]]; then
   python3 tools/gen_leopard.py assets/leopard.mesh
 fi
+if [[ ! -f assets/soldier.mesh || tools/gen_soldier.py -nt assets/soldier.mesh ]]; then
+  python3 tools/gen_soldier.py assets/soldier.mesh olive olive2
+  python3 tools/gen_soldier.py assets/soldier2.mesh sand rust
+fi
 for v in light arty missile; do
   if [[ ! -f assets/leopard_$v.mesh || tools/gen_leopard.py -nt assets/leopard_$v.mesh ]]; then
     python3 tools/gen_leopard.py assets/leopard_$v.mesh $v
