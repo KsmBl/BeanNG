@@ -1750,6 +1750,7 @@ static void runGame() {
       });
       if (!netError.empty()) items.push_back({netError, "", -1.f, [](int) {}});
     } else if (panelKind == PANEL_LOADOUT) {
+      items.push_back({"Immer dabei", "Pistole, Messer", -1.f, [](int) {}});
       for (int i = 0; i < IT_COUNT; i++) {
         char name[64], b[16];
         snprintf(name, sizeof name, "%s  (%d %s)", kItems[i].name, kItems[i].slots, kItems[i].slots == 1 ? "Slot" : "Slots");
@@ -1967,7 +1968,7 @@ static void runGame() {
           if (inside) panelSel = row;
           if (inside && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
             // In a value row: left half of the value down, right half up.
-            if ((panelKind == PANEL_GAME || panelKind == PANEL_LOADOUT) && row + 1 < int(items.size())) panelAdjust(mxp < px + pwid * 0.65f ? -1 : 1);
+            if ((panelKind == PANEL_GAME || panelKind == PANEL_LOADOUT) && (panelKind != PANEL_LOADOUT || row + 1 < int(items.size()))) panelAdjust(mxp < px + pwid * 0.65f ? -1 : 1);
             else choosePanel();
           }
         } else {
@@ -2153,6 +2154,13 @@ static void runGame() {
         scopeZoom = 6.0;
         if (std::fmod(tNow, 2.5) < dt) sendC.fire = true;
       }
+    }
+    if (scriptMode == 54 && netState == Game::NET_IN && phase == Duel::CHOOSING) {
+      // The loadout menu, with something chosen.
+      pickItems[IT_REPAIR] = 1;
+      pickItems[IT_AR] = 1;
+      pickItems[IT_SMALL_AMMO] = 3;
+      panelSel = 2;
     }
     if (scriptMode == 45 && netState == Game::NET_IN) {
       // A look at the figure: standing, walking, running.
@@ -2432,6 +2440,23 @@ static void runGame() {
       hud.panel.rows.clear();
       hud.panel.values.clear();
       hud.panel.fill.clear();
+      hud.panel.detail.clear();
+      hud.panel.slots.clear();
+      if (panelKind == PANEL_LOADOUT) {
+        static const char* kAbout[IT_COUNT] = {
+            "Tretmine: liegt flach am Boden und ist nach 3 Sekunden scharf. Wer drauftritt, stirbt meist. Auch ein Fahrzeug löst sie aus. Legen mit M.",
+            "Panzermine: reißt die Kette auf der Seite ab und richtet schweren Schaden an. Zu Fuß nichts zu befürchten. Legen mit N.",
+            "Reparaturset: bringt ein Fahrzeug wieder zum Laufen. Dauert 6 Sekunden zu Fuß daneben, und es muss stillstehen. Taste R.",
+            "Sturmgewehr: Dauerfeuer auf mittlere Entfernung. Schießt mit der Kleinmunition. Gegen Panzer fast wirkungslos. Taste 3.",
+            "Kleinmunition: 60 Schuss für Pistole und Sturmgewehr, zusätzlich zu den 24, die du immer hast.",
+        };
+        if (panelSel >= 1 && panelSel <= IT_COUNT) hud.panel.detail = kAbout[panelSel - 1];
+        else if (panelSel == 0) hud.panel.detail = "Das hast du immer dabei: Pistole mit 24 Schuss und Kampfmesser. Alles andere findest du in Kisten in Häusern und bei Wracks: Scharfschützengewehr, Raketenwerfer, Granaten und Bombencodes.";
+        else hud.panel.detail = "20 Slots. Ist alles gewählt, wähle Bereit. Du startest zu Fuß in deiner Basis und nimmst dir dort ein Fahrzeug.";
+        for (int k = 0; k < IT_COUNT; k++)
+          for (int n = 0; n < pickItems[k] * kItems[k].slots; n++) hud.panel.slots.push_back(k);
+        while (int(hud.panel.slots.size()) < kLoadoutSlots) hud.panel.slots.push_back(-1);
+      }
       for (const Item& it : items) {
         hud.panel.rows.push_back(it.label);
         hud.panel.values.push_back(it.value);

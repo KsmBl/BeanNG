@@ -132,6 +132,8 @@ struct UiPanel {
   std::vector<std::string> rows;
   std::vector<std::string> values;
   std::vector<float> fill;   // bar behind the value, 0..1, or negative for none
+  std::string detail;        // about what is selected, under the list
+  std::vector<int> slots;    // a row of boxes, each the kind of thing filling that slot; -1 empty
   int sel = 0;
 };
 // Where a panel sits, shared by drawing it and clicking on it.

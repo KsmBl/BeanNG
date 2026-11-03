@@ -2778,6 +2778,47 @@ struct Renderer::Impl {
         }
       }
       label(x + 22 * sc, y + (float(P.rows.size()) + .75f) * rowH, P.foot.c_str(), 13 * sc, faint);
+      if (!P.slots.empty() || !P.detail.empty()) {
+        // Beside the list: what fills the slots, and what the selected thing is good for.
+        const float bx = x + pw + 14 * sc, bw = std::min(W - bx - 14 * sc, 420 * sc);
+        const float bh = (float(P.rows.size()) + 3.6f) * rowH;
+        rrect(bx, y - 2.0f * rowH, bw, bh, 18 * sc, {.04f, .045f, .055f, .88f});
+        static const Col kKinds[6] = {{.95f, .35f, .25f, 1}, {.95f, .65f, .2f, 1}, {.35f, .85f, .95f, 1}, {.45f, .85f, .45f, 1}, {.8f, .8f, .55f, 1}, {.7f, .6f, .95f, 1}};
+        float ty = y - 1.05f * rowH;
+        label(bx + 18 * sc, ty, "Slots", 17 * sc, white);
+        ty += rowH * .7f;
+        const float cell = (bw - 36 * sc) / 10.f;
+        for (size_t i = 0; i < P.slots.size(); i++) {
+          const float cxx = bx + 18 * sc + float(i % 10) * cell, cyy = ty + float(i / 10) * cell;
+          const int k = P.slots[i];
+          rrect(cxx + 1.5f * sc, cyy + 1.5f * sc, cell - 3 * sc, cell - 3 * sc, 4 * sc, k < 0 ? Col{1, 1, 1, .08f} : kKinds[size_t(k) % 6]);
+        }
+        ty += cell * 2.f + rowH * .7f;
+        // The words, broken at spaces to fit.
+        const float fs = 15 * sc, maxW = bw - 36 * sc;
+        std::string line, word;
+        const auto flush = [&] {
+          label(bx + 18 * sc, ty, line.c_str(), fs, Col{1, 1, 1, .82f});
+          ty += fs * 1.45f;
+          line.clear();
+        };
+        for (size_t i = 0; i <= P.detail.size(); i++) {
+          if (i == P.detail.size() || P.detail[i] == ' ' || P.detail[i] == '\n') {
+            const std::string attempt = line.empty() ? word : line + " " + word;
+            if (textWidth(attempt.c_str(), fs) > maxW && !line.empty()) {
+              flush();
+              line = word;
+            } else {
+              line = attempt;
+            }
+            word.clear();
+            if (i < P.detail.size() && P.detail[i] == '\n') flush();
+          } else {
+            word += P.detail[i];
+          }
+        }
+        if (!line.empty()) flush();
+      }
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, hudVbo);
