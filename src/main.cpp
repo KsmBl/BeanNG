@@ -983,6 +983,9 @@ struct Game {
             duel.players[mySlot].sniperAmmo = sniper;
             duel.players[mySlot].rpgAmmo = rpg;
             for (int k = 0; k < WP_COUNT; k++) duel.players[mySlot].hasWeapon[k] = has & (1 << k);
+            r.get(duel.players[mySlot].hitsLanded);
+            r.get(duel.players[mySlot].hitsTaken);
+            duel.players[mySlot].hurtFrom = r.getV3();
             duel.wind = r.getV3();
             i16 shells = 0, missiles = 0, codes = 0;
             r.get(shells);
@@ -1434,6 +1437,9 @@ struct Game {
         snap.foot.prone = me.prone;
         snap.foot.wind = duel.wind;
         const Duel::Player& who = duel.players[mySlot];
+        snap.foot.hitsLanded = who.hitsLanded;
+        snap.foot.hitsTaken = who.hitsTaken;
+        snap.foot.hurtFrom = who.hurtFrom;
         snap.foot.ammo = in.weapon == WP_KNIFE ? -1 : (in.weapon == WP_SNIPER ? who.sniperAmmo : (in.weapon == WP_RPG ? who.rpgAmmo : who.smallAmmo));
         snap.foot.tapped = who.tapped;
         snap.foot.hasFix = who.hasFix;
@@ -2428,6 +2434,24 @@ static void runGame() {
     view.chatInput = chatText;
     // Being hit shows: the picture goes red for a moment.
     {
+      // A hit landed: a mark in the crosshair and a tick. A hit taken: a mark on the side it came from.
+      static int landedSeen = 0, takenSeen = 0;
+      if (view.foot.hitsLanded != landedSeen) {
+        if (view.foot.hitsLanded > landedSeen) {
+          hud.hitMark = 1.f;
+          sound->synth.trigger(Sfx::Crack, 0.25f, 0.f, 0.5f);
+        }
+        landedSeen = view.foot.hitsLanded;
+      }
+      if (view.foot.hitsTaken != takenSeen) {
+        if (view.foot.hitsTaken > takenSeen) {
+          hud.hurtDir = 2.2f;
+          hud.hurtFrom = view.foot.hurtFrom;
+        }
+        takenSeen = view.foot.hitsTaken;
+      }
+      hud.hitMark = std::max(0.f, hud.hitMark - float(dt) * 3.5f);
+      hud.hurtDir = std::max(0.f, hud.hurtDir - float(dt));
       static double lastHp = 100;
       if (view.foot.hp < lastHp - 0.5) hurtFlash = std::min(1.0, hurtFlash + (lastHp - view.foot.hp) / 40.0 + 0.3);
       lastHp = view.foot.hp;

@@ -62,6 +62,8 @@ struct Snapshot {
     int weapon = 1;
     int ammo = 0;  // for what is in the hand, -1 if it needs none
     int has = 3;
+    int hitsLanded = 0, hitsTaken = 0;
+    V3 hurtFrom;
     int slot = 0;
     double fuelShare = 1;
     int shells = 0, missiles = 0, codes = 0;
@@ -165,6 +167,9 @@ struct HudOptions {
   // Looking through the big rifle's scope, at this magnification; 0 when not.
   double scope = 0;
   float hurt = 0;  // being hit: how red the picture goes
+  float hitMark = 0;   // a hit landed
+  float hurtDir = 0;   // a hit taken, seconds left to show from where
+  V3 hurtFrom;
   UiPanel panel;
   UiMap map;
   bool vehicleHud = true;

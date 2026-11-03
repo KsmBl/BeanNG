@@ -90,6 +90,9 @@ class Duel {
     int vehicle = -1;  // what they sit in, -1 on foot
     double walkDebt = 0;
     V3 lastBlow;  // the last thing to hit them, for how they fall
+    // For the screen: how many hits this player has landed, how many they have taken, and from where the last came.
+    u16 hitsLanded = 0, hitsTaken = 0;
+    V3 hurtFrom;
     // The enemy's main computer: a few seconds at it, and from then on it says roughly where they are.
     bool tapped = false;
     double tapClock = 0;
@@ -268,6 +271,8 @@ class Duel {
   // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
   bool bulletInCar(int k, V3 from, V3 dir, int kind);
   void placeMine(int p, int kind);
+  void noteHit(int victim, int attacker, V3 from);
+  double tankDamageSeen[kTanks] = {};
   void callStrike(int p, V3 at);
   void stepMines(double dt);
   V3 soldierAt(int p, double lag) const;

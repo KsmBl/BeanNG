@@ -2676,6 +2676,26 @@ struct Renderer::Impl {
       label(mx0 + 14 * u, my0 + ms - 18 * u, "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  B: Bombencode  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }
 
+    // A hit landed: a cross in the crosshair.
+    if (o.hitMark > 0) {
+      const float cx = W * .5f, cy = H * .5f, a = std::min(o.hitMark * 2.f, 1.f);
+      const Col c{1, .92f, .85f, a};
+      for (float sx : {-1.f, 1.f})
+        for (float sy : {-1.f, 1.f})
+          for (int k = 0; k < 7; k++) {
+            const float d = (9.f + float(k) * 1.6f) * u;
+            rrect(cx + sx * d - 1.1f * u, cy + sy * d - 1.1f * u, 2.2f * u, 2.2f * u, 0, c);
+          }
+    }
+    // A hit taken: a red mark around the middle, on the side it came from.
+    if (o.hurtDir > 0) {
+      const V3 f = norm(camTarget - camEye);
+      const V3 to = o.hurtFrom - camEye;
+      const double ahead = to.x * f.x + to.y * f.y, right = to.x * f.y - to.y * f.x;
+      const float ang = float(std::atan2(right, ahead));  // 0 straight ahead, positive to the right
+      const float cx = W * .5f, cy = H * .5f, r = 120 * u;
+      arc(cx, cy, r, 7.f * u, ang - 1.5708f - .45f, ang - 1.5708f + .45f, {.95f, .12f, .08f, std::min(o.hurtDir, 1.f) * .9f});
+    }
     if (o.hurt > 0) rrect(0, 0, W, H, 0, {.55f, .02f, .02f, .4f * o.hurt});
     // ---- A driver without periscopes sees through what is left of them.
     if (s.foot.noPeriscope && o.vehicleHud) {

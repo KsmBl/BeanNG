@@ -772,6 +772,7 @@ void Duel::fireWeapon(int p, const Intent& in) {
     if (players[1 - p].vehicle < 0 && len(V3{target.x - s.p.x, target.y - s.p.y, target.z - s.p.z}) < 2.2) {
       other.hp -= kWeapons[w].damage;
       players[1 - p].lastBlow = norm(target - s.p + V3{0, 0, 0.3}) * 2.0;
+      noteHit(1 - p, p, s.p);
       sim.event(EV_BLOOD, target + V3{0, 0, 1.1}, norm(target - s.p) * 2.0, 0.7f);
     }
     return;
@@ -869,6 +870,7 @@ bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind) {
         if (pl.vehicle == kTanks + k) {
           pl.soldier.hp -= kWeapons[kind].damage * 0.8;
           sim.event(EV_BLOOD, first->at, dir * 2.0, 0.7f);
+          noteHit(int(&pl - players), -1, first->at - dir * 5.0);
         }
       break;
     default:
@@ -933,6 +935,7 @@ void Duel::stepBullets(double dt) {
             const double z = near.z - foot.z;
             players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
             players[q].lastBlow = norm(b.v) * (b.kind == WP_SNIPER ? 11.0 : 2.5);
+            noteHit(q, b.owner, from);
             sim.event(EV_BLOOD, near, b.v * 0.02, b.kind == WP_SNIPER ? 1.f : 0.45f);
           }
         }
@@ -949,6 +952,9 @@ void Duel::stepBullets(double dt) {
         if (tanks[v].bulletHit(sim, from + moved, b.p + moved, force)) {
           stop = true;
           at = b.p;
+          noteHit(-1, b.owner, from);
+          for (int who = 0; who < 2; who++)
+            if (players[who].vehicle == v) noteHit(who, -1, from);
         }
       }
     }
@@ -1026,6 +1032,14 @@ void Duel::callStrike(int p, V3 at) {
     in.in = kStrikeDelay + k * kStrikeGap;
     incoming.push_back(in);
   }
+}
+
+void Duel::noteHit(int victim, int attacker, V3 from) {
+  if (victim >= 0) {
+    players[victim].hitsTaken++;
+    players[victim].hurtFrom = from;
+  }
+  if (attacker >= 0 && attacker != victim) players[attacker].hitsLanded++;
 }
 
 void Duel::placeMine(int p, int kind) {
@@ -1136,6 +1150,7 @@ void Duel::stepPlayers(const Intent in[2]) {
       if (d < kill) {
         const double share = (1.0 - d / kill) * std::min(b.impulse / 1000.0, 1.0);
         pl.soldier.hp -= 140.0 * share;
+        noteHit(int(&pl - players), -1, b.c);
         // Thrown away from it, and up.
         pl.lastBlow = norm(pl.soldier.p + V3{0, 0, 0.9} - b.c + V3{0, 0, 0.7}) * clampd(5.0 + 14.0 * share, 0.0, 18.0);
         sim.event(EV_BLOOD, pl.soldier.p + V3{0, 0, 1.0}, pl.lastBlow * 0.3, float(clampd(share, 0.2, 1.0)));
@@ -1299,7 +1314,10 @@ void Duel::stepPlayers(const Intent in[2]) {
 void Duel::restart() {
   world.clearCraters();
   sim = simStart;
-  for (int i = 0; i < kTanks; i++) tanks[i] = tanksStart[i];
+  for (int i = 0; i < kTanks; i++) {
+    tanks[i] = tanksStart[i];
+    tankDamageSeen[i] = 0;
+  }
   for (int i = 0; i < kWrecks; i++) wrecks[i] = wrecksStart[i];
   cars = carsStart;
   winner = -1;
@@ -1332,6 +1350,7 @@ void Duel::placePlayers() {
     p.repairClock = 0;
     p.repairing = -1;
     p.lastBlow = V3{};
+    p.hurtFrom = V3{};
     p.tapped = false;
     p.tapClock = p.fixWait = p.fixAge = 0;
     p.hasFix = false;
@@ -1393,6 +1412,14 @@ void Duel::step(const Intent in[2]) {
     } else {
       t.tickFire(sim, kDt);
     }
+  }
+  // A tank that has just lost armour: whoever sits in it feels it, the one on the other side gets the credit.
+  for (int v = 0; v < kTanks; v++) {
+    if (tanks[v].damage > tankDamageSeen[v] + 0.005) {
+      for (int who = 0; who < 2; who++)
+        if (players[who].vehicle == v) noteHit(who, 1 - who, sim.lastBlast);
+    }
+    tankDamageSeen[v] = tanks[v].damage;
   }
   const bool blast = sim.blastCount != blastSeen;
   blastSeen = sim.blastCount;

@@ -440,6 +440,9 @@ int main(int argc, char** argv) {
       u8 has = 0;
       for (int k = 0; k < WP_COUNT; k++) has |= u8(me.hasWeapon[k] ? 1 << k : 0);
       w.put(has);
+      w.put(me.hitsLanded);
+      w.put(me.hitsTaken);
+      w.putV3(me.hurtFrom);
       w.putV3(duel->wind);
       w.put(i16(me.tankShells));
       w.put(i16(me.tankMissiles));
