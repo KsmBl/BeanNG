@@ -1590,7 +1590,7 @@ struct Game {
             const bool show = bodies[i].clock > 0.6 + d * 0.45;
             const V3 off{std::cos(ang) * out * 2.2, std::sin(ang) * out, 0};
             const V3 at = mid + off;
-            const double ground = world.height(at.x, at.y) + 0.018 + d * 0.002;
+            const double ground = world.groundUnder(at.x, at.y, mid.z + 0.5) + 0.018 + d * 0.002;
             const u32 n = duel.bloodFirst[i][d];
             sim.pos[n] = show ? V3{at.x, at.y, ground} : V3{0, 0, -390.0};
             sim.pos[n + 1] = sim.pos[n] + V3{0, 0, 0.01};

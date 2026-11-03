@@ -623,7 +623,7 @@ void Duel::walk(Soldier& s, const WalkInput& in, double dt) const {
   const double wl = len(want);
   if (wl > 1.0) want = want / wl;
   // Wading is hard going.
-  const double top = (in.sprint ? 8.5 : 5.0) * (world.isWater(s.p.x, s.p.y) ? 0.45 : 1.0);
+  const double top = (in.sprint ? 8.5 : 5.0) * (world.isWater(s.p.x, s.p.y, s.p.z) ? 0.45 : 1.0);
   const double rate = s.grounded ? 40.0 : 6.0;
   const V3 flat{s.v.x, s.v.y, 0};
   V3 dv = want * top - flat;
@@ -714,14 +714,17 @@ V3 Duel::vehicleExit(int v) const {
   // Beside it, on whichever side is free. World walls and the ground are sorted out by the first step of walking.
   const VehicleFrame& f = frames[v];
   const double out = f.halfWidth + 0.8;
+  const double from = f.cog.z + 1.0;
   for (double sg : {1.0, -1.0}) {
     V3 p = f.cog + f.left * (sg * out);
-    p.z = world.height(p.x, p.y) + 0.05;
+    p.z = world.groundUnder(p.x, p.y, from) + 0.05;
+    // Not over the railing and down into the river.
+    if (p.z < f.cog.z - 4.0) continue;
     Contact c;
     if (!world.contact(p + V3{0, 0, 1.0}, c)) return p;
   }
   V3 p = f.cog - f.fwd * (f.halfLength + 1.0);
-  p.z = world.height(p.x, p.y) + 0.05;
+  p.z = world.groundUnder(p.x, p.y, from) + 0.05;
   return p;
 }
 
@@ -1203,7 +1206,7 @@ void Duel::useSmoke(int p) {
     const V3 eF = t.fwd * cy + t.left * sy, eL = t.left * cy - t.fwd * sy;
     for (double a : {-1.0, -0.33, 0.33, 1.0}) {
       V3 at = frames[pl.vehicle].cog + eF * (18.0 * std::cos(a)) + eL * (18.0 * std::sin(a));
-      at.z = world.height(at.x, at.y) + 0.5;
+      at.z = world.groundUnder(at.x, at.y, frames[pl.vehicle].cog.z + 2.0) + 0.5;
       startSmoke(at);
     }
     sim.event(EV_MUZZLE, frames[pl.vehicle].cog + t.up * 1.5, t.up, 0.15f);
@@ -1232,7 +1235,7 @@ void Duel::placeMine(int p, int kind) {
     const double cy = std::cos(pl.soldier.yaw), sy = std::sin(pl.soldier.yaw);
     // On the ground, a step ahead. A few seconds before it is live, for getting away from it.
     V3 at = pl.soldier.p + V3{-cy, -sy, 0} * 1.0;
-    at.z = world.height(at.x, at.y) + (kind == 0 ? 0.03 : 0.05);
+    at.z = world.groundUnder(at.x, at.y, pl.soldier.p.z + 0.5) + (kind == 0 ? 0.03 : 0.05);
     m.live = true;
     m.p = at;
     m.owner = p;
@@ -1703,7 +1706,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
   // Water holds back whatever goes through it. A tank just grinds on; a car, with less weight on it, hardly at all.
   for (int v = 0; v < kVehicles; v++) {
     const VehicleFrame& f = frames[v];
-    if (!world.isWater(f.cog.x, f.cog.y)) continue;
+    if (!world.isWater(f.cog.x, f.cog.y, f.cog.z)) continue;
     const double k = v < kTanks ? 9.0 : 7.0;
     const u16 a = v < kTanks ? tanks[v].hullObj : cars[size_t(v - kTanks)].obj;
     if (!sim.objs[a].awake) continue;

@@ -64,7 +64,10 @@ class World {
   };
   static constexpr int kBaseSlots = 15;  // three rows of four tanks, three cars
   bool isArena() const { return arena_; }
-  bool isWater(double x, double y) const;
+  // Whether someone at this height is in the river. On a bridge above it they are not.
+  bool isWater(double x, double y, double z) const;
+  // What one would stand on coming down from z here: the ground, or whatever solid lies on it, such as a bridge.
+  double groundUnder(double x, double y, double z) const;
   static V3 fordPoint(int i);  // the middle of a ford, without its height
   const Base& base(int side) const { return bases_[side]; }
   // Places set aside on the map: villages for houses, old wrecks for what can be taken from them.

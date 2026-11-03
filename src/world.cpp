@@ -702,8 +702,23 @@ void World::addCommandCentre(Base& b) {
 
 V3 World::fordPoint(int i) { return V3{riverX(kFords[i]), kFords[i], 0}; }
 
-bool World::isWater(double x, double y) const {
-  return arena_ && std::fabs(x - riverX(y)) < kRiverHalf + 3.0 && std::fabs(y) < 830.0 && height(x, y) < kWaterZ;
+double World::groundUnder(double x, double y, double z) const {
+  double ground = height(x, y);
+  const int gx = int((x + kHalf) / kBoxCell), gy = int((y + kHalf) / kBoxCell);
+  if (gx < 0 || gy < 0 || gx >= kBoxGrid || gy >= kBoxGrid) return ground;
+  for (u16 bi : boxGrid_[size_t(gy) * kBoxGrid + gx]) {
+    const StaticBox& b = boxes_[bi];
+    if (std::fabs(b.ax[2].z) < 0.9) continue;
+    const V3 q = V3{x, y, b.c.z} - b.c;
+    if (std::fabs(dot(q, b.ax[0])) > b.h.x || std::fabs(dot(q, b.ax[1])) > b.h.y) continue;
+    const double top = b.c.z + b.h.z * std::fabs(b.ax[2].z);
+    if (top <= z && top > ground) ground = top;
+  }
+  return ground;
+}
+
+bool World::isWater(double x, double y, double z) const {
+  return arena_ && std::fabs(x - riverX(y)) < kRiverHalf + 3.0 && std::fabs(y) < 830.0 && groundUnder(x, y, z + 0.5) < kWaterZ;
 }
 
 void World::buildArena() {

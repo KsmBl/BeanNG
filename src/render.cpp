@@ -2787,7 +2787,7 @@ struct Renderer::Impl {
             const double shade = 0.8 + 0.2 * clampd((world->height(wx - 10, wy + 10) - z) * 0.12 + 0.5, 0, 1) * 2.0 - 0.2;
             Col c{.30f, .43f, .24f, 1};
             const u8 sf = world->surfaceAt(wx, wy);
-            if (world->isWater(wx, wy)) c = {.16f, .34f, .44f, 1};
+            if (world->isWater(wx, wy, 0.0)) c = {.16f, .34f, .44f, 1};
             else if (sf == SURF_CONCRETE) c = {.52f, .52f, .5f, 1};
             else if (sf == SURF_ROCK) c = {.44f, .42f, .39f, 1};
             else if (sf == SURF_SNOW) c = {.85f, .87f, .9f, 1};
