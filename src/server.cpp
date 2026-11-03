@@ -457,6 +457,21 @@ int main(int argc, char** argv) {
       w.put(float(log[i].hole));
     }
     const size_t nEv = std::min(events.size(), size_t(kMaxEventsPerPacket));
+    {
+      // What flies under its own power, to be drawn where it is.
+      u8 rockets = 0;
+      for (const Duel::Bullet& b : duel->bullets)
+        if ((b.kind == WP_RPG || b.kind == Duel::kKindStrike) && rockets < 8) rockets++;
+      w.put(rockets);
+      int sent = 0;
+      for (const Duel::Bullet& b : duel->bullets)
+        if ((b.kind == WP_RPG || b.kind == Duel::kKindStrike) && sent < 8) {
+          w.put(u8(b.kind == WP_RPG ? 0 : 1));
+          w.putV3(b.p);
+          w.putV3(b.v);
+          sent++;
+        }
+    }
     w.put(u8(nEv));
     for (size_t i = 0; i < nEv; i++) {
       w.putV3(events[i].p);

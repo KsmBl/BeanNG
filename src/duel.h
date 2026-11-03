@@ -151,7 +151,7 @@ class Duel {
   };
   std::vector<Incoming> incoming;
   static constexpr double kStrikeDelay = 6.0, kStrikeSpread = 38.0, kStrikeGap = 1.4;
-  static constexpr int kStrikeRockets = 4, kKindStrike = WP_COUNT;
+  static constexpr int kKindStrike = WP_COUNT;
   struct Past {
     V3 soldier[2];
     V3 tank[kTanks];  // the middle of each: how far it has gone on since the shooter saw it
@@ -222,7 +222,11 @@ class Duel {
   // A few fixed nodes for the one guided missile each launcher tank can have in the air, drawn as rods.
   static constexpr int kMissileNodes = 7;
   u32 missileFirst[2] = {};
-  static void poseMissile(Sim& sim, u32 first, bool live, V3 at, V3 dir);
+  static void poseMissile(Sim& sim, u32 first, bool live, V3 at, V3 dir, double scale = 1.0);
+  // The same shape for what else flies under its own power: from a launcher on the shoulder, and from a strike code.
+  static constexpr int kRpgRockets = 3, kStrikeRockets = 4;
+  static constexpr double kRpgScale = 0.42, kStrikeScale = 1.5;
+  u32 rocketFirst[kRpgRockets + kStrikeRockets] = {};
   static constexpr double kTapTime = 5.0, kQueryWait = 30.0, kFixError = 70.0, kComputerReach = 2.6;
   bool atEnemyComputer(int p, V3 at) const { return len(at + V3{0, 0, 1.0} - world.base(1 - p).computer) < kComputerReach; }
   static constexpr double kSetupTime = 3.0;  // to get down and have the big rifle on its bipod

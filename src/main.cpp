@@ -704,6 +704,12 @@ struct Game {
     };
     std::deque<Past> past;
     double walkDebt = 0;
+    struct RocketSeen {
+      u8 what;
+      V3 p, v;
+    };
+    std::vector<RocketSeen> rocketsSeen;
+    double rocketsAt = 0;
     // A line of chat is sent again and again until the server's log says it has it.
     std::string saying;
     u32 chatSeq = 0, chatAcked = 0;
@@ -1022,6 +1028,17 @@ struct Game {
               blastsDone++;
             }
           }
+          u8 rockets = 0;
+          r.get(rockets);
+          rocketsSeen.clear();
+          for (int i = 0; i < rockets; i++) {
+            u8 what = 0;
+            r.get(what);
+            const V3 p = r.getV3();
+            const V3 v = r.getV3();
+            if (r.ok()) rocketsSeen.push_back({what, p, v});
+          }
+          rocketsAt = now;
           u8 nEv = 0;
           r.get(nEv);
           for (int i = 0; i < nEv; i++) {
@@ -1258,6 +1275,20 @@ struct Game {
         const Tank& launcher = duel.tanks[Duel::tankIndex(side, TK_MISSILE)];
         Duel::poseMissile(sim, duel.missileFirst[side], launcher.missileLive, launcher.missileP, launcher.missileV);
       }
+      // And rockets, carried on from where they were last heard of. A tenth of a second late, like everything.
+      {
+        int used[2] = {0, 0};
+        const int limit[2] = {Duel::kRpgRockets, Duel::kStrikeRockets};
+        const int base[2] = {0, Duel::kRpgRockets};
+        const double scale[2] = {Duel::kRpgScale, Duel::kStrikeScale};
+        const double ahead = std::clamp(now - rocketsAt, 0.0, 0.1);
+        for (const RocketSeen& rs : rocketsSeen) {
+          const int k = rs.what ? 1 : 0;
+          if (used[k] < limit[k]) Duel::poseMissile(sim, duel.rocketFirst[base[k] + used[k]++], true, rs.p + rs.v * ahead, rs.v, scale[k]);
+        }
+        for (int k = 0; k < 2; k++)
+          for (int i = used[k]; i < limit[k]; i++) Duel::poseMissile(sim, duel.rocketFirst[base[k] + i], false, V3{}, V3{1, 0, 0}, scale[k]);
+      }
       // Both soldiers drawn: oneself where one thinks one is, the other as the server last said.
       for (int i = 0; i < 2; i++) {
         // Through the scope one's own head would be in the way.
@@ -1474,14 +1505,16 @@ static void runGame() {
     G.rig.parkedNodes.push_back({G.duel.wreckFirst[i], G.duel.tankNodes});
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
-  // A guided missile: body, nose and fins.
-  for (int i = 0; i < 2; i++) {
-    const u32 f = G.duel.missileFirst[i];
-    G.rig.links.push_back({f, f + 1, 0.13f, MM_WHITE, 2});
-    G.rig.links.push_back({f + 1, f + 2, 0.07f, MM_ACCENT, 2});
-    G.rig.links.push_back({f + 3, f + 4, 0.025f, MM_DARK, 0});
-    G.rig.links.push_back({f + 5, f + 6, 0.025f, MM_DARK, 0});
-  }
+  // Rockets of every kind: body, nose and fins.
+  const auto rocketRods = [&](u32 f, float body, u8 bodyMat, u8 noseMat) {
+    G.rig.links.push_back({f, f + 1, body, bodyMat, 2});
+    G.rig.links.push_back({f + 1, f + 2, body * 0.55f, noseMat, 2});
+    G.rig.links.push_back({f + 3, f + 4, body * 0.2f, MM_DARK, 0});
+    G.rig.links.push_back({f + 5, f + 6, body * 0.2f, MM_DARK, 0});
+  };
+  for (int i = 0; i < 2; i++) rocketRods(G.duel.missileFirst[i], 0.13f, MM_WHITE, MM_ACCENT);
+  for (int i = 0; i < Duel::kRpgRockets; i++) rocketRods(G.duel.rocketFirst[i], 0.05f, MM_OLIVE2, MM_DARK);
+  for (int i = 0; i < Duel::kStrikeRockets; i++) rocketRods(G.duel.rocketFirst[Duel::kRpgRockets + i], 0.24f, MM_METAL, MM_ACCENT);
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());
 
   SDL_GL_SetSwapInterval(gSet.vsync ? 1 : 0);

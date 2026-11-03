@@ -68,6 +68,14 @@ void Duel::build() {
     for (int k = 0; k < kMissileNodes; k++) sim.rest[missileFirst[i] + u32(k)] = sim.pos[missileFirst[i] + u32(k)];
     sim.endObj();
   }
+  for (int i = 0; i < kRpgRockets + kStrikeRockets; i++) {
+    sim.beginObj(OBJ_PROP, false);
+    rocketFirst[i] = u32(sim.pos.size());
+    for (int k = 0; k < kMissileNodes; k++) sim.addNode(V3{}, 1.0, NF_FIXED);
+    poseMissile(sim, rocketFirst[i], false, V3{}, V3{1, 0, 0}, i < kRpgRockets ? kRpgScale : kStrikeScale);
+    for (int k = 0; k < kMissileNodes; k++) sim.rest[rocketFirst[i] + u32(k)] = sim.pos[rocketFirst[i] + u32(k)];
+    sim.endObj();
+  }
   sim.firstSceneryNode = u32(sim.pos.size());
   for (int k = 0; k < 2; k++)
     for (int i = 0; i < kMinesEach; i++) mineFirst[k][i] = addMarker(sim, k == 0 ? V3{0.13, 0.13, 0.035} : V3{0.24, 0.24, 0.06}, COL_STEEL);
@@ -312,7 +320,7 @@ void Duel::poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hiddenIn, int
   }
 }
 
-void Duel::poseMissile(Sim& sim, u32 first, bool live, V3 at, V3 dir) {
+void Duel::poseMissile(Sim& sim, u32 first, bool live, V3 at, V3 dir, double scale) {
   // Tail, the body's end, the tip, and two pairs of fins across the tail. Always the same shape, underground when idle.
   if (!live) {
     at = V3{0, 0, -395.0};
@@ -322,8 +330,9 @@ void Duel::poseMissile(Sim& sim, u32 first, bool live, V3 at, V3 dir) {
   V3 u = cross(dir, std::fabs(dir.z) < 0.9 ? V3{0, 0, 1} : V3{1, 0, 0});
   u = norm(u);
   const V3 v = cross(dir, u);
-  const V3 tail = at - dir * 1.1;
-  const V3 nodes[kMissileNodes] = {tail, at + dir * 0.75, at + dir * 1.15, tail + u * 0.42, tail - u * 0.42, tail + v * 0.42, tail - v * 0.42};
+  const V3 tail = at - dir * (1.1 * scale);
+  const double fin = 0.42 * scale;
+  const V3 nodes[kMissileNodes] = {tail, at + dir * (0.75 * scale), at + dir * (1.15 * scale), tail + u * fin, tail - u * fin, tail + v * fin, tail - v * fin};
   for (int k = 0; k < kMissileNodes; k++) sim.pos[first + u32(k)] = nodes[k];
 }
 
