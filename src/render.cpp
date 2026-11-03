@@ -1350,8 +1350,13 @@ struct Renderer::Impl {
     }
     const MatDef& md = kMats[MM_TRACK];
     constexpr double kPitch = 0.19, kThick = 0.05, kHalfW = 0.275;
-    for (size_t t2 = 0; t2 < s.tankTracks.size() * 2; t2++) {
-      const Snapshot::TankTrack& tt = s.tankTracks[t2 / 2];
+    // The one the camera follows first: it is drawn with its own motion.
+    const size_t own = s.selfTrack >= 0 ? size_t(s.selfTrack) : s.tankTracks.size();
+    for (size_t t2 = 0; t2 < s.tankTracks.size() * 2 + 2; t2++) {
+      if (t2 == 2) trackDriven = trackVerts.size();
+      const size_t which = t2 < 2 ? own : t2 / 2 - 1;
+      if (which >= s.tankTracks.size() || (t2 >= 2 && which == own)) continue;
+      const Snapshot::TankTrack& tt = s.tankTracks[which];
       const int side = int(t2 & 1);
       const std::vector<V3>& path = tt.path[side];
       const size_t n = path.size();
@@ -2947,7 +2952,11 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
       for (size_t k = 0; k < D.parkedLists.size(); k++) {
         const size_t count = D.parkedLists[k][0].size();
         if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 32 ? s.parkedScorch[k] : 0.f);
+        // What the camera follows moves with it. Blurred as if standing still, it would smear while the world stayed sharp.
+        const bool self = int(k) == s.selfInstance;
+        if (self) D.setMat(prog, "uPrevWorld", D.carPrevWorld);
         if (count) glDrawElements(GL_TRIANGLES, GLsizei(count), GL_UNSIGNED_INT, (void*)(first * sizeof(u32)));
+        if (self) D.setMat(prog, "uPrevWorld", I);
         first += count;
       }
       if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
@@ -2955,14 +2964,17 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     glBindVertexArray(D.propVao);
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.propVerts.size()));
     if (uScorchLoc >= 0) glUniform1f(uScorchLoc, float(s.scorch));
-    D.setMat(prog, "uPrevWorld", D.carPrevWorld);
+    D.setMat(prog, "uPrevWorld", I);
+    if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
     // Running gear: arms, shafts and struts between their real nodes.
     glBindVertexArray(D.rodVao);
+    bool linkSelf = false;
     for (size_t li = 0; li < D.rig->links.size(); li++) {
       const VisLink& l = D.rig->links[li];
-      if (li == D.rig->playerLinks) {
-        D.setMat(prog, "uPrevWorld", I);
-        if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
+      const bool self = li < D.rig->linkInstance.size() && D.rig->linkInstance[li] == s.selfInstance;
+      if (self != linkSelf) {
+        D.setMat(prog, "uPrevWorld", self ? D.carPrevWorld : I);
+        linkSelf = self;
       }
       const V3 a = s.pos[l.a], b = s.pos[l.b];
       const double restL = len(D.sim->rest[l.b] - D.sim->rest[l.a]);

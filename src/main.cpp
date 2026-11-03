@@ -563,6 +563,8 @@ struct Game {
     const Tank& tank = duel.tanks[myVehicle >= 0 && myVehicle < Duel::kTanks ? myVehicle : Duel::tankIndex(slot, TK_STANDARD)];
     const VehicleFrame* frame = myVehicle >= 0 ? &duel.frames[myVehicle] : nullptr;
     s.foot.onFoot = playing && myVehicle < 0;
+    s.selfInstance = myVehicle >= 0 ? myVehicle : (playing ? Duel::kVehicles + slot : -1);
+    s.selfTrack = myVehicle >= 0 && myVehicle < Duel::kTanks ? myVehicle : -1;
     s.foot.inCar = myVehicle >= Duel::kTanks;
     s.foot.hp = duel.players[slot].soldier.hp;
     s.foot.p = me.p;
@@ -1278,6 +1280,7 @@ static void runGame() {
     G.mesh.addParked(other, k, G.duel.spawn[k], r.noseX, origin, hubs);
     for (const NodeGroup& g : r.groups) G.rig.groups.push_back({std::to_string(k) + ":" + g.name, g.nodes});
     G.rig.links.insert(G.rig.links.end(), r.links.begin(), r.links.end());
+    G.rig.linkInstance.resize(G.rig.links.size(), k);
     u32 first, end;
     if (isTank) {
       first = G.duel.tankFirst[k];
@@ -1315,6 +1318,7 @@ static void runGame() {
     G.mesh.addParked(wreck, k, G.duel.wreckSpawn[i], r.noseX, origin, {});
     for (const NodeGroup& g : r.groups) G.rig.groups.push_back({std::to_string(k) + ":" + g.name, g.nodes});
     G.rig.links.insert(G.rig.links.end(), r.links.begin(), r.links.end());
+    G.rig.linkInstance.resize(G.rig.links.size(), k);
     G.rig.parkedNodes.push_back({G.duel.wreckFirst[i], G.duel.tankNodes});
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
@@ -2051,6 +2055,8 @@ static void runGame() {
       view.splitGeneration = G.snap.splitGeneration;
       view.carResets = G.snap.carResets;
       view.tankTracks = G.snap.tankTracks;
+      view.selfInstance = G.snap.selfInstance;
+      view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
       view.foot = G.snap.foot;
       view.missileLive = G.snap.missileLive;

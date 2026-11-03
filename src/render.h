@@ -46,6 +46,9 @@ struct Snapshot {
     double phase[2] = {}, speed[2] = {};
   };
   std::vector<TankTrack> tankTracks;
+  // Which of the parked instances is what the camera follows: it moves with it, the world does not.
+  int selfInstance = -1;
+  int selfTrack = -1;
   V3 trackLeft[2];
   float parkedScorch[32] = {};
   std::vector<std::string> chat;  // the last lines, oldest first
