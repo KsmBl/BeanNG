@@ -487,6 +487,7 @@ struct SharedInput {
   bool ready = false;
   bool sprint = false;
   bool fireHeld = false;
+  bool scoped = false;
   int weapon = WP_PISTOL;
   double yaw = 0, pitch = 0;
   std::string chatOut;  // the next line to say; cleared here once it is on its way
@@ -743,7 +744,7 @@ struct Game {
         in = input;
         input.chatOut.clear();
         input.c.requestGear = 99;
-        input.c.fire = input.c.launch = input.c.repair = input.c.use = false;
+        input.c.fire = input.c.launch = input.c.repair = input.c.use = input.c.setup = false;
       }
       if (!in.chatOut.empty() && state == NET_IN) {
         saying = in.chatOut;
@@ -763,6 +764,7 @@ struct Game {
       if (in.c.launch) out.launchCount++;
       if (in.c.repair) out.repairCount++;
       if (in.c.use) out.useCount++;
+      if (in.c.setup) out.setupCount++;
 
       if (state == NET_CONNECTING) {
         if (now - connectStart > 4.0) {
@@ -901,6 +903,7 @@ struct Game {
             duel.players[mySlot].sniperAmmo = sniper;
             duel.players[mySlot].rpgAmmo = rpg;
             for (int k = 0; k < WP_COUNT; k++) duel.players[mySlot].hasWeapon[k] = has & (1 << k);
+            duel.wind = r.getV3();
           }
           u32 first = 0;
           u8 count = 0;
@@ -1116,7 +1119,8 @@ struct Game {
       }
       // Both soldiers drawn: oneself where one thinks one is, the other as the server last said.
       for (int i = 0; i < 2; i++) {
-        const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0;
+        // Through the scope one's own head would be in the way.
+        const bool hidden = state != NET_IN || !playingNow || duel.players[i].vehicle >= 0 || (i == mySlot && in.scoped);
         Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot ? in.weapon : weaponShown[i]);
       }
 
@@ -1169,6 +1173,8 @@ struct Game {
       {
         std::lock_guard<std::mutex> lock(snapMutex);
         snap.foot.weapon = in.weapon;
+        snap.foot.prone = me.prone;
+        snap.foot.wind = duel.wind;
         const Duel::Player& who = duel.players[mySlot];
         snap.foot.ammo = in.weapon == WP_KNIFE ? -1 : (in.weapon == WP_SNIPER ? who.sniperAmmo : (in.weapon == WP_RPG ? who.rpgAmmo : who.smallAmmo));
         snap.foot.has = 0;
@@ -1335,6 +1341,9 @@ static void runGame() {
   bool chatting = false;
   std::string chatText;
   int weaponPick = WP_PISTOL;
+  // The big rifle's scope: right mouse button once it is set up.
+  bool scoped = false;
+  double scopeZoom = 6.0;
   // The map, and the point on it the artillery lays on.
   bool mapOpen = false;
   bool hasMark = false;
@@ -1370,6 +1379,7 @@ static void runGame() {
     const bool inMatch = netState == Game::NET_IN && phase == Duel::PLAYING;
     const bool inVehicle = inMatch && myVehicle >= 0, onFoot = inMatch && myVehicle < 0;
     const bool inTank = inVehicle && myVehicle < Duel::kTanks;
+    if (!onFoot || weaponPick != WP_SNIPER || view.foot.prone < 0.99) scoped = false;
     // The choosing comes up by itself; afterwards it is gone by itself.
     if (phase != lastPhase) {
       if (phase == Duel::CHOOSING && netState == Game::NET_IN) {
@@ -1488,6 +1498,7 @@ static void runGame() {
       key("Rakete starten, fliegt mit der Maus", "G");
       key("Einsteigen und aussteigen", "E");
       key("Waffe wählen", "1 2 3 4 5");
+      key("Scharfschützengewehr aufbauen, Zielfernrohr, Zoom", "X, rechte Maustaste, Mausrad");
       key("Rennen, springen", "Umschalt, Leertaste");
       key("Reparaturset, zu Fuß neben dem Fahrzeug", "R");
       key("Karte, Ziel für die Artillerie", "K");
@@ -1692,15 +1703,17 @@ static void runGame() {
               break;
             case SDLK_F: edges.fire = true; break;
             case SDLK_E: edges.use = true; break;
+            case SDLK_X: edges.setup = true; break;
             case SDLK_F12: wantShot = true; break;
             default: break;
           }
           break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
           if (e.button.button == SDL_BUTTON_LEFT) edges.fire = true;
+          if (e.button.button == SDL_BUTTON_RIGHT && onFoot && weaponPick == WP_SNIPER && view.foot.prone > 0.99) scoped = !scoped;
           break;
         case SDL_EVENT_MOUSE_MOTION: {
-          const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse;
+          const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse / (scoped ? scopeZoom * 0.5 : 1.0);
           if (!mapOpen) {
             rig.yaw -= e.motion.xrel * sens;
             rig.pitch = clampd(rig.pitch + e.motion.yrel * sens, -0.30, 1.2);
@@ -1708,7 +1721,8 @@ static void runGame() {
           break;
         }
         case SDL_EVENT_MOUSE_WHEEL:
-          rig.dist = clampd(rig.dist * std::pow(0.9, double(e.wheel.y)), 2.5, 40.0);
+          if (scoped) scopeZoom = clampd(scopeZoom * std::pow(1.15, double(e.wheel.y)), 6.0, 24.0);
+          else rig.dist = clampd(rig.dist * std::pow(0.9, double(e.wheel.y)), 2.5, 40.0);
           break;
         default:
           break;
@@ -1765,6 +1779,28 @@ static void runGame() {
     if (!inMatch && panelKind != 0) rig.yaw += dt * 0.12;
 
     // Scripted runs, for trying out the real thing without anyone at the controls.
+    if (scriptMode == 46 && netState == Game::NET_IN) {
+      // The big rifle: down behind it, then the scope at both ends of its zoom.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      if (inMatch) {
+        panelKind = PANEL_NONE;
+        weaponPick = WP_SNIPER;
+        rig.yaw = PI;
+        rig.pitch = -0.02;
+        static double since = tNow;
+        static bool down = false;
+        if (tNow - since > 1.0 && !down) {
+          down = true;
+          sendC.setup = true;
+        }
+        if (view.foot.prone > 0.99) scoped = true;
+        scopeZoom = tNow - since > 8.0 ? 24.0 : 6.0;
+        if (std::fmod(tNow, 2.5) < dt) sendC.fire = true;
+      }
+    }
     if (scriptMode == 45 && netState == Game::NET_IN) {
       // A look at the figure: standing, walking, running.
       if (phase == Duel::CHOOSING && !pickReady) {
@@ -1834,10 +1870,12 @@ static void runGame() {
       c.launch |= sendC.launch;
       c.repair |= sendC.repair;
       c.use |= sendC.use;
+      c.setup |= sendC.setup;
       G.input.yaw = rig.yaw;
       G.input.pitch = rig.pitch;
       G.input.sprint = sprint;
       G.input.weapon = weaponPick;
+      G.input.scoped = scoped;
       G.input.fireHeld = panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK);
       if (sendC.requestGear != 99) c.requestGear = sendC.requestGear;
       G.input.ready = pickReady;
@@ -1860,6 +1898,8 @@ static void runGame() {
           p += f * 3.0;
         }
         c.aimPoint = p;
+        // Through the scope it goes exactly where the scope points. Drop and wind are the shooter's business.
+        if (scoped) c.aimPoint = cam.eye + f * 3000.0;
       }
     }
 
@@ -2026,6 +2066,18 @@ static void runGame() {
       cam.up = {0, 0, 1};
       cam.inside = false;
       cam.fovY = 62.0 * PI / 180.0 + gSet.fov * PI / 180.0;
+    }
+    hud.scope = scoped ? scopeZoom : 0.0;
+    if (scoped) {
+      const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+      Soldier eyeAt;
+      eyeAt.p = view.foot.p;
+      eyeAt.yaw = rig.yaw;
+      eyeAt.prone = view.foot.prone;
+      cam.eye = Duel::eyeOf(eyeAt);
+      cam.target = cam.eye - back * 100.0;
+      cam.up = {0, 0, 1};
+      cam.fovY = (60.0 / scopeZoom) * PI / 180.0;
     }
     if (scriptMode == 45) {
       const double a = 0.6 + double(shotCount) * 0.9;

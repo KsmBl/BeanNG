@@ -84,6 +84,7 @@ class Duel {
     bool hasWeapon[WP_COUNT] = {true, true, false, false, false};
     int smallAmmo = 24;  // pistol and assault rifle: what one starts with, and what the loadout adds
     int sniperAmmo = 0, rpgAmmo = 0;
+    bool wantProne = false;
     double shotClock = 0;
     double repairClock = 0;  // working on a vehicle from outside, which takes a kit and being there
     int repairing = -1;
@@ -97,6 +98,7 @@ class Duel {
     bool use = false;  // E: get in, get out
     bool fireFoot = false;  // a press of the trigger
     bool fireHeld = false;
+    bool setup = false;     // lies down behind the big rifle, or gets up again
     int weapon = WP_PISTOL;
     double lag = 0;         // how far in the past this player sees the others, in seconds
     bool repair = false;
@@ -136,6 +138,10 @@ class Duel {
   int pastAt = 0;
   double bulletDebt = 0;
   u32 randState = 12345;
+  // The wind of this match: at ground level, the same everywhere, and it carries what flies far enough.
+  V3 wind;
+  bool giveAll = false;  // for trying things out: every weapon from the start
+  static V3 eyeOf(const Soldier& s);
 
   Player players[2];
   Phase phase = WAITING;
@@ -158,6 +164,7 @@ class Duel {
   // Moves a soldier one time step. Used by the server, and by a player's own machine to answer at once.
   void walk(Soldier& s, const WalkInput& in, double dt) const;
   static constexpr double kWalkDt = 0.01;
+  static constexpr double kSetupTime = 3.0;  // to get down and have the big rifle on its bipod
   static constexpr double kRepairTime = 6.0;
   int nearestToRepair(V3 p) const;
   void restart();

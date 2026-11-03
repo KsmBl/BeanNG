@@ -374,6 +374,12 @@ int Duel::nearestToRepair(V3 p) const {
   return best;
 }
 
+V3 Duel::eyeOf(const Soldier& s) {
+  // Standing, or stretched out on the ground with the head towards the enemy.
+  const double cy = std::cos(s.yaw), sy = std::sin(s.yaw);
+  return s.p + V3{-cy, -sy, 0} * (1.32 * s.prone) + V3{0, 0, lerpd(1.45, 0.32, s.prone)};
+}
+
 V3 Duel::soldierAt(int p, double lag) const {
   const int back = std::clamp(int(lag * 100.0), 0, kPastSteps - 1);
   return past[(pastAt - back + kPastSteps * 2) % kPastSteps].soldier[p];
@@ -385,7 +391,7 @@ void Duel::fireWeapon(int p, const Intent& in) {
   if (!pl.hasWeapon[w] || pl.shotClock > 0) return;
   if (!(in.fireFoot || (in.fireHeld && kWeapons[w].automatic))) return;
   const Soldier& s = pl.soldier;
-  const V3 eye = s.p + V3{0, 0, 1.45};
+  const V3 eye = eyeOf(s);
   if (w == WP_KNIFE) {
     pl.shotClock = kWeapons[w].interval;
     const V3 target = soldierAt(1 - p, in.lag);
@@ -426,7 +432,9 @@ void Duel::stepBullets(double dt) {
       const double wander = 0.25 * std::min(b.age, 3.0);
       b.v += V3{std::sin(b.age * 7.0 + b.p.x), std::cos(b.age * 5.0 + b.p.y), std::sin(b.age * 6.0)} * (wander * 12.0 * dt);
     } else {
+      // Gravity, and the wind: the air pushes it sideways by as much as the bullet is slower than it across the wind.
       b.v.z -= 9.81 * dt;
+      b.v += wind * (0.28 * dt);
     }
     const V3 from = b.p;
     b.p += b.v * dt;
@@ -543,6 +551,10 @@ void Duel::stepPlayers(const Intent in[2]) {
     Soldier& s = pl.soldier;
     pl.shotClock = std::max(0.0, pl.shotClock - kDt);
     if (in[i].weapon >= 0 && in[i].weapon < WP_COUNT && pl.hasWeapon[in[i].weapon]) pl.weapon = in[i].weapon;
+    // Getting down and up again takes its time, and only the big rifle asks for it.
+    if (in[i].setup && pl.weapon == WP_SNIPER && pl.vehicle < 0) pl.wantProne = !pl.wantProne;
+    if (pl.weapon != WP_SNIPER || pl.vehicle >= 0) pl.wantProne = false;
+    s.prone = clampd(s.prone + (pl.wantProne ? 1.0 : -1.5) * kDt / kSetupTime * (pl.wantProne ? 1.0 : 3.0), 0.0, 1.0);
     if (pl.vehicle < 0 && phase == PLAYING) fireWeapon(i, in[i]);
     if (in[i].use) {
       if (pl.vehicle >= 0) {
@@ -597,7 +609,10 @@ void Duel::stepPlayers(const Intent in[2]) {
     pl.walkDebt += kDt;
     while (pl.walkDebt >= kWalkDt) {
       pl.walkDebt -= kWalkDt;
-      walk(s, in[i].walk, kWalkDt);
+      // Whoever lies down, or is getting up, is not going anywhere; only turning the rifle a little.
+      WalkInput wi = in[i].walk;
+      if (s.prone > 0) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
+      walk(s, wi, kWalkDt);
     }
     s.pitch = in[i].pitch;
     pl.lastInput = in[i].seq;
@@ -619,6 +634,14 @@ void Duel::restart() {
   winner = -1;
   phaseClock = 0;
   bullets.clear();
+  {
+    // Up to a stiff breeze, from anywhere.
+    randState = randState * 1664525u + 1013904223u + matchId;
+    const double a = double(randState >> 16) / 65535.0 * 2.0 * PI;
+    randState = randState * 1664525u + 1013904223u;
+    const double strength = 1.0 + double(randState >> 16) / 65535.0 * 9.0;
+    wind = V3{std::cos(a), std::sin(a), 0} * strength;
+  }
   blastSeen = sim.blastCount;
   matchId++;
   blastsDone = 0;
@@ -637,7 +660,13 @@ void Duel::placePlayers() {
     p.smallAmmo = 24;
     p.sniperAmmo = p.rpgAmmo = 0;
     p.shotClock = 0;
+    p.wantProne = false;
     for (int k = 0; k < WP_COUNT; k++) p.hasWeapon[k] = k <= WP_PISTOL;
+    if (giveAll) {
+      for (bool& h : p.hasWeapon) h = true;
+      p.sniperAmmo = 20;
+      p.rpgAmmo = 6;
+    }
     p.walkDebt = 0;
     const World::Base& base = world.base(i);
     const double cx = std::cos(base.facing), sx = std::sin(base.facing);

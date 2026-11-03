@@ -69,6 +69,8 @@ Im Spiel: **Online spielen**, Adresse und Port eintragen, **Verbinden**. Oder di
 | Rennen, springen | Umschalt, Leertaste | – |
 | Reparaturset, zu Fuß neben dem Fahrzeug | R | – |
 | Karte: Klick markiert das Ziel | K | – |
+| Waffe wählen | 1 bis 5 | – |
+| Scharfschützengewehr aufbauen, Zielfernrohr, Zoom 6x bis 24x | X, rechte Maustaste, Mausrad | – |
 | Chat | Enter | – |
 | Screenshot | F12 | – |
 

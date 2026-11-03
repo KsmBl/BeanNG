@@ -59,6 +59,8 @@ struct Snapshot {
     int weapon = 1;
     int ammo = 0;  // for what is in the hand, -1 if it needs none
     int has = 3;
+    double prone = 0;
+    V3 wind;
     V3 p;
   } foot;
   // The match, as far as the instruments care.
@@ -147,6 +149,8 @@ inline void mapLayout(int w, int h, float& x, float& y, float& size) {
 }
 
 struct HudOptions {
+  // Looking through the big rifle's scope, at this magnification; 0 when not.
+  double scope = 0;
   UiPanel panel;
   UiMap map;
   bool vehicleHud = true;

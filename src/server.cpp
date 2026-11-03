@@ -28,7 +28,7 @@ struct Client {
   char name[kNameBytes] = {};
   u32 chatSeq = 0;  // the last line of theirs that has gone in the log
   // One-shot controls, each seen once however many packets carry the same count.
-  bool fire = false, launch = false, repair = false, use = false;
+  bool fire = false, launch = false, repair = false, use = false, setup = false;
   // Scenery that has moved, as far as this player has been told, and where the slow sweep has got to.
   std::vector<float> told;
   u32 sweep = 0;
@@ -38,9 +38,13 @@ struct Client {
 
 int main(int argc, char** argv) {
   int port = kDefaultPort;
-  if (argc > 1) port = atoi(argv[1]);
+  bool giveAll = false;
+  for (int i = 1; i < argc; i++) {
+    if (!strcmp(argv[i], "--give-all")) giveAll = true;  // every weapon from the start, for trying things out
+    else port = atoi(argv[i]);
+  }
   if (port <= 0 || port > 65535) {
-    fprintf(stderr, "Benutzung: beanng-server [port]\n");
+    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all]\n");
     return 1;
   }
   std::signal(SIGINT, onSignal);
@@ -48,6 +52,7 @@ int main(int argc, char** argv) {
 
   auto* duel = new Duel();
   printf("Baue die Welt...\n");
+  duel->giveAll = giveAll;
   duel->build();
   Socket sock;
   if (!sock.open(u16(port))) {
@@ -145,6 +150,7 @@ int main(int argc, char** argv) {
           if (m.launchCount != c.in.launchCount) c.launch = true;
           if (m.repairCount != c.in.repairCount) c.repair = true;
           if (m.useCount != c.in.useCount) c.use = true;
+          if (m.setupCount != c.in.setupCount) c.setup = true;
         }
         c.in = m;
         c.haveInput = true;
@@ -274,6 +280,7 @@ int main(int argc, char** argv) {
       u8 has = 0;
       for (int k = 0; k < WP_COUNT; k++) has |= u8(me.hasWeapon[k] ? 1 << k : 0);
       w.put(has);
+      w.putV3(duel->wind);
     }
     // Blasts stay in the packet until the player says they have gone off there.
     const auto& log = duel->sim.blastLog;
@@ -377,6 +384,7 @@ int main(int argc, char** argv) {
         k.launch = c.launch;
         k.fire = c.fire;
         in[i].use = c.use;
+        in[i].setup = c.setup;
         in[i].fireFoot = c.fire;
         in[i].fireHeld = c.in.fireHeld;
         in[i].weapon = c.in.weapon;
@@ -390,7 +398,7 @@ int main(int argc, char** argv) {
         in[i].walk.yaw = c.in.yaw;
         in[i].walk.jump = c.in.handbrake > 0.5;
         in[i].walk.sprint = c.in.sprint;
-        c.fire = c.launch = c.repair = c.use = false;
+        c.fire = c.launch = c.repair = c.use = c.setup = false;
       }
       for (int i = 0; i < 2; i++) duel->players[i].present = clients[i].used;
       duel->step(in);

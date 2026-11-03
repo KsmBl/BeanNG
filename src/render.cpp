@@ -248,7 +248,7 @@ void main(){
     c += vec3(1.0,0.95,0.85)*pow(max(dot(R,uSun),0.0),90.0)*gloss*diff;
   }
   float d = length(uEye-vPos);
-  float fog = 1.0-exp(-d*0.0011);
+  float fog = 1.0-exp(-d*0.0006);
   c = mix(c, vec3(0.66,0.70,0.74), clamp(fog,0.0,0.85));
   c = c/(c*0.22+0.85);
   frag = vec4(pow(c,vec3(1.0/1.6)), uAlpha);
@@ -2174,6 +2174,7 @@ struct Renderer::Impl {
   enum { IC_WATER = 0xE000, IC_OIL, IC_FUEL, IC_WRENCH, IC_ENGINE, IC_TYRE, IC_WARN, IC_BRAKE, IC_SKID, IC_CAMERA, IC_CLOCK, IC_SHELL, IC_TURRET, IC_PAD };
 
   std::vector<Col> mapColors;
+  V3 camEye, camTarget;
   void buildHud(const Snapshot& s, const HudOptions& o, int w, int h) {
     hudVerts.clear();
     const float W = float(w), H = float(h);
@@ -2443,8 +2444,46 @@ struct Renderer::Impl {
       }
     }
 
-    // ---- The crosshair is where the gunner looks. The ring is where the gun really points just now.
-    if (o.crosshair) {
+    // ---- The scope: the world through a round hole, with its marks and the wind written beside them.
+    if (o.scope > 0) {
+      const float cx = W * .5f, cy = H * .5f, r = H * .46f;
+      const Col black{0, 0, 0, 1}, fine{0, 0, 0, .9f};
+      rrect(0, 0, cx - r, H, 0, black);
+      rrect(cx + r, 0, W - cx - r, H, 0, black);
+      // The edge of the round view, closed with slices of black towards the corners.
+      // One slice per pixel row, so that the edge is a true circle at any window size.
+      const int kSlices = std::max(int(2.f * r), 1);
+      for (int i = 0; i < kSlices; i++) {
+        const float t0 = (float(i) + .5f) / float(kSlices);
+        const float dy = (t0 * 2.f - 1.f) * r;
+        const float half = std::sqrt(std::max(r * r - dy * dy, 0.f));
+        const float rowH = 2.f * r / float(kSlices) + .5f;
+        rrect(cx - r, cy + dy - rowH * .5f, r - half, rowH, 0, black);
+        rrect(cx + half, cy + dy - rowH * .5f, r - half, rowH, 0, black);
+      }
+      rrect(0, 0, W, cy - r + 1, 0, black);
+      rrect(0, cy + r - 1, W, H - cy - r + 1, 0, black);
+      rrect(cx - r, cy - .6f * u, r * 2.f, 1.2f * u, 0, fine);
+      rrect(cx - .6f * u, cy - r, 1.2f * u, r * 2.f, 0, fine);
+      // A mark for every milliradian: to hold over for the drop, or off for the wind.
+      const float perMil = float(H) / (2.f * float(std::tan((60.0 / o.scope) * PI / 360.0))) * 0.001f;
+      for (int k = -10; k <= 10; k++) {
+        if (k == 0) continue;
+        const float len0 = (k % 5 == 0 ? 9.f : 5.f) * u;
+        rrect(cx + k * perMil - .6f * u, cy - len0, 1.2f * u, len0 * 2.f, 0, fine);
+        rrect(cx - len0, cy + k * perMil - .6f * u, len0 * 2.f, 1.2f * u, 0, fine);
+      }
+      snprintf(buf, sizeof buf, "%.0fx", o.scope);
+      label(cx + r * .62f, cy + r * .62f, buf, 22 * u, white);
+      const double speed = len(s.foot.wind);
+      // Where it comes from, seen from where one looks: from the left means the bullet goes to the right.
+      const V3 f = norm(camTarget - camEye);
+      const V3 sideways{-f.y, f.x, 0};
+      const double across = dot(s.foot.wind, sideways), along = dot(s.foot.wind, V3{f.x, f.y, 0});
+      snprintf(buf, sizeof buf, "Wind %.1f m/s  ·  quer %+.1f  ·  längs %+.1f", speed, -across, along);
+      labelMid(cx, cy + r * .82f, buf, 15 * u, white);
+    } else if (o.crosshair) {
+      // The crosshair is where the gunner looks. The ring is where the gun really points just now.
       const float cx = W * .5f, cy = H * .5f;
       const Col line{1, 1, 1, .85f};
       for (float sgn : {-1.f, 1.f}) {
@@ -2816,6 +2855,8 @@ void Renderer::resetDamage() {
 }
 
 void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt) {
+  d->camEye = cam.eye;
+  d->camTarget = cam.target;
   Impl& D = *d;
   D.origin = {};  // positions stay within +-512 m, which is fine for float vertex data
   auto tp0 = std::chrono::steady_clock::now();

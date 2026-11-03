@@ -79,6 +79,7 @@ void write(Writer& w, const InputMsg& m) {
   w.put(m.launchCount);
   w.put(m.repairCount);
   w.put(m.useCount);
+  w.put(m.setupCount);
   w.put(m.yaw);
   w.put(m.pitch);
   w.put(u8((m.sprint ? 1 : 0) | (m.fireHeld ? 2 : 0)));
@@ -109,6 +110,7 @@ bool read(Reader& r, InputMsg& m) {
   r.get(m.launchCount);
   r.get(m.repairCount);
   r.get(m.useCount);
+  r.get(m.setupCount);
   r.get(m.yaw);
   r.get(m.pitch);
   u8 sprint = 0;
