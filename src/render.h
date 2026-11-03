@@ -162,6 +162,8 @@ struct UiMap {
   bool open = false;
   bool hasMark = false;
   bool strike = false;  // the next click calls in a strike code
+  bool padCursor = false;  // the controller is in hand: a cursor for it, and its buttons in the hint
+  V3 cursor;
   V3 mark, me;
   double meYaw = 0;
   bool hasEnemy = false;
@@ -176,6 +178,14 @@ inline void mapLayout(int w, int h, float& x, float& y, float& size) {
   x = (float(w) - size) * .5f;
   y = (float(h) - size) * .5f;
 }
+
+// Typing without a keyboard: four rows of keys and a row of wide ones.
+struct UiOsk {
+  bool open = false;
+  std::string title, text;
+  const char* keys[4] = {};
+  int x = 0, y = 0;
+};
 
 struct HudOptions {
   // Looking through the big rifle's scope, at this magnification; 0 when not.
@@ -195,6 +205,7 @@ struct HudOptions {
   V3 hurtFrom;
   UiPanel panel;
   UiMap map;
+  UiOsk osk;
   bool vehicleHud = true;
   bool crosshair = false;
   bool damageView = true;

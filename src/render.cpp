@@ -2856,7 +2856,14 @@ struct Renderer::Impl {
         toMap(o.map.me.x, o.map.me.y, sx, sy);
         rrect(sx + float(std::cos(o.map.meYaw)) * 9 * u - 2 * u, sy - float(std::sin(o.map.meYaw)) * 9 * u - 2 * u, 4 * u, 4 * u, 2 * u, {.35f, .85f, .95f, 1});
       }
-      label(mx0 + 14 * u, my0 + ms - 18 * u, o.map.strike ? "Bombencode  ·  Klick: Ziel des Schlags  ·  Rechtsklick: abbrechen" : "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
+      if (o.map.padCursor) {
+        float sx, sy;
+        toMap(o.map.cursor.x, o.map.cursor.y, sx, sy);
+        arc(sx, sy, 8 * u, 1.5f * u, 0, kPi2, {1, 1, 1, .95f});
+        rrect(sx - 13 * u, sy - .75f * u, 26 * u, 1.5f * u, 0, {1, 1, 1, .95f});
+        rrect(sx - .75f * u, sy - 13 * u, 1.5f * u, 26 * u, 0, {1, 1, 1, .95f});
+      }
+      label(mx0 + 14 * u, my0 + ms - 18 * u, o.map.padCursor ? (o.map.strike ? "Bombencode  ·  Rechter Stick: Cursor  ·  A: Ziel des Schlags  ·  B: abbrechen" : "Rechter Stick: Cursor  ·  A: Ziel markieren  ·  X: löschen  ·  B: schließen") : o.map.strike ? "Bombencode  ·  Klick: Ziel des Schlags  ·  Rechtsklick: abbrechen" : "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }
 
     // A hit landed: a cross in the crosshair.
@@ -2936,6 +2943,38 @@ struct Renderer::Impl {
       }
     }
 
+    // ---- The keyboard on the screen, over everything else.
+    const auto drawOsk = [&] {
+      const UiOsk& K = o.osk;
+      const float cell = std::min(float(w) / 13.f, float(h) / 10.f), gap = cell * .08f;
+      const float bw = cell * 10.f, bx = (float(w) - bw) * .5f, by = (float(h) - cell * 7.2f) * .5f;
+      rrect(bx - cell * .4f, by - cell * .4f, bw + cell * .8f, cell * 8.f, cell * .25f, {.04f, .045f, .055f, .95f});
+      const float big = cell * .34f;
+      label(bx, by + cell * .25f, K.title.c_str(), big * .8f, {1, 1, 1, .6f});
+      const std::string shown = K.text + "_";
+      rrect(bx, by + cell * .45f, bw, cell * .85f, cell * .12f, {1, 1, 1, .08f});
+      label(bx + cell * .2f, by + cell * 1.0f, shown.c_str(), big, {1, 1, 1, 1});
+      const float gy = by + cell * 1.5f;
+      const Col idle{1, 1, 1, .10f}, on{.2f, .75f, .85f, 1};
+      for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 10; c++) {
+          const float kx = bx + float(c) * cell, ky = gy + float(r) * cell;
+          const bool sel = K.y == r && K.x == c;
+          rrect(kx + gap, ky + gap, cell - gap * 2, cell - gap * 2, cell * .1f, sel ? on : idle);
+          const char t[2] = {K.keys[r][c], 0};
+          label(kx + cell * .38f, ky + cell * .63f, t, big, {1, 1, 1, 1});
+        }
+      }
+      static const struct { int from, to; const char* name; } kWide[4] = {{0, 2, "Groß (Y)"}, {2, 6, "Leerzeichen"}, {6, 8, "Löschen (X)"}, {8, 10, "Fertig"}};
+      for (int i = 0; i < 4; i++) {
+        const float kx = bx + float(kWide[i].from) * cell, kw = float(kWide[i].to - kWide[i].from) * cell, ky = gy + 4.f * cell;
+        const bool sel = K.y == 4 && K.x >= kWide[i].from && K.x < kWide[i].to;
+        rrect(kx + gap, ky + gap, kw - gap * 2, cell - gap * 2, cell * .1f, sel ? on : idle);
+        label(kx + cell * .2f, ky + cell * .6f, kWide[i].name, big * .62f, {1, 1, 1, 1});
+      }
+      label(bx, gy + cell * 5.45f, "A tippen  ·  X löschen  ·  Y groß  ·  Start fertig  ·  B abbrechen", big * .6f, {1, 1, 1, .6f});
+    };
+
     // ---- Lists: the vehicle menu and the settings.
     if (o.panel.open) {
       const UiPanel& P = o.panel;
@@ -3014,6 +3053,8 @@ struct Renderer::Impl {
         if (!line.empty()) flush();
       }
     }
+
+    if (o.osk.open) drawOsk();
 
     glBindBuffer(GL_ARRAY_BUFFER, hudVbo);
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(hudVerts.size() * sizeof(HudV)), hudVerts.data(), GL_STREAM_DRAW);

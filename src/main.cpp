@@ -29,8 +29,14 @@ struct GameSettings {
   bool motionBlur = true, shake = true, damageView = true, stats = true, muted = false;
   bool fullscreen = false, vsync = true, farShadows = true;
   double volume = 0.8, fov = 0, mouse = 1;
+  double padSens = 1;
+  bool rumble = true;
 };
 static GameSettings gSet;
+// Whether the last thing touched was the controller: the hints on screen name its buttons then.
+static std::atomic<bool> gPadHints{false};
+// A controller made up for the test scripts: everything behind it is the real input path.
+static SDL_Joystick* gTestPad = nullptr;
 static constexpr const char* kSettingsFile = "settings.cfg";
 
 static void loadSettings() {
@@ -51,6 +57,8 @@ static void loadSettings() {
     else if (k == "volume") gSet.volume = clampd(v, 0, 1.5);
     else if (k == "fov") gSet.fov = clampd(v, -15, 25);
     else if (k == "mouse") gSet.mouse = clampd(v, 0.2, 3);
+    else if (k == "pad_sensitivity") gSet.padSens = clampd(v, 0.3, 2.5);
+    else if (k == "rumble") gSet.rumble = v != 0;
   }
   fclose(f);
 }
@@ -60,6 +68,7 @@ static void saveSettings() {
   if (!f) return;
   fprintf(f, "motion_blur %d\ncamera_shake %d\ndamage_view %d\nstats %d\nmuted %d\nfullscreen %d\nvsync %d\nfar_shadows %d\nvolume %.2f\nfov %.0f\nmouse %.2f\n",
           gSet.motionBlur, gSet.shake, gSet.damageView, gSet.stats, gSet.muted, gSet.fullscreen, gSet.vsync, gSet.farShadows, gSet.volume, gSet.fov, gSet.mouse);
+  fprintf(f, "pad_sensitivity %g\nrumble %d\n", gSet.padSens, gSet.rumble);
   fclose(f);
 }
 
@@ -1700,6 +1709,16 @@ struct Game {
           if (v >= 0) snprintf(msg, sizeof msg, duel.occupied(v) ? "E: als Richtschütze einsteigen  ·  %s" : (carrying[IT_REPAIR] > 0 ? "E: einsteigen  ·  Q: Reparaturset  ·  %s" : "E: einsteigen  ·  %s"), name);
         }
       }
+      if (gPadHints.load()) {
+        // The same words, with the buttons of the controller in them.
+        static const char* const kSwap[][2] = {{"E: ", "X: "}, {"Q: ", "RB: "}, {"K zeigt", "LB zeigt"}, {"TAB wechselt", "X wechselt"}, {"[ ] Tempo", "LB RB Tempo"}, {"Maus lenkt", "Rechter Stick lenkt"}, {"Feuer ", "RT "}};
+        std::string said = msg;
+        for (const auto& swap : kSwap) {
+          const size_t at = said.find(swap[0]);
+          if (at != std::string::npos) said.replace(at, strlen(swap[0]), swap[1]);
+        }
+        snprintf(msg, sizeof msg, "%s", said.c_str());
+      }
       memcpy(duel.players[mySlot].items, carrying, IT_COUNT);
       {
         std::lock_guard<std::mutex> lock(snapMutex);
@@ -1905,7 +1924,7 @@ static void runGame() {
   rig.dist = 8.0;
   Camera cam;
   HudOptions hud;
-  enum { PANEL_NONE, PANEL_GAME, PANEL_MAIN, PANEL_KEYS, PANEL_ONLINE, PANEL_LOADOUT, PANEL_TOOLS };
+  enum { PANEL_NONE, PANEL_GAME, PANEL_MAIN, PANEL_KEYS, PANEL_ONLINE, PANEL_LOADOUT, PANEL_TOOLS, PANEL_CHAT };
   int panelKind = PANEL_MAIN;
   bool textEntry = false;
   int panelSel = 0;
@@ -1964,6 +1983,51 @@ static void runGame() {
   bool hasMark = false;
   V3 markPoint;
   bool strikePending = false;  // a strike code chosen: the next click on the map says where
+  // The controller's part of all that.
+  bool padActive = false, padAim = false, padFire = false, padScopeHeld = false, padSprint = false;
+  double padLx = 0, padLy = 0;
+  V3 mapCursor;
+  bool mapWasOpen = false;
+  int navX = 0, navY = 0;
+  double navWait = 0;
+  // Typing without a keyboard.
+  struct Osk {
+    bool open = false, shift = false;
+    int target = 0;  // the name, the address, the port or a line of chat
+    int x = 0, y = 1;
+    std::string text;
+  } osk;
+  static const char* const kOskKeys[2][4] = {{"1234567890", "qwertzuiop", "asdfghjkl-", "yxcvbnm._:"}, {"1234567890", "QWERTZUIOP", "ASDFGHJKL-", "YXCVBNM._:"}};
+  const auto oskGroup = [](int x) { return x < 2 ? 0 : (x < 6 ? 1 : (x < 8 ? 2 : 3)); };
+  const auto oskType = [&](char ch) {
+    if (osk.target == 1 && !(std::isalnum(static_cast<unsigned char>(ch)) || ch == '.' || ch == '-')) return;
+    if (osk.target == 2 && !std::isdigit(static_cast<unsigned char>(ch))) return;
+    const size_t room = osk.target == 0 ? size_t(net::kNameBytes) - 1 : (osk.target == 1 ? 63 : (osk.target == 2 ? 5 : size_t(net::kChatBytes)));
+    if (osk.text.size() < room) osk.text += ch;
+  };
+  const auto oskBack = [&] {
+    while (osk.text.size() > 1 && (static_cast<unsigned char>(osk.text.back()) & 0xC0) == 0x80) osk.text.pop_back();
+    if (!osk.text.empty()) osk.text.pop_back();
+  };
+  const auto oskDone = [&] {
+    std::lock_guard<std::mutex> lock(G.inputMutex);
+    if (osk.target == 0 && !osk.text.empty()) gUserName = osk.text;
+    if (osk.target == 1 && !osk.text.empty()) gServerHost = osk.text;
+    if (osk.target == 2 && !osk.text.empty()) gServerPort = std::min(atoi(osk.text.c_str()), 65535);
+    if (osk.target == 3 && !osk.text.empty()) G.input.chatOut = osk.text;
+    osk.open = false;
+  };
+  const auto oskPress = [&] {
+    if (osk.y < 4) {
+      oskType(kOskKeys[osk.shift ? 1 : 0][osk.y][osk.x]);
+    } else {
+      const int group = oskGroup(osk.x);
+      if (group == 0) osk.shift = !osk.shift;
+      else if (group == 1) oskType(' ');
+      else if (group == 2) oskBack();
+      else oskDone();
+    }
+  };
   std::vector<const char*> toolAbout;
   auto lastFrame = std::chrono::steady_clock::now();
   const auto startTime = lastFrame;
@@ -2008,7 +2072,7 @@ static void runGame() {
         panelKind = PANEL_LOADOUT;
         panelSel = 0;
         fromMain = false;
-      } else if (panelKind == PANEL_LOADOUT || panelKind == PANEL_TOOLS) {
+      } else if (panelKind == PANEL_LOADOUT || panelKind == PANEL_TOOLS || panelKind == PANEL_CHAT) {
         panelKind = PANEL_NONE;
       }
       strikePending = false;
@@ -2103,7 +2167,7 @@ static void runGame() {
       if (f.items[IT_NET] > 0) tool("Tarnnetz", std::to_string(f.items[IT_NET]), inTank ? nullptr : "nur im Panzer", "Über den stehenden Panzer gezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.", [&] { edges.net = true; });
       if (f.droneLive) tool("Drohne zurückholen", "", nullptr, "Holt die Drohne aus der Luft. Sie ist danach verbraucht.", [&] { edges.drone = true; });
       else if (f.drones > 0) tool("Drohne", std::to_string(f.drones), footOnly, "Steigt von deinem Standort auf. Du fliegst sie selbst, Feuer markiert den Gegner.", [&] { edges.drone = true; });
-      if (f.codes > 0) tool("Bombencode", std::to_string(f.codes), nullptr, "Die Karte geht auf, ein Klick sagt wohin: vier Raketen, ziemlich ungenau.", [&] {
+      if (f.codes > 0) tool("Bombencode", std::to_string(f.codes), nullptr, "Die Karte geht auf, dort wählst du das Ziel: vier Raketen, ziemlich ungenau.", [&] {
         strikePending = true;
         mapOpen = true;
       });
@@ -2158,26 +2222,45 @@ static void runGame() {
       percent("Lautstärke", gSet.volume, 0.0, 1.5, 0.1);
       toggle("Schadensanzeige", gSet.damageView, [&] { gSet.damageView = !gSet.damageView; });
       toggle("Leistungsanzeige", gSet.stats, [&] { gSet.stats = !gSet.stats; });
+      percent("Controller-Empfindlichkeit", gSet.padSens, 0.3, 2.5, 0.1);
+      toggle("Vibration", gSet.rumble, [&] { gSet.rumble = !gSet.rumble; });
     } else if (panelKind == PANEL_KEYS) {
-      auto key = [&](const char* what, const char* k) { items.push_back({what, k, -1.f, [&](int) {}}); };
-      key("Gas und Bremse, im Stand rückwärts", "W S");
-      key("Lenken", "A D");
-      key("Bremse", "Leertaste");
-      key("Zielen", "Maus");
-      key("Feuer", "Linke Maustaste, F");
-      key("Rakete starten, fliegt mit der Maus", "G");
-      key("Einsteigen und aussteigen", "E");
-      key("Waffe wählen", "1 2 3 4 5");
-      key("Anvisieren, in jedem Panzer und mit jedem Gewehr", "Rechte Maustaste halten");
-      key("Werkzeuge: Minen, Medikit, Reparaturset, Nebel, Tarnnetz, Drohne, Bombencode", "Q");
-      key("Beim Gegner anzapfen, dann Standort abfragen", "E am Computer, Q");
-      key("Scharfschützengewehr aufbauen, Zielfernrohr, Zoom", "X, rechte Maustaste, Mausrad");
-      key("Visier auf Entfernung einstellen", "Pfeil hoch, runter");
-      key("Rennen, springen", "Umschalt, Leertaste");
-      key("Karte, Ziel für die Artillerie", "K");
-      key("Chat", "Enter");
-      key("Kamera", "C");
-      key("Screenshot", "F12");
+      // The list of whatever is in the hands right now.
+      auto key = [&](const char* what, const char* k, const char* p) { items.push_back({what, padActive ? p : k, -1.f, [&](int) {}}); };
+      key("Gehen, Lenken", "W A S D", "Linker Stick");
+      key("Panzer: Gas und Rückwärts", "W S", "Linker Stick");
+      key("Auto: Gas und Bremse", "W S", "RT, LT");
+      key("Bremse, zu Fuß springen", "Leertaste", "A");
+      key("Rennen", "Umschalt", "Linken Stick drücken");
+      key("Zielen, umsehen", "Maus", "Rechter Stick");
+      key("Feuer", "Linke Maustaste, F", "RT");
+      key("Anvisieren, in jedem Panzer und mit jedem Gewehr", "Rechte Maustaste halten", "LT halten");
+      key("Einsteigen, aussteigen, nehmen, anzapfen", "E", "X");
+      key("Waffe wählen", "1 2 3 4 5", "Steuerkreuz links, rechts");
+      key("Werkzeuge: Minen, Medikit, Nebel, Drohne, Bombencode", "Q", "RB");
+      key("Karte, Ziel für die Artillerie", "K", "LB");
+      key("Rakete starten, fliegt mit dem Blick", "G", "B");
+      key("Scharfschützengewehr aufbauen", "X", "B");
+      key("Zielfernrohr, Zoom", "Rechte Maustaste, Mausrad", "LT, Steuerkreuz links, rechts");
+      key("Visier auf Entfernung einstellen", "Pfeil hoch, runter", "Steuerkreuz hoch, runter");
+      key("Kamera, Abstand", "C, Mausrad", "Y, Steuerkreuz hoch, runter");
+      key("Chat", "Enter", "Back");
+      key("Menü", "ESC", "Start");
+      if (!padActive) key("Screenshot", "F12", "");
+    } else if (panelKind == PANEL_CHAT) {
+      page("Eigener Text...", [&] {
+        panelKind = PANEL_NONE;
+        osk = Osk{};
+        osk.open = true;
+        osk.target = 3;
+      });
+      for (const char* line : {"Hilfe!", "Gegner gesichtet", "Ich brauche Munition", "Steig ein, ich fahre", "Folge mir", "Bleib, wo du bist", "Danke", "Gut gemacht", "Entschuldigung"}) {
+        page(line, [&, line] {
+          std::lock_guard<std::mutex> lock(G.inputMutex);
+          G.input.chatOut = line;
+          panelKind = PANEL_NONE;
+        });
+      }
     }
     panelSel = items.empty() ? 0 : std::clamp(panelSel, 0, int(items.size()) - 1);
 
@@ -2218,7 +2301,71 @@ static void runGame() {
     }
 
     SDL_Event e;
+    const auto openMenu = [&] {
+      if (mapOpen) {
+        mapOpen = false;
+        strikePending = false;
+      } else {
+        panelKind = PANEL_MAIN;
+        panelSel = 0;
+        fromMain = false;
+      }
+    };
+    const auto replayNext = [&] {
+      // One, the other, then free.
+      if (replayFree) {
+        replayFree = false;
+        G.replayWatch = 0;
+      } else if (G.replayWatch.load() + 1 < G.duel.playersWanted) {
+        G.replayWatch = G.replayWatch.load() + 1;
+      } else {
+        replayFree = true;
+        freeEye = cam.eye;
+      }
+    };
+    const auto openTools = [&] {
+      if (netState == Game::NET_IN && phase == Duel::PLAYING) {
+        panelKind = PANEL_TOOLS;
+        panelSel = 0;
+        fromMain = false;
+        mapOpen = false;
+        strikePending = false;
+      }
+    };
+    const auto pickOnMap = [&](double wx, double wy) {
+      if (std::fabs(wx) >= kMapHalf || std::fabs(wy) >= kMapHalf) return;
+      if (strikePending) {
+        edges.strike = true;
+        edges.strikeAt = V3{wx, wy, G.world.height(wx, wy)};
+        strikePending = false;
+        mapOpen = false;
+      } else {
+        hasMark = true;
+        markPoint = V3{wx, wy, G.world.height(wx, wy)};
+      }
+    };
     while (SDL_PollEvent(&e)) {
+      if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_WHEEL) padActive = false;
+      if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(e.gaxis.value)) > 12000)) padActive = true;
+      if (osk.open) {
+        // The keyboard on the screen has the buttons to itself. A real one can still leave it.
+        if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+          switch (e.gbutton.button) {
+            case SDL_GAMEPAD_BUTTON_SOUTH: oskPress(); break;
+            case SDL_GAMEPAD_BUTTON_EAST: osk.open = false; break;
+            case SDL_GAMEPAD_BUTTON_WEST: oskBack(); break;
+            case SDL_GAMEPAD_BUTTON_NORTH: osk.shift = !osk.shift; break;
+            case SDL_GAMEPAD_BUTTON_START: oskDone(); break;
+            default: break;
+          }
+          continue;
+        }
+        if (e.type == SDL_EVENT_KEY_DOWN) {
+          if (e.key.key == SDLK_ESCAPE) osk.open = false;
+          continue;
+        }
+        if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) continue;
+      }
       if (chatting && e.type == SDL_EVENT_TEXT_INPUT) {
         for (const char* t = e.text.text; *t; t++)
           if (chatText.size() < size_t(net::kChatBytes)) chatText += *t;
@@ -2276,25 +2423,31 @@ static void runGame() {
         float mx0, my0, ms;
         mapLayout(pw, ph, mx0, my0, ms);
         const double wx = (double(e.button.x - mx0) / ms * 2.0 - 1.0) * kMapHalf, wy = (1.0 - double(e.button.y - my0) / ms * 2.0) * kMapHalf;
-        if (strikePending) {
-          // The code from the tools: this click is where it goes, the other button keeps it.
-          if (e.button.button == SDL_BUTTON_LEFT && std::fabs(wx) < kMapHalf && std::fabs(wy) < kMapHalf) {
-            edges.strike = true;
-            edges.strikeAt = V3{wx, wy, G.world.height(wx, wy)};
+        if (e.button.button == SDL_BUTTON_LEFT) pickOnMap(wx, wy);
+        if (e.button.button == SDL_BUTTON_RIGHT) {
+          // The other button takes the mark away, or keeps the code that was about to be used.
+          if (strikePending) {
             strikePending = false;
             mapOpen = false;
-          } else if (e.button.button == SDL_BUTTON_RIGHT) {
-            strikePending = false;
-            mapOpen = false;
+          } else {
+            hasMark = false;
           }
-          continue;
         }
-        if (e.button.button == SDL_BUTTON_LEFT && std::fabs(wx) < kMapHalf && std::fabs(wy) < kMapHalf) {
-          hasMark = true;
-          markPoint = V3{wx, wy, G.world.height(wx, wy)};
-        }
-        if (e.button.button == SDL_BUTTON_RIGHT) hasMark = false;
         continue;
+      }
+      // The same map with the controller: the right stick moves a cursor, so the left one can go on driving.
+      if (mapOpen && panelKind == 0 && e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        bool taken = true;
+        switch (e.gbutton.button) {
+          case SDL_GAMEPAD_BUTTON_SOUTH: pickOnMap(mapCursor.x, mapCursor.y); break;
+          case SDL_GAMEPAD_BUTTON_WEST: if (!strikePending) hasMark = false; break;
+          case SDL_GAMEPAD_BUTTON_EAST: case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
+            mapOpen = false;
+            strikePending = false;
+            break;
+          default: taken = false; break;
+        }
+        if (taken) continue;
       }
       // A panel on screen takes the keys and buttons it needs first.
       if (panelKind != 0) {
@@ -2319,14 +2472,27 @@ static void runGame() {
             default: used = false; break;
           }
         } else if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+          // The directions come by the frame, further down, so that holding one keeps going.
           switch (e.gbutton.button) {
-            case SDL_GAMEPAD_BUTTON_DPAD_UP: panelMove(-1); break;
-            case SDL_GAMEPAD_BUTTON_DPAD_DOWN: panelMove(1); break;
-            case SDL_GAMEPAD_BUTTON_DPAD_LEFT: panelAdjust(-1); break;
-            case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: panelAdjust(1); break;
-            case SDL_GAMEPAD_BUTTON_SOUTH: choosePanel(); break;
-            case SDL_GAMEPAD_BUTTON_EAST: case SDL_GAMEPAD_BUTTON_GUIDE: closePanel(); break;
-            default: used = false; break;
+            case SDL_GAMEPAD_BUTTON_SOUTH:
+              if (panelKind == PANEL_ONLINE && panelSel < 3) {
+                osk = Osk{};
+                osk.open = true;
+                osk.target = panelSel;
+                osk.text = panelSel == 0 ? gUserName : (panelSel == 1 ? gServerHost : std::to_string(gServerPort));
+              } else {
+                choosePanel();
+              }
+              break;
+            case SDL_GAMEPAD_BUTTON_WEST: if (panelKind == PANEL_LOADOUT) panelAdjust(-1); break;
+            case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
+              if (panelKind == PANEL_TOOLS) panelKind = PANEL_NONE;
+              break;
+            case SDL_GAMEPAD_BUTTON_BACK:
+              if (panelKind == PANEL_CHAT) panelKind = PANEL_NONE;
+              break;
+            case SDL_GAMEPAD_BUTTON_EAST: case SDL_GAMEPAD_BUTTON_GUIDE: case SDL_GAMEPAD_BUTTON_START: closePanel(); break;
+            default: break;
           }
         } else if (e.type == SDL_EVENT_MOUSE_MOTION || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
           int pw, ph;
@@ -2369,7 +2535,54 @@ static void runGame() {
           break;
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
           switch (e.gbutton.button) {
-            case SDL_GAMEPAD_BUTTON_NORTH: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); break;
+            case SDL_GAMEPAD_BUTTON_NORTH: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.pitch = 0.22; break;
+            case SDL_GAMEPAD_BUTTON_START: case SDL_GAMEPAD_BUTTON_GUIDE: openMenu(); break;
+            case SDL_GAMEPAD_BUTTON_WEST:
+              if (replayOn) replayNext();
+              else edges.use = true;
+              break;
+            case SDL_GAMEPAD_BUTTON_EAST:
+              // In a vehicle the missile, on foot getting down behind the big rifle.
+              if (inVehicle) edges.launch = true;
+              else edges.setup = true;
+              break;
+            case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
+              if (replayOn) G.replaySpeed = std::max(25, G.replaySpeed.load() / 2);
+              else mapOpen = !mapOpen, strikePending = false;
+              break;
+            case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
+              if (replayOn) G.replaySpeed = std::min(800, G.replaySpeed.load() * 2);
+              else openTools();
+              break;
+            case SDL_GAMEPAD_BUTTON_BACK:
+              if (netState == Game::NET_IN) {
+                panelKind = PANEL_CHAT;
+                panelSel = 0;
+                fromMain = false;
+              }
+              break;
+            case SDL_GAMEPAD_BUTTON_LEFT_STICK: padSprint = true; break;
+            case SDL_GAMEPAD_BUTTON_DPAD_UP:
+              if (scoped) scopeZero = std::min(scopeZero + 50, 2000);
+              else rig.dist = clampd(rig.dist * 0.85, 2.5, 40.0);
+              break;
+            case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
+              if (scoped) scopeZero = std::max(scopeZero - 50, 100);
+              else rig.dist = clampd(rig.dist / 0.85, 2.5, 40.0);
+              break;
+            case SDL_GAMEPAD_BUTTON_DPAD_LEFT: case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
+              // Through what is carried; through the sights the same two buttons zoom instead.
+              if (!scoped) {
+                const int d = e.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_RIGHT ? 1 : 4;
+                for (int step = 1, pick = weaponPick; step < 5; step++) {
+                  pick = (pick + d) % 5;
+                  if (view.foot.has & (1 << pick)) {
+                    weaponPick = pick;
+                    break;
+                  }
+                }
+              }
+              break;
             default: break;
           }
           break;
@@ -2377,40 +2590,12 @@ static void runGame() {
           if (e.key.repeat) break;
           switch (e.key.key) {
             case SDLK_TAB:
-              if (replayOn) {
-                // One, the other, then free.
-                if (replayFree) {
-                  replayFree = false;
-                  G.replayWatch = 0;
-                } else if (G.replayWatch.load() + 1 < G.duel.playersWanted) {
-                  G.replayWatch = G.replayWatch.load() + 1;
-                } else {
-                  replayFree = true;
-                  freeEye = cam.eye;
-                }
-              }
+              if (replayOn) replayNext();
               break;
             case SDLK_LEFTBRACKET: if (replayOn) G.replaySpeed = std::max(25, G.replaySpeed.load() / 2); break;
             case SDLK_RIGHTBRACKET: if (replayOn) G.replaySpeed = std::min(800, G.replaySpeed.load() * 2); break;
-            case SDLK_ESCAPE:
-              if (mapOpen) {
-                mapOpen = false;
-                strikePending = false;
-              } else {
-                panelKind = PANEL_MAIN;
-                panelSel = 0;
-                fromMain = false;
-              }
-              break;
-            case SDLK_Q:
-              if (netState == Game::NET_IN && phase == Duel::PLAYING) {
-                panelKind = PANEL_TOOLS;
-                panelSel = 0;
-                fromMain = false;
-                mapOpen = false;
-                strikePending = false;
-              }
-              break;
+            case SDLK_ESCAPE: openMenu(); break;
+            case SDLK_Q: openTools(); break;
             case SDLK_G: edges.launch = true; break;
             case SDLK_K:
               mapOpen = !mapOpen;
@@ -2457,7 +2642,7 @@ static void runGame() {
 
     // Holding the right button brings the sights up, as far as there are any for what is in hand.
     {
-      const bool held = panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK);
+      const bool held = panelKind == 0 && !mapOpen && !chatting && (padAim || (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK));
       const bool canAim = (onFoot && weaponPick != WP_KNIFE && weaponPick != WP_SNIPER) || (inTank && !view.foot.noSight && !view.missileLive);
       const double want = (held || scriptAim) && canAim ? 1.0 : 0.0;
       aimBlend += clampd(want - aimBlend, -dt * 7.0, dt * 7.0);
@@ -2478,25 +2663,100 @@ static void runGame() {
       const double keyRate = (keyDir != 0 && keyDir * keySteer >= 0) ? 2.4 : 4.0;
       keySteer += clampd(keyTarget - keySteer, -keyRate * dt, keyRate * dt);
     }
-    const bool sprint = keys[SDL_SCANCODE_LSHIFT] || sprintScript;
+    bool sprint = keys[SDL_SCANCODE_LSHIFT] || sprintScript;
     double steer = inVehicle && myVehicle >= Duel::kTanks ? keySteer : keyDir, hb = keys[SDL_SCANCODE_SPACE] ? 1.0 : 0.0;
 
     hud.gamepad = false;
+    padFire = false;
     if (gamepad) {
-      const double sx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32767.0;
-      const double rt = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) / 32767.0;
-      const double lt = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) / 32767.0;
-      const double rx = applyDeadzone(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX) / 32767.0, 0.15);
-      const double ry = applyDeadzone(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY) / 32767.0, 0.15);
-      const double stick = applyDeadzone(sx, 0.08);
-      if (std::fabs(stick) > 0 || rt > 0.02 || lt > 0.02) hud.gamepad = true;
-      if (std::fabs(stick) > 0) steer = std::copysign(std::pow(std::fabs(stick), 1.35), -stick);
-      gas = std::max(gas, rt);
-      brake = std::max(brake, lt);
-      if (SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_SOUTH)) hb = 1.0;
-      rig.yaw -= rx * dt * 2.4;
-      rig.pitch = clampd(rig.pitch + ry * dt * 1.4, -0.25, 1.45);
+      const auto axis = [&](SDL_GamepadAxis ax) { return SDL_GetGamepadAxis(gamepad, ax) / 32767.0; };
+      const auto button = [&](SDL_GamepadButton b) { return SDL_GetGamepadButton(gamepad, b); };
+      const double rawX = axis(SDL_GAMEPAD_AXIS_LEFTX), rawY = axis(SDL_GAMEPAD_AXIS_LEFTY);
+      const double rt = axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER), lt = axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+      const double rx = applyDeadzone(axis(SDL_GAMEPAD_AXIS_RIGHTX), 0.12), ry = applyDeadzone(axis(SDL_GAMEPAD_AXIS_RIGHTY), 0.12);
+      const double lx = applyDeadzone(rawX, 0.12), ly = applyDeadzone(rawY, 0.12);
+      padLx = lx;
+      padLy = ly;
+      if (std::fabs(lx) > 0 || std::fabs(ly) > 0 || std::fabs(rx) > 0 || std::fabs(ry) > 0 || rt > 0.02 || lt > 0.02) hud.gamepad = true;
+
+      // Lists and the keyboard on the screen: the cross or the stick, and holding either keeps going.
+      const int wantX = button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || rawX > 0.6 ? 1 : (button(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || rawX < -0.6 ? -1 : 0);
+      const int wantY = button(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || rawY > 0.6 ? 1 : (button(SDL_GAMEPAD_BUTTON_DPAD_UP) || rawY < -0.6 ? -1 : 0);
+      navWait -= dt;
+      const bool navChanged = wantX != navX || wantY != navY;
+      if (navChanged || (navWait <= 0 && (wantX != 0 || wantY != 0))) {
+        navWait = navChanged ? 0.35 : 0.11;
+        navX = wantX;
+        navY = wantY;
+        if (osk.open) {
+          if (wantY != 0) osk.y = (osk.y + wantY + 5) % 5;
+          if (wantX != 0) {
+            if (osk.y < 4) {
+              osk.x = (osk.x + wantX + 10) % 10;
+            } else {
+              // Along the bottom row the wide keys count once.
+              const int group = oskGroup(osk.x);
+              while (oskGroup(osk.x) == group) osk.x = (osk.x + wantX + 10) % 10;
+            }
+          }
+        } else if (panelKind != 0) {
+          if (wantY != 0) panelMove(wantY);
+          if (wantX != 0) panelAdjust(wantX);
+        }
+      }
+
+      // Everyone has the same hands: left stick moves, right stick looks, right trigger fires, left trigger aims.
+      // Only a car has pedals, for it has nothing to shoot with.
+      const bool inCar = inVehicle && !inTank;
+      const bool free = panelKind == 0 && !chatting && !osk.open;
+      const double curved = std::copysign(std::pow(std::fabs(lx), 1.35), -lx);
+      if (std::fabs(lx) > 0) steer = curved;
+      if (inCar) {
+        gas = std::max(gas, rt);
+        brake = std::max(brake, lt);
+      } else {
+        gas = std::max(gas, -ly);
+        brake = std::max(brake, ly);
+      }
+      if (button(SDL_GAMEPAD_BUTTON_SOUTH) && !mapOpen) hb = 1.0;
+      if (padSprint && std::fabs(lx) < 0.2 && std::fabs(ly) < 0.2) padSprint = false;
+      if (padSprint && onFoot) sprint = true;
+
+      if (free && !inCar && !replayOn) {
+        const bool fireNow = rt > 0.5;
+        static bool fireWas = false;
+        if (fireNow && !fireWas) edges.fire = true;
+        fireWas = fireNow;
+        padFire = fireNow;
+        const bool aimNow = lt > 0.4;
+        const bool scopeWeapon = onFoot && weaponPick == WP_SNIPER;
+        if (aimNow && !padScopeHeld && scopeWeapon && view.foot.prone > 0.99) scoped = !scoped;
+        padScopeHeld = aimNow;
+        padAim = aimNow && !scopeWeapon;
+      } else {
+        padAim = false;
+      }
+
+      if (mapOpen && panelKind == 0) {
+        mapCursor.x = clampd(mapCursor.x + rx * std::fabs(rx) * dt * 520.0, -kMapHalf + 1.0, kMapHalf - 1.0);
+        mapCursor.y = clampd(mapCursor.y - ry * std::fabs(ry) * dt * 520.0, -kMapHalf + 1.0, kMapHalf - 1.0);
+      } else if (free || !inMatch) {
+        // As gentle near the middle as a mouse: the first bit of the stick is for aiming, the rest for turning.
+        const double slow = (rig.mode == CAM_HOOD ? 0.5 : 1.0) * gSet.padSens / (scoped ? scopeZoom * 0.5 : 1.0) * lerpd(1.0, inTank ? 0.3 : 0.55, aimBlend);
+        rig.yaw -= std::copysign(std::pow(std::fabs(rx), 1.7), rx) * dt * 2.6 * slow;
+        rig.pitch = clampd(rig.pitch + std::copysign(std::pow(std::fabs(ry), 1.7), ry) * dt * 1.6 * slow, -0.30, 1.2);
+      }
+      if (scoped) {
+        const int zoom = (button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) ? 1 : 0) - (button(SDL_GAMEPAD_BUTTON_DPAD_LEFT) ? 1 : 0);
+        if (zoom != 0) scopeZoom = clampd(scopeZoom * std::pow(1.9, zoom * dt), 6.0, 24.0);
+      }
+    } else {
+      padAim = false;
+      padLx = padLy = 0;
     }
+    gPadHints = padActive;
+    if (mapOpen && !mapWasOpen) mapCursor = hasMark ? markPoint : view.carCog;
+    mapWasOpen = mapOpen;
 
     // Holding the brake at a standstill selects reverse, holding the throttle selects drive. In reverse the
     // pedals swap, so that S always means "go backwards".
@@ -2509,9 +2769,9 @@ static void runGame() {
     }
 
     // While a panel is open the pedals rest: its keys are the same ones.
-    if (panelKind != 0 || chatting) gas = brake = steer = hb = 0;
+    if (panelKind != 0 || chatting || osk.open) gas = brake = steer = hb = 0;
     {
-      const bool wantRelative = panelKind == 0 && !mapOpen && scriptMode == 0;
+      const bool wantRelative = panelKind == 0 && !mapOpen && !osk.open && scriptMode == 0;
       if (wantRelative != relativeMouse) {
         SDL_SetWindowRelativeMouseMode(window, wantRelative);
         relativeMouse = wantRelative;
@@ -2541,6 +2801,142 @@ static void runGame() {
         if (view.foot.prone > 0.99) scoped = true;
         scopeZoom = 6.0;
         if (std::fmod(tNow, 2.5) < dt) sendC.fire = true;
+      }
+    }
+    if ((scriptMode == 61 || scriptMode == 62) && gTestPad) {
+      // A whole game with nothing but the controller, through SDL's own gamepad path.
+      static double wake = 2.0;
+      static int stage = 0;
+      static SDL_GamepadButton held = SDL_GAMEPAD_BUTTON_INVALID;
+      if (held != SDL_GAMEPAD_BUTTON_INVALID) {
+        SDL_SetJoystickVirtualButton(gTestPad, held, false);
+        held = SDL_GAMEPAD_BUTTON_INVALID;
+      }
+      const auto tap = [&](SDL_GamepadButton b) {
+        SDL_SetJoystickVirtualButton(gTestPad, b, true);
+        held = b;
+      };
+      const auto stick = [&](SDL_GamepadAxis a, double v) { SDL_SetJoystickVirtualAxis(gTestPad, a, Sint16(v * 32767.0)); };
+      const auto trigger = [&](SDL_GamepadAxis a, bool on) { SDL_SetJoystickVirtualAxis(gTestPad, a, on ? 32767 : -32768); };
+      const auto say = [&](const char* what) {
+        printf("%s: Panel %d Zeile %d/%zu Karte %d Marke %d Waffe %d Munition %d Fahrzeug %d Pos %.1f %.1f km/h %.1f Blick %.2f Anvisieren %.2f Scope %d Zoom %.1f Visier %d Minen %d Codes %d OSK %d '%s' Name %s\n", what, panelKind, panelSel, items.size(), int(mapOpen), int(hasMark), weaponPick, view.foot.ammo, myVehicle, view.foot.p.x, view.foot.p.y, view.speedKmh, rig.yaw, aimBlend, int(scoped), scopeZoom, scopeZero, view.foot.items[IT_FOOT_MINE], view.foot.codes, int(osk.open), osk.text.c_str(), gUserName.c_str());
+      };
+      if (scriptMode == 62 && tNow > wake) {
+        wake = tNow + 0.5;
+        switch (stage++) {
+          case 0: say("Hauptmenü"); wantShot = true; break;
+          case 1: tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+          case 2: say("Online"); tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+          case 3: say("Tastatur auf"); tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+          case 4: say("q getippt"); tap(SDL_GAMEPAD_BUTTON_DPAD_RIGHT); break;
+          case 5: tap(SDL_GAMEPAD_BUTTON_NORTH); break;
+          case 6: tap(SDL_GAMEPAD_BUTTON_SOUTH); wantShot = true; break;
+          case 7: say("W groß"); tap(SDL_GAMEPAD_BUTTON_WEST); break;
+          case 8: say("gelöscht"); tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+          case 9: tap(SDL_GAMEPAD_BUTTON_START); break;
+          case 10: say("fertig"); tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+          case 11: say("nochmal auf"); tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+          case 12: tap(SDL_GAMEPAD_BUTTON_EAST); break;
+          case 13: say("abgebrochen"); tap(SDL_GAMEPAD_BUTTON_EAST); break;
+          case 14: say("zurück im Menü"); stick(SDL_GAMEPAD_AXIS_LEFTY, 1.0); break;
+          case 15: stick(SDL_GAMEPAD_AXIS_LEFTY, 0.0); say("Stick runter"); break;
+          case 16: panelSel = 2; tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+          case 17: say("Steuerung"); wantShot = true; break;
+          case 18: quit = true; break;
+          default: break;
+        }
+      }
+      if (scriptMode == 61 && netState == Game::NET_IN && tNow > wake) {
+        static double hold = 0;
+        wake = tNow + 0.45;
+        if (phase == Duel::CHOOSING) {
+          static int pick = 0;
+          switch (pick++) {
+            case 0: say("Ausrüstung"); tap(SDL_GAMEPAD_BUTTON_DPAD_DOWN); break;
+            case 1: tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+            case 2: printf("Tretminen gewählt %d\n", pickItems[IT_FOOT_MINE]); tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+            case 3: printf("Tretminen gewählt %d\n", pickItems[IT_FOOT_MINE]); tap(SDL_GAMEPAD_BUTTON_WEST); break;
+            case 4: printf("Tretminen gewählt %d\n", pickItems[IT_FOOT_MINE]); stick(SDL_GAMEPAD_AXIS_LEFTY, 1.0); wake = tNow + 0.7; break;
+            case 5: stick(SDL_GAMEPAD_AXIS_LEFTY, 0.0); say("Stick gehalten"); panelSel = int(items.size()) - 1; break;
+            case 6: tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+            default: break;
+          }
+        } else if (inMatch) {
+          const auto press = [&](const char* what, SDL_GamepadButton b) { say(what); tap(b); };
+          switch (stage++) {
+            case 0: say("Match"); trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, false); trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, false); stick(SDL_GAMEPAD_AXIS_LEFTY, -1.0); wake = tNow + 1.2; break;
+            case 1: say("gelaufen"); stick(SDL_GAMEPAD_AXIS_LEFTY, 0); stick(SDL_GAMEPAD_AXIS_RIGHTX, 1.0); wake = tNow + 0.7; break;
+            case 2: say("umgesehen"); stick(SDL_GAMEPAD_AXIS_RIGHTX, 0); trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, true); wake = tNow + 0.2; break;
+            case 3: trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, false); trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, true); wake = tNow + 0.6; break;
+            case 4: say("geschossen, angelegt"); wantShot = true; trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, false); break;
+            case 5: press("Waffe vorher", SDL_GAMEPAD_BUTTON_DPAD_RIGHT); break;
+            case 6: say("Waffe nachher"); tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER); break;
+            case 7: press("Werkzeug auf", SDL_GAMEPAD_BUTTON_SOUTH); break;
+            case 8: say("Mine gelegt"); tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER); break;
+            case 9: tap(SDL_GAMEPAD_BUTTON_DPAD_DOWN); break;
+            case 10: tap(SDL_GAMEPAD_BUTTON_EAST); break;
+            case 11: press("Werkzeug zu", SDL_GAMEPAD_BUTTON_LEFT_SHOULDER); break;
+            case 12: say("Karte auf"); stick(SDL_GAMEPAD_AXIS_RIGHTX, 1.0); stick(SDL_GAMEPAD_AXIS_RIGHTY, -0.8); wake = tNow + 1.0; break;
+            case 13: stick(SDL_GAMEPAD_AXIS_RIGHTX, 0); stick(SDL_GAMEPAD_AXIS_RIGHTY, 0); printf("Cursor %.0f %.0f\n", mapCursor.x, mapCursor.y); tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+            case 14: say("markiert"); wantShot = true; printf("Marke %.0f %.0f\n", markPoint.x, markPoint.y); tap(SDL_GAMEPAD_BUTTON_WEST); break;
+            case 15: say("gelöscht"); tap(SDL_GAMEPAD_BUTTON_EAST); break;
+            case 16: press("Karte zu", SDL_GAMEPAD_BUTTON_BACK); break;
+            case 17: say("Chat auf"); wantShot = true; tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+            case 18: press("Tastatur", SDL_GAMEPAD_BUTTON_SOUTH); break;
+            case 19: press("getippt", SDL_GAMEPAD_BUTTON_START); break;
+            case 20: press("gesendet", SDL_GAMEPAD_BUTTON_BACK); break;
+            case 21: tap(SDL_GAMEPAD_BUTTON_DPAD_DOWN); break;
+            case 22: press("Schnellnachricht", SDL_GAMEPAD_BUTTON_SOUTH); break;
+            case 23: {
+              // Through the tools, with a strike code on the map.
+              say("Vor Bombencode");
+              tap(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+              break;
+            }
+            case 24: {
+              for (size_t i = 0; i < items.size(); i++)
+                if (items[i].label.find("Bombencode") != std::string::npos) panelSel = int(i);
+              say("Zeile gewählt");
+              tap(SDL_GAMEPAD_BUTTON_SOUTH);
+              break;
+            }
+            case 25: say("Karte für den Code"); wantShot = true; stick(SDL_GAMEPAD_AXIS_RIGHTX, 1.0); wake = tNow + 2.5; break;
+            case 26: stick(SDL_GAMEPAD_AXIS_RIGHTX, 0); tap(SDL_GAMEPAD_BUTTON_SOUTH); break;
+            case 27: say("Code benutzt"); stage = weaponPick == WP_SNIPER ? 29 : 28; break;
+            case 28: tap(SDL_GAMEPAD_BUTTON_DPAD_RIGHT); stage = weaponPick == WP_SNIPER ? 29 : 28; break;
+            case 29: press("Scharfschütze", SDL_GAMEPAD_BUTTON_EAST); wake = tNow + 3.6; break;
+            case 30: say("liegt"); trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, true); break;
+            case 31: trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, false); say("Scope"); tap(SDL_GAMEPAD_BUTTON_DPAD_UP); break;
+            case 32: say("Visier"); SDL_SetJoystickVirtualButton(gTestPad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, true); wake = tNow + 1.0; break;
+            case 33: SDL_SetJoystickVirtualButton(gTestPad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, false); say("Zoom"); wantShot = true; trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, true); break;
+            case 34: trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER, false); tap(SDL_GAMEPAD_BUTTON_EAST); wake = tNow + 2.0; break;
+            case 35: say("wieder auf"); hold = tNow; stage = 36; break;
+            case 36: {
+              // Over to the tank by hand: the script only turns the head, the stick does the walking.
+              const V3 to = G.world.base(Duel::teamOf(slot)).slot(gPickTurret) - view.foot.p;
+              rig.yaw = std::atan2(-to.y, -to.x);
+              rig.pitch = 0.2;
+              stick(SDL_GAMEPAD_AXIS_LEFTY, -1.0);
+              wake = tNow + 0.2;
+              if (len(V3{to.x, to.y, 0}) < 4.2 || tNow - hold > 25.0) {
+                stick(SDL_GAMEPAD_AXIS_LEFTY, 0);
+                press("am Panzer", SDL_GAMEPAD_BUTTON_WEST);
+                wake = tNow + 1.0;
+              } else {
+                stage = 36;
+              }
+              break;
+            }
+            case 37: say("drin"); printf("Panzermunition %d\n", view.tankAmmo); wantShot = true; stick(SDL_GAMEPAD_AXIS_LEFTY, -1.0); stick(SDL_GAMEPAD_AXIS_LEFTX, -0.4); wake = tNow + 2.5; break;
+            case 38: say("gefahren"); stick(SDL_GAMEPAD_AXIS_LEFTY, 0); stick(SDL_GAMEPAD_AXIS_LEFTX, 0); trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, true); wake = tNow + 0.3; break;
+            case 39: trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, false); wake = tNow + 0.6; break;
+            case 40: printf("Panzermunition %d\n", view.tankAmmo); press("Kanone", SDL_GAMEPAD_BUTTON_NORTH); break;
+            case 41: press("Kamera", SDL_GAMEPAD_BUTTON_START); break;
+            case 42: say("Menü"); wantShot = true; tap(SDL_GAMEPAD_BUTTON_EAST); break;
+            case 43: say("Menü zu"); quit = true; break;
+            default: break;
+          }
+        }
       }
     }
     if (scriptMode == 60 && netState == Game::NET_IN) {
@@ -2814,7 +3210,7 @@ static void runGame() {
       G.input.weapon = weaponPick;
       G.input.scoped = scoped;
       G.input.aiming = aimBlend > 0.5;
-      G.input.fireHeld = panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK);
+      G.input.fireHeld = padFire || (panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK));
       if (sendC.requestGear != 99) c.requestGear = sendC.requestGear;
       G.input.ready = pickReady;
       for (int i = 0; i < IT_COUNT; i++) G.input.items[i] = pickItems[i];
@@ -2964,14 +3360,15 @@ static void runGame() {
 
     hud.panel.open = panelKind != 0;
     if (hud.panel.open) {
-      static const char* titles[7] = {"", "Spiel-Einstellungen", "BeanNG", "Steuerung", "Online spielen", "Ausrüstung", "Werkzeug"};
+      static const char* titles[8] = {"", "Spiel-Einstellungen", "BeanNG", "Steuerung", "Online spielen", "Ausrüstung", "Werkzeug", "Chat"};
       hud.panel.title = titles[panelKind];
       if (panelKind == PANEL_LOADOUT) {
         char b[64];
         snprintf(b, sizeof b, "Ausrüstung  ·  noch %.0f s", std::max(0.0, Duel::kChooseTime - phaseClock));
         hud.panel.title = b;
       }
-      hud.panel.foot = panelKind == PANEL_TOOLS ? "Zahl oder ENTER benutzen  ·  Q schließen" : panelKind == PANEL_ONLINE ? "Tippen  ·  Pfeile wählen  ·  ENTER weiter  ·  ESC zurück" : panelKind == PANEL_MAIN ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
+      if (padActive) hud.panel.foot = panelKind == PANEL_TOOLS ? "A benutzen  ·  B schließen" : panelKind == PANEL_CHAT ? "A senden  ·  B schließen" : panelKind == PANEL_ONLINE ? "A bearbeiten, verbinden  ·  B zurück" : panelKind == PANEL_MAIN ? "A bestätigen  ·  B zurück" : panelKind == PANEL_KEYS ? "B zurück" : panelKind == PANEL_LOADOUT ? "A mehr  ·  X weniger  ·  B Menü" : "Links, rechts ändern  ·  B zurück";
+      else hud.panel.foot = panelKind == PANEL_CHAT ? "Pfeile wählen  ·  ENTER senden  ·  ESC schließen" : panelKind == PANEL_TOOLS ? "Zahl oder ENTER benutzen  ·  Q schließen" : panelKind == PANEL_ONLINE ? "Tippen  ·  Pfeile wählen  ·  ENTER weiter  ·  ESC zurück" : panelKind == PANEL_MAIN ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
       hud.panel.sel = panelSel;
       hud.panel.rows.clear();
       hud.panel.values.clear();
@@ -2980,14 +3377,14 @@ static void runGame() {
       hud.panel.slots.clear();
       if (panelKind == PANEL_LOADOUT) {
         static const char* kAbout[IT_COUNT] = {
-            "Tretmine: liegt flach am Boden und ist nach 3 Sekunden scharf. Wer drauftritt, stirbt meist. Auch ein Fahrzeug löst sie aus. Liegt im Werkzeugmenü (Q).",
-            "Panzermine: reißt die Kette auf der Seite ab und richtet schweren Schaden an. Zu Fuß nichts zu befürchten. Liegt im Werkzeugmenü (Q).",
-            "Reparaturset: bringt ein Fahrzeug wieder zum Laufen. Dauert 6 Sekunden zu Fuß daneben, und es muss stillstehen. Liegt im Werkzeugmenü (Q).",
-            "Sturmgewehr: Dauerfeuer auf mittlere Entfernung. Schießt mit der Kleinmunition. Gegen Panzer fast wirkungslos. Taste 3.",
+            "Tretmine: liegt flach am Boden und ist nach 3 Sekunden scharf. Wer drauftritt, stirbt meist. Auch ein Fahrzeug löst sie aus. Liegt im Werkzeugmenü.",
+            "Panzermine: reißt die Kette auf der Seite ab und richtet schweren Schaden an. Zu Fuß nichts zu befürchten. Liegt im Werkzeugmenü.",
+            "Reparaturset: bringt ein Fahrzeug wieder zum Laufen. Dauert 6 Sekunden zu Fuß daneben, und es muss stillstehen. Liegt im Werkzeugmenü.",
+            "Sturmgewehr: Dauerfeuer auf mittlere Entfernung. Schießt mit der Kleinmunition. Gegen Panzer fast wirkungslos.",
             "Kleinmunition: 60 Schuss für Pistole und Sturmgewehr, zusätzlich zu den 24, die du immer hast.",
-            "Nebelgranate: eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen. Liegt im Werkzeugmenü (Q). Jeder Panzer hat außerdem 3 Ladungen im Werfer.",
+            "Nebelgranate: eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen. Liegt im Werkzeugmenü. Jeder Panzer hat außerdem 3 Ladungen im Werfer.",
             "Ghillie-Anzug: ein zottiger Blätteranzug. Wer ihn trägt, ist im Gras und liegend kaum zu erkennen. Wirkt von selbst, solange du lebst.",
-            "Tarnnetz: im stehenden Panzer über das Werkzeugmenü (Q) drübergezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.",
+            "Tarnnetz: im stehenden Panzer über das Werkzeugmenü drübergezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.",
         };
         if (panelSel >= 1 && panelSel <= IT_COUNT) hud.panel.detail = kAbout[panelSel - 1];
         else if (panelSel == 0) hud.panel.detail = "Das hast du immer dabei: Pistole mit 24 Schuss und Kampfmesser. Alles andere findest du in Kisten in Häusern und bei Wracks: Scharfschützengewehr, Raketenwerfer, Granaten und Bombencodes.";
@@ -3018,6 +3415,7 @@ static void runGame() {
       }
       if (view.foot.hitsTaken != takenSeen) {
         if (view.foot.hitsTaken > takenSeen) {
+          if (gamepad && gSet.rumble) SDL_RumbleGamepad(gamepad, 52000, 30000, 260);
           hud.hurtDir = 2.2f;
           hud.hurtFrom = view.foot.hurtFrom;
         }
@@ -3060,6 +3458,17 @@ static void runGame() {
     if (view.foot.noSight && rig.mode == CAM_HOOD) rig.mode = CAM_CHASE;
     hud.map.open = mapOpen && panelKind == 0;
     hud.map.hasMark = hasMark;
+    hud.map.padCursor = padActive;
+    hud.map.cursor = mapCursor;
+    hud.osk.open = osk.open;
+    if (osk.open) {
+      static const char* kOskTitle[4] = {"Benutzername", "Server-Adresse", "Port", "Chat"};
+      hud.osk.title = kOskTitle[osk.target];
+      hud.osk.text = osk.text;
+      hud.osk.x = osk.x;
+      hud.osk.y = osk.y;
+      for (int r = 0; r < 4; r++) hud.osk.keys[r] = kOskKeys[osk.shift ? 1 : 0][r];
+    }
     hud.map.strike = strikePending;
     hud.map.mark = markPoint;
     hud.map.hasEnemy = view.foot.hasFix;
@@ -3083,9 +3492,9 @@ static void runGame() {
       // Flying about: where one looks, as fast as one likes.
       const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
       const V3 right{-std::sin(rig.yaw), std::cos(rig.yaw), 0};
-      const double fly = keys[SDL_SCANCODE_LSHIFT] ? 80.0 : 25.0;
-      freeEye -= back * ((keys[SDL_SCANCODE_W] ? fly : 0.0) - (keys[SDL_SCANCODE_S] ? fly : 0.0)) * dt;
-      freeEye += right * ((keys[SDL_SCANCODE_D] ? fly : 0.0) - (keys[SDL_SCANCODE_A] ? fly : 0.0)) * dt;
+      const double fly = keys[SDL_SCANCODE_LSHIFT] || padSprint ? 80.0 : 25.0;
+      freeEye -= back * ((keys[SDL_SCANCODE_W] ? fly : 0.0) - (keys[SDL_SCANCODE_S] ? fly : 0.0) - padLy * fly) * dt;
+      freeEye += right * ((keys[SDL_SCANCODE_D] ? fly : 0.0) - (keys[SDL_SCANCODE_A] ? fly : 0.0) + padLx * fly) * dt;
       cam.eye = freeEye;
       cam.target = freeEye - back * 30.0;
       cam.up = {0, 0, 1};
@@ -3126,7 +3535,15 @@ static void runGame() {
     {
       // A shot gone means the ammunition went down with the same weapon in hand.
       const int ammoNow = view.foot.ammo;
+      // The tank's gun counts its own shells.
+      static int shellsSeen = -1;
+      if (gamepad && gSet.rumble && inTank && shellsSeen >= 0 && view.tankAmmo < shellsSeen) SDL_RumbleGamepad(gamepad, 65000, 22000, 320);
+      shellsSeen = inTank ? view.tankAmmo : -1;
       if (onFoot && kickWeapon == weaponPick && kickAmmo >= 0 && ammoNow == kickAmmo - 1) {
+        if (gamepad && gSet.rumble) {
+          const bool big = weaponPick == WP_SNIPER || weaponPick == WP_RPG;
+          SDL_RumbleGamepad(gamepad, big ? 60000 : 9000, big ? 42000 : 26000, big ? 300 : 70);
+        }
         if (weaponPick == WP_SNIPER) {
           gunKick = 1.0;
           rig.pitch = clampd(rig.pitch - 0.018 * (scoped ? 6.0 / scopeZoom : 1.0), -0.30, 1.2);
@@ -3381,6 +3798,16 @@ int main(int argc, char** argv) {
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
     fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
+  }
+  if (scriptMode == 61 || scriptMode == 62) {
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    desc.name = "Testcontroller";
+    gTestPad = SDL_OpenJoystick(SDL_AttachVirtualJoystick(&desc));
+    printf("Testcontroller: %s\n", gTestPad ? "da" : SDL_GetError());
   }
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
