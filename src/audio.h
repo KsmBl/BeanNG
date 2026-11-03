@@ -25,6 +25,7 @@ struct AudioFeed {
   int cylinders = 6;       // firings per two revolutions of the crank
   float exhaustPitch = 1;  // scales the exhaust's resonances: a big diesel sits far lower
   float tracks = 0;        // tank tracks running, 0..1
+  float turbo = 0;         // boost pressure, 0..1
 };
 
 enum class Sfx : uint8_t { Metal, Glass, Thump, Clunk, Boom, Gun, Crack };
@@ -94,6 +95,9 @@ class AudioSynth {
   float roadLow_[2] = {};
   double squealLfo_ = 0, gustPhase_ = 0;
   float crackle_ = 0;
+  double turboPhase_ = 0;
+  float lastTurbo_ = 0, blowoff_ = 0;
+  Svf blow_;
   Svf fireF_[2];
   float fireLow_[2] = {};
   float fireEnv_ = 0;

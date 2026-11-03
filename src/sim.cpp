@@ -275,6 +275,11 @@ static constexpr double kBlastEnd = 450.0;
 
 void Sim::explode(V3 c, double impulse, double radius) {
   blasts.push_back({c, impulse, radius, 0.0});
+  if (craterWorld) {
+    // Only what goes off close to the ground digs into it.
+    const double above = c.z - craterWorld->height(c.x, c.y);
+    if (above < 3.0) craterWorld->addCrater(c.x, c.y, radius * 0.18, radius * 0.05 * (1.0 - std::max(above, 0.0) / 3.0));
+  }
   event(EV_BLAST, c, V3{}, float(radius));
   const double r2 = radius * radius;
   // Everything in reach wakes up, and the structure right at the blast is simply torn.
@@ -713,7 +718,9 @@ void Sim::collideWorld(double dt) {
       // A rim never meets a kerb bare: the crushed tyre is still between them. Without that cushion
       // the hub takes a hammer blow, and the slightest kerb folds the wheel over.
       const double omega = (fl & NF_WHEEL) ? kContactOmega * kRimCushion : kContactOmega;
-      const double fn = m * omega * omega * std::min(c.depth, kMaxPenWorld) - 2.0 * kContactZeta * m * omega * vn;
+      // Armour hitting a wall loses its energy in the blow instead of springing back off it.
+      const double zeta = o.armoured ? 0.9 : kContactZeta;
+      const double fn = m * omega * omega * std::min(c.depth, kMaxPenWorld) - 2.0 * zeta * m * omega * vn;
       if (fn <= 0) continue;
       V3 ff;
       const double muv = double(mu[i]) * surfaceFriction(c.surface);

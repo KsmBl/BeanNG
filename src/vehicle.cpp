@@ -14,22 +14,13 @@ double fullLoadTorque(double rpm) {
       return lerpd(tbl[i - 1][1], tbl[i][1], (rpm - tbl[i - 1][0]) / (tbl[i][0] - tbl[i - 1][0]));
   return 0;
 }
-double frictionTorque(double rpm) { return 12.0 + 0.008 * rpm; }
 
 // Rotating inertias [kg m^2] and shaft rates [Nm/rad]. Plausible for this size of car, not OEM data.
-constexpr double kEngineInertia = 0.22;   // crank and flywheel
 constexpr double kDiscInertia = 0.012;    // clutch disc
 constexpr double kInputInertia = 0.016;   // input shaft, cluster and synchro hubs
 constexpr double kCarrierInertia = 0.09;  // differential carrier and final drive
 constexpr double kSpiderInertia = 0.025;  // side gears, referred to the shafts
 constexpr double kDamperRate = 1500.0, kDamperDamp = 3.0;    // clutch torsion damper
-constexpr double kShaftRate = 8000.0, kShaftDamp = 9.0;      // halfshaft
-constexpr double kSynchroTorque = 45.0;   // synchro cone at the input shaft [Nm]
-constexpr double kClutchCapacity = 430.0;
-constexpr double kIdleRpm = 800.0, kRevLimit = 6600.0;
-constexpr double kGears[] = {3.42, 1.81, 1.28, 0.97, 0.77};  // close to the ML5T box
-constexpr double kReverse = 3.58;
-constexpr double kFinal = 3.57;
 constexpr double kRpmToRad = 2.0 * PI / 60.0;
 
 // ---- Tyre: 205/60 R15 touring tyre, Magic Formula in normalised combined slip.
@@ -135,10 +126,9 @@ void Vehicle::updateStability(const Controls& in, double dt) {
   const double v = std::max(dot(vCog, fwd), 0.0);
   if (tune.esp && v > 5.0 && !dmg.hydraulics) {
     // What the driver asks for: a yaw rate from steering and speed, as far as the tyres can deliver.
-    constexpr double kLockAngle = 0.60, kWheelbase = 2.74, kUndersteer = 0.0022;
-    const double delta = steerAct * tune.steer * kLockAngle;
-    const double limit = 0.9 * 9.81 / v;
-    const double wanted = clampd(v * delta / (kWheelbase * (1.0 + kUndersteer * v * v)), -limit, limit);
+        const double delta = steerAct * tune.steer * spec.lockAngle;
+    const double limit = 0.9 * spec.tyreMu * 9.81 / v;
+    const double wanted = clampd(v * delta / (spec.wheelbase * (1.0 + spec.understeer * v * v)), -limit, limit);
     const double err = yawRate_ - wanted;
     const double slip = std::asin(clampd(dot(norm(vCog), left), -1, 1));
     // The tail is coming round when the car turns further than asked, or slides well past the line.
@@ -199,7 +189,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
 
   // A flat tyre does not shrink: the carcass collapses between rim and road and the car comes down
   // onto it, so it still carries load, only on a much softer and lower cushion.
-  const double Rflat = lerpd(w.R, 0.232, w.deflate);
+  const double Rflat = lerpd(w.R, spec.rimRadius, w.deflate);
   const double kRad = lerpd(w.kRadial, w.kRadial * 0.12, w.deflate);
   // A dented rim is out of round. The dent rolls past the road once per revolution, and the car feels it.
   double Rnow = Rflat;
@@ -321,7 +311,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
       const double s = std::sqrt(sx * sx + sy * sy);
 
       const double loadSens = 1.0 - 0.08 * (Fz / kFz0 - 1.0);
-      double muS = 1.02 * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf);
+      double muS = spec.tyreMu * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf);
       if (w.deflate > 0.5) muS *= 0.45;
       const double Ftot = muS * Fz * magic(s);
       double Fx = 0, Fy = 0;
@@ -399,10 +389,10 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
     if (!w.front) {
       // Citroen brake bias: rear pressure follows rear suspension pressure, i.e. rear load.
       const double loadRatio = clampd(axle[1].s[w.left ? 0 : 1].pGas / 100e5, 0.3, 1.3);
-      pedal *= loadRatio;
+      if (!spec.conventional) pedal *= loadRatio;
     }
     // Brakes are powered by the same HP circuit: lost accumulator pressure weakens them.
-    pedal *= clampd(accumulator / 80e5, 0.15, 1.0);
+    if (!spec.conventional) pedal *= clampd(accumulator / 80e5, 0.15, 1.0);
     Tb = pedal;
 
     // ABS, active above walking pace.
@@ -631,7 +621,7 @@ void Vehicle::drawAccumulator(double volume, bool returnsToTank) {
 void Vehicle::settleFluid(Sim& sim) {
   // Preset the sphere volumes for the static load so the first frame already sits near height.
   for (int ax = 0; ax < 2; ax++) {
-    const double corner = (ax == 0 ? 0.58 : 0.42) * totalMass * 9.81 * 0.5 - 380.0;
+    const double corner = (ax == 0 ? spec.frontShare : 1.0 - spec.frontShare) * totalMass * 9.81 * 0.5 - 380.0;
     for (int side = 0; side < 2; side++) {
       HydroStrut& s = axle[ax].s[side];
       const double p = corner / s.A;
@@ -673,7 +663,7 @@ void Vehicle::presetRolling(double v, int gearIndex) {
   }
   carrierOmega = wheelOmega;
   spiderOmega = 0;
-  const double r = gear == 0 ? 0.0 : (gear > 0 ? kGears[gear - 1] : -kReverse) * kFinal;
+  const double r = gear == 0 ? 0.0 : (gear > 0 ? spec.gears[gear - 1] : -spec.reverse) * spec.finalDrive;
   inputOmega = r * carrierOmega;
   discOmega = inputOmega;
   engineOmega = std::max(90.0, inputOmega);
@@ -694,7 +684,7 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
       starterClock = 1.2;
   }
 
-  auto ratioOf = [](int g) { return g == 0 ? 0.0 : (g > 0 ? kGears[g - 1] : -kReverse) * kFinal; };
+  auto ratioOf = [this](int g) { return g == 0 ? 0.0 : (g > 0 ? spec.gears[g - 1] : -spec.reverse) * spec.finalDrive; };
 
   // ---- Gear selection. A shift is a sequence of physical steps: open the clutch, pull the box into
   // neutral, let the synchro bring the input shaft to the new speed, engage, close the clutch. How
@@ -712,9 +702,9 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   if (in.shiftDown) request(std::max(-1, shiftTarget - 1));
   if (autoBox && shiftPhase == 0 && sinceShift > 0.9 && gear >= 1) {
     const double r = std::fabs(inputOmega) / kRpmToRad;
-    if (r > lerpd(2300, 6150, throttleAct) && gear < 5)
+    if (r > lerpd(spec.upshiftLow, spec.upshiftHigh, throttleAct) && gear < spec.nGears)
       request(gear + 1);
-    else if (r < lerpd(1250, 3400, throttleAct) && gear > 1)
+    else if (r < lerpd(spec.downshiftLow, spec.downshiftHigh, throttleAct) && gear > 1)
       request(gear - 1);
   }
   double syncTorque = 0;
@@ -737,7 +727,7 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
       shiftPhase = 0;
       clutchRamp_ = 0;
     } else {
-      syncTorque = clampd(slip * kInputInertia / dt, -kSynchroTorque, kSynchroTorque);
+      syncTorque = clampd(slip * kInputInertia / dt, -spec.synchroTorque, spec.synchroTorque);
     }
   }
   if (dmg.gearbox) gear = 0;
@@ -756,8 +746,8 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
     th = shiftPhase == 2 && wanted > engineOmega + 15.0 ? 0.45 : 0.0;
   }
   if (ignition) {
-    if (rpmNow < kIdleRpm + 100) th = std::max(th, clampd((kIdleRpm + 100 - rpmNow) / 250.0, 0, 0.55));
-    if (rpmNow > kRevLimit) th = 0;
+    if (rpmNow < spec.idleRpm + 100) th = std::max(th, clampd((spec.idleRpm + 100 - rpmNow) / 250.0, 0, 0.55));
+    if (rpmNow > spec.revLimit) th = 0;
     if (dmg.coolantTemp > 118.0) th *= clampd(1.0 - (dmg.coolantTemp - 118.0) / 15.0, 0.2, 1.0);
   } else {
     th = 0;
@@ -770,8 +760,23 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   // Six firing strokes per two revolutions: three torque pulses per crank revolution. This pulsation
   // is what shakes the block on its mounts at idle.
   crankAngle = std::fmod(crankAngle + engineOmega * dt, 2.0 * PI);
-  const double fric = frictionTorque(rpmNow) * (oilLevel < 0.2 ? 2.5 : 1.0);
-  double comb = ignition ? load * (fullLoadTorque(rpmNow) + fric) : 0.0;
+  const double fric = (spec.frictionBase + spec.frictionPerRpm * rpmNow) * (oilLevel < 0.2 ? 2.5 : 1.0);
+  double fullTorque = fullLoadTorque(rpmNow);
+  if (spec.torque) {
+    fullTorque = 0;
+    for (int i = 1; i < spec.torquePoints; i++)
+      if (rpmNow < spec.torque[i][0]) {
+        fullTorque = lerpd(spec.torque[i - 1][1], spec.torque[i][1], (rpmNow - spec.torque[i - 1][0]) / (spec.torque[i][0] - spec.torque[i - 1][0]));
+        break;
+      }
+  }
+  if (spec.turbo) {
+    // The turbos need exhaust flow first: below that it is a 5-litre V8, and then the shove arrives.
+    const double wantBoost = load * clampd((rpmNow - 2200.0) / 2000.0, 0.0, 1.0);
+    boost += (wantBoost - boost) * clampd(dt / (wantBoost > boost ? 0.45 : 0.12), 0, 1);
+    fullTorque *= 0.42 + 0.58 * boost;
+  }
+  double comb = ignition ? load * (fullTorque + fric) : 0.0;
   comb *= 1.0 + 0.25 * std::cos(3.0 * crankAngle);
   combustionTorque = comb;
   double Te = comb - fric - 2.0 - pumpTorque;
@@ -798,6 +803,8 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
       e = 1;
     else
       e = throttleAct > 0.03 ? smoothstepd(1000.0, 2100.0, rpmNow) : 0.0;
+    // Launch control: the clutch keeps slipping until the turbos have something to work with.
+    if (spec.turbo && gear == 1 && throttleAct > 0.3 && rIn < 3600.0) e = std::min(e, smoothstepd(3000.0, 4300.0, rpmNow));
     clutch = e * clutchRamp_;
   }
 
@@ -805,12 +812,12 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   const double Td = kDamperRate * dampAngle + kDamperDamp * (discOmega - inputOmega);
 
   // Friction at the clutch, as an exact stick-slip limit between flywheel and disc.
-  const double wePred = engineOmega + Te * dt / kEngineInertia;
+  const double wePred = engineOmega + Te * dt / spec.engineInertia;
   const double wdPred = discOmega - Td * dt / kDiscInertia;
-  const double need = (wePred - wdPred) / (dt * (1.0 / kEngineInertia + 1.0 / kDiscInertia));
-  const double cap = kClutchCapacity * clutch;
+  const double need = (wePred - wdPred) / (dt * (1.0 / spec.engineInertia + 1.0 / kDiscInertia));
+  const double cap = spec.clutchCapacity * clutch;
   const double Tc = clampd(need, -cap, cap);
-  engineOmega = std::max(0.0, engineOmega + (Te - Tc) * dt / kEngineInertia);
+  engineOmega = std::max(0.0, engineOmega + (Te - Tc) * dt / spec.engineInertia);
   discOmega += (Tc - Td) * dt / kDiscInertia;
   if (engineRunning && engineOmega < 380.0 * kRpmToRad) {
     engineRunning = false;
@@ -827,11 +834,11 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   double TL = 0, TR = 0;
   if (wL && wL->attached) {
     shaftAngle[0] += (wsL - wL->omega) * dt;
-    TL = kShaftRate * shaftAngle[0] + kShaftDamp * (wsL - wL->omega);
+    TL = spec.shaftRate * shaftAngle[0] + spec.shaftDamp * (wsL - wL->omega);
   }
   if (wR && wR->attached) {
     shaftAngle[1] += (wsR - wR->omega) * dt;
-    TR = kShaftRate * shaftAngle[1] + kShaftDamp * (wsR - wR->omega);
+    TR = spec.shaftRate * shaftAngle[1] + spec.shaftDamp * (wsR - wR->omega);
   }
   if (wL) wL->driveT = TL;
   if (wR) wR->driveT = TR;
@@ -839,7 +846,7 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   // A shaft shears when overloaded, typically with a locked wheel and a dropped clutch.
   for (int i = 0; i < 2; i++) {
     Wheel* w = i == 0 ? wL : wR;
-    if (w && w->attached && std::fabs(i == 0 ? TL : TR) > 6500.0) {
+    if (w && w->attached && std::fabs(i == 0 ? TL : TR) > spec.shaftShear) {
       w->attached = false;
       note("ANTRIEBSWELLE ABGESCHERT");
     }
@@ -1164,7 +1171,10 @@ void Vehicle::update(Sim& sim, const Controls& in, double dt) {
     const V3 Fa = vCog * (-0.5 * kAirDensity * dragArea * std::sqrt(v2));
     const double perKg = 1.0 / totalMass;
     const Obj& o = sim.objs[obj];
-    for (u32 i : o.nodes) sim.force[i] += Fa * (sim.mass[i] * perKg);
+    // Wing and diffuser press down in proportion to the speed along the car, shared evenly.
+    const double vFwd = dot(vCog, fwd);
+    const V3 Fd = up * (-0.5 * kAirDensity * spec.downforceCla * vFwd * vFwd);
+    for (u32 i : o.nodes) sim.force[i] += (Fa + Fd) * (sim.mass[i] * perKg);
   }
 
   updateDrivetrain(sim, in, dt);

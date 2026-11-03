@@ -1470,6 +1470,119 @@ int main(int argc, char** argv) {
     printf("  hull after 5 s: bottom z %.3f, turret off target %.3f m, nodes sane %d\n", s->pos[t.refBottom].z, len(s->pos[t.turretNodes[0]] - s->pos[t.refFL]), std::isfinite(s->pos[t.turretNodes[0]].x));
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "one1run")) {
+    for (int tcs = 1; tcs >= 0; tcs--) {
+      auto* w = new World();
+      auto* s = new Sim();
+      CarRig r;
+      w->build();
+      w->clearBoxes();
+      w->flatten();
+      w->pave();
+      s->world = w;
+      Vehicle c0 = buildOne1(*s, {-400, 0, 0}, &r);
+      s->finalize();
+      settleVehicle(*s, c0, 4.0);
+      c0.tune.tcs = tcs;
+      c0.tune.esp = tcs;
+      Controls c;
+      c.throttle = 1;
+      printf("TCS+ESP %d\n", tcs);
+      for (int i = 0; i < 2000 * 8; i++) {
+        s->forces(kDt);
+        c0.update(*s, c, kDt);
+        s->finish(kDt);
+        if (i % 800 == 799)
+          printf(" t %.1f v %5.1f gear %d phase %d rpm %5.0f th %.2f boost %.2f T %5.0f | RL om*R %5.1f RR %5.1f Fz %5.0f %5.0f FL %5.0f | head %+.2f y %+.2f roll %+.1f tcs %d esp %d\n", (i + 1) * kDt, c0.speed * 3.6, c0.gear, c0.shiftPhase, c0.rpm(), c0.throttleAct, c0.boost, c0.combustionTorque, c0.wheels[2].omega * c0.wheels[2].R, c0.wheels[3].omega * c0.wheels[3].R, c0.wheels[2].Fz, c0.wheels[3].Fz, c0.wheels[0].Fz, std::atan2(c0.fwd.y, c0.fwd.x) * 57.3, c0.cog.y, c0.rollAngle * 57.3, c0.tcsActive, c0.espActive);
+      }
+    }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "one1")) {
+    printf("== Koenigsegg One:1 ==\n");
+    auto make = [](V3 at, bool flat) {
+      struct B {
+        World w;
+        Sim s;
+        Vehicle c;
+        CarRig r;
+      };
+      B* b = new B();
+      b->w.build();
+      if (flat) {
+        b->w.clearBoxes();
+        b->w.flatten();
+        b->w.pave();
+      }
+      b->s.world = &b->w;
+      b->c = buildOne1(b->s, at, &b->r);
+      b->s.finalize();
+      settleVehicle(b->s, b->c, 4.0);
+      return b;
+    };
+    auto* B = make({-400, 0, 0}, true);
+    auto step = [&](auto* x, double sec, auto fn) {
+      Controls c;
+      for (int i = 0, n = int(sec / kDt); i < n; i++) {
+        fn(i * kDt, c);
+        x->s.forces(kDt);
+        x->c.update(x->s, c, kDt);
+        x->s.finish(kDt);
+        c.fire = false;
+        c.requestGear = 99;
+      }
+      x->s.events.clear();
+    };
+    double low = 9;
+    for (u32 i = 0; i < B->s.objs[0].nodeCount; i++) low = std::min(low, B->s.pos[i].z);
+    printf("  mass %.0f kg  eigen ratio %.2f  lowest node z %.3f  Fz F %.0f R %.0f  plastic %.1f J  broken %u  guard %llu\n", B->c.totalMass, B->s.maxEigenvalue(0) * 0.25 * kDt * kDt, low, B->c.wheels[0].Fz, B->c.wheels[2].Fz, B->s.plasticEnergy, B->s.brokenBeams, (unsigned long long)B->s.clampedSteps);
+    double t100 = -1, t200 = -1, t300 = -1, tNow = 0, vmax = 0;
+    step(B, 40.0, [&](double, Controls& c) {
+      c.throttle = 1;
+      tNow += kDt;
+      const double k = B->c.speed * 3.6;
+      vmax = std::max(vmax, k);
+      if (t100 < 0 && k > 100) t100 = tNow;
+      if (t200 < 0 && k > 200) t200 = tNow;
+      if (t300 < 0 && k > 300) t300 = tNow;
+    });
+    printf("  0-100 %.2f s (real 2.8), 0-200 %.2f s, 0-300 %.2f s (real ~11.9), v after 40 s %.0f km/h, gear %d rpm %.0f, y drift %.1f, guard %llu\n", t100, t200, t300, vmax, B->c.gear, B->c.rpm(), B->c.cog.y, (unsigned long long)B->s.clampedSteps);
+    {
+      auto* C = make({-150, 0, 0}, true);
+      C->c.presetRolling(100 / 3.6, 3);
+      const Obj& o = C->s.objs[0];
+      for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) C->s.vel[i] = V3{100 / 3.6, 0, 0};
+      const V3 p0 = C->c.cog;
+      step(C, 5.0, [&](double, Controls& c) { c.brake = 1; });
+      printf("  100-0 %.1f m (real about 28 m), v %.1f\n", len(C->c.cog - p0), C->c.speed * 3.6);
+    }
+    {
+      auto* C = make({-150, 0, 0}, true);
+      for (const double steer : {0.10}) {
+        const double vT = 22.0;
+        C->c.presetRolling(vT, 2);
+        const Obj& o = C->s.objs[0];
+        for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) C->s.vel[i] = V3{vT, 0, 0};
+        double lat = 0, rollMax = 0;
+        step(C, 4.0, [&](double t, Controls& c) {
+          c.steer = std::min(t / 1.0, 1.0) * steer * 2.6;
+          c.throttle = clampd((vT - C->c.speed) * 0.5, 0, 1);
+          lat = std::max(lat, std::fabs(C->c.latAcc));
+          rollMax = std::max(rollMax, std::fabs(C->c.rollAngle));
+        });
+        printf("  cornering at 80 km/h: peak lat %.2f g, roll %.2f deg, end v %.0f km/h\n", lat / 9.81, rollMax * 57.3, C->c.speed * 3.6);
+      }
+    }
+    for (double kmh : {50.0, 100.0}) {
+      auto* C = make({85, -30, 0}, false);
+      const Obj o = C->s.objs[0];
+      for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) C->s.vel[i] = V3{kmh / 3.6, 0, 0};
+      C->c.presetRolling(kmh / 3.6, 2);
+      step(C, 3.0, [&](double, Controls&) {});
+      printf("  wall at %3.0f km/h: plastic %.0f kJ, broken %u, pieces %zu, cabin %.3f m (was %.3f), guard %llu, sane %d\n", kmh, C->s.plasticEnergy / 1e3, C->s.brokenBeams, C->s.objs.size(), len(C->s.pos[C->c.refFrontL] - C->s.pos[C->c.refRearL]), len(C->s.rest[C->c.refFrontL] - C->s.rest[C->c.refRearL]), (unsigned long long)C->s.clampedSteps, std::isfinite(C->c.cog.x));
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "tankcrash")) {
     // Into the end wall at full speed: how wildly do the track's points jump between frames?
     auto* w = new World();

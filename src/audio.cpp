@@ -172,6 +172,7 @@ void AudioSynth::render(float* out, int frames) {
     now_.master += (tgt.master - now_.master) * k * 0.5f;
     now_.fire += (tgt.fire - now_.fire) * k * 0.1f;
     now_.tracks += (tgt.tracks - now_.tracks) * k * 0.3f;
+    now_.turbo += (tgt.turbo - now_.turbo) * k * 0.5f;
     now_.exhaustPitch = tgt.exhaustPitch;
     now_.cylinders = tgt.cylinders;
     now_.engineOn = tgt.engineOn;
@@ -251,6 +252,19 @@ void AudioSynth::render(float* out, int frames) {
       const float st = (float(starterPhase_) * 2.f - 1.f) * 0.05f;
       L += st;
       R += st;
+    }
+
+    // ---- Turbos: a whistle climbing with boost, and the sigh of the bypass valves when you lift off.
+    if (now_.turbo > 0.01f || blowoff_ > 0.001f) {
+      turboPhase_ += double(900.f + 3400.f * now_.turbo) / double(kRateF);
+      turboPhase_ -= std::floor(turboPhase_);
+      const float wh = std::sin(2.f * kPi * float(turboPhase_)) * 0.028f * now_.turbo * now_.turbo;
+      if (lastTurbo_ - now_.turbo > 0.0008f && now_.turbo > 0.2f) blowoff_ = std::min(1.f, blowoff_ + 0.012f);
+      lastTurbo_ = now_.turbo;
+      blowoff_ *= 0.99985f;
+      const float sigh = blow_.bandpass(n1 * blowoff_, fc(2200.f), 0.6f) * 0.5f;
+      L += wh + sigh;
+      R += wh + sigh;
     }
 
     // ---- Air and road. These are what really tell you how fast you are going.

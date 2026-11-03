@@ -5,6 +5,8 @@ Fahrzeug: Citroën Xantia Activa (3.0 V6).
 
 ## Fahrzeuge
 
+Drei Fahrzeuge stehen zur Wahl: Citroën Xantia Activa, Leopard 1 und Koenigsegg One:1.
+
 Das Spiel startet im Hauptmenü, **ESC** öffnet es jederzeit wieder. Dort findest du Fahrzeugwahl,
 Fahrzeug-Einstellungen, Spiel-Einstellungen und die Tastenbelegung. Direkt erreichst du die Fahrzeugwahl
 mit **TAB** und die Fahrzeug-Einstellungen mit **O**.
@@ -15,9 +17,9 @@ gerade wirklich zeigt und wie weit das Nachladen ist.
 
 Spiel-Einstellungen bleiben in `settings.cfg` gespeichert.
 
-`tools/gen_xantia.py`, `tools/gen_leopard.py` und `tools/gen_ui.py` erzeugen die Modelle und die
+`tools/gen_xantia.py`, `tools/gen_leopard.py`, `tools/gen_one1.py` und `tools/gen_ui.py` erzeugen die Modelle und die
 Schrift unter `assets/`. Das macht `./run.sh` von selbst (braucht numpy, scipy, shapely und Pillow).
-Testläufe: `beanng-test buckle`, `tree`, `bomb`, `tank`, `esp`.
+Testläufe: `beanng-test buckle`, `tree`, `bomb`, `tank`, `tankcrash`, `one1`, `esp`.
 
 ## Bauen und starten
 

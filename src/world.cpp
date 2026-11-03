@@ -119,6 +119,43 @@ void World::flatten() {
   std::fill(h_.begin(), h_.end(), 0.f);
 }
 
+void World::addCrater(double x, double y, double r, double depth) {
+  if (h0_.empty()) {
+    h0_ = h_;
+    surf0_ = surf_;
+  }
+  craters_.push_back({x, y, r});
+  const double reach = r * 1.5;
+  const int x0 = std::clamp(int(x + kHalf - reach), 0, N - 1), x1 = std::clamp(int(x + kHalf + reach) + 1, 0, N - 1);
+  const int y0 = std::clamp(int(y + kHalf - reach), 0, N - 1), y1 = std::clamp(int(y + kHalf + reach) + 1, 0, N - 1);
+  for (int iy = y0; iy <= y1; iy++)
+    for (int ix = x0; ix <= x1; ix++) {
+      const double d = std::hypot(ix - kHalf - x, iy - kHalf - y) / r;
+      if (d >= 1.5) continue;
+      const size_t id = size_t(iy) * N + ix;
+      // A bowl, and the dug-out earth thrown up in a low ring around it.
+      double dz = 0;
+      if (d < 1.0) {
+        const double k = 1.0 - d * d;
+        dz = -depth * k * k;
+      }
+      const double ring = (d - 1.02) / 0.34;
+      dz += 0.16 * depth * std::exp(-ring * ring);
+      // Repeated hits deepen it, but never dig through the bottom of the world.
+      h_[id] = std::max(float(h_[id] + dz), float(h0_[id] - 3.0));
+      if (d < 1.1) surf_[id] = SURF_GRAVEL;
+    }
+}
+
+void World::clearCraters() {
+  if (h0_.empty()) return;
+  h_ = h0_;
+  surf_ = surf0_;
+  craters_.clear();
+}
+
+void World::pave() { std::fill(surf_.begin(), surf_.end(), u8(SURF_ASPHALT)); }
+
 void World::clearBoxes() {
   boxes_.clear();
   for (auto& c : boxGrid_) c.clear();

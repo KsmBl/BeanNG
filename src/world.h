@@ -56,8 +56,18 @@ class World {
   bool contact(V3 p, Contact& out) const;
   u8 surfaceAt(double x, double y) const;
 
+  // A hole blown into the ground: the height field itself changes, so wheels drop into it. Called from
+  // the physics thread, between steps; everyone else only ever reads single floats of it.
+  struct Crater {
+    double x, y, r;
+  };
+  void addCrater(double x, double y, double r, double depth);
+  void clearCraters();
+  const std::vector<Crater>& craters() const { return craters_; }
+
   void clearBoxes();  // for the test bench: an empty, obstacle-free pad
   void flatten();     // for the test bench: a level plane for top speed runs
+  void pave();        // for the test bench: tarmac everywhere
 
   // Renderer access.
   double gridHeight(int ix, int iy) const { return h_[size_t(iy) * N + ix]; }
@@ -72,6 +82,9 @@ class World {
   std::vector<StaticBox> boxes_;
   std::vector<Road> roads_;
   std::vector<V3> trees_;
+  std::vector<Crater> craters_;
+  std::vector<float> h0_;
+  std::vector<u8> surf0_;
   static constexpr double kBoxCell = 8.0;
   static constexpr int kBoxGrid = 128;
   std::vector<std::vector<u16>> boxGrid_;

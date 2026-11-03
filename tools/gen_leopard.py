@@ -14,7 +14,7 @@ from scipy.spatial import ConvexHull
 
 MATS = ["paint", "glass", "black", "liner", "chrome", "lens", "tail", "amber", "rubber", "alloy",
         "fabric", "carpet", "plate", "metal", "alu", "lhm", "dark", "disc", "white", "reflector", "rust",
-        "olive", "olive2", "track"]
+        "olive", "olive2", "track", "pearl", "carbon", "accent"]
 M = {n: i for i, n in enumerate(MATS)}
 parts = []
 

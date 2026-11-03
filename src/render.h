@@ -62,6 +62,9 @@ struct Snapshot {
   double turretYaw = 0, gunPitch = 0, reload = 0, reloadTime = 4;
   V3 muzzle, gunDir{1, 0, 0}, sight;
   bool absOn = true, espOn = true, tcsOn = true, absActive = false, espActive = false, tcsActive = false;
+  std::vector<World::Crater> craters;
+  bool conventional = false;  // a car without Citroen hydraulics
+  double boost = 0;
   double scorch = 0;  // the car has burnt out, 0..1
   // For the sound.
   double engineLoad = 0, inputRpm = 0, clutchSlip = 0;

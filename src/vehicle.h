@@ -25,6 +25,27 @@ struct Controls {
   V3 aimPoint;           // where the turret should point, world space
 };
 
+// What makes one car's powertrain and tyres different from another's. Defaults: the Xantia.
+struct PowerSpec {
+  const double (*torque)[2] = nullptr;  // {rpm, N m}; nullptr is the Xantia's V6
+  int torquePoints = 0;
+  double frictionBase = 12.0, frictionPerRpm = 0.008;
+  double idleRpm = 800.0, revLimit = 6600.0;
+  int nGears = 5;
+  double gears[8] = {3.42, 1.81, 1.28, 0.97, 0.77};
+  double reverse = 3.58, finalDrive = 3.57;
+  double engineInertia = 0.22, clutchCapacity = 430.0, synchroTorque = 45.0;
+  double shaftRate = 8000.0, shaftDamp = 9.0, shaftShear = 6500.0;
+  double upshiftLow = 2300.0, upshiftHigh = 6150.0, downshiftLow = 1250.0, downshiftHigh = 3400.0;
+  double tyreMu = 1.02, rimRadius = 0.232;
+  bool conventional = false;  // no Citroen hydraulics to speak of: plain dampers, plain brakes
+  bool turbo = false;
+  double frontShare = 0.58;
+  double lockAngle = 0.60, wheelbase = 2.74, understeer = 0.0022;
+  double downforceCla = 0;    // lift coefficient times area, downwards
+  double rpmMax = 7000, rpmRed = 6100;
+};
+
 // Everything the driver can set in the overlay.
 struct Tuning {
   bool abs = true, esp = true, tcs = true;
@@ -165,6 +186,8 @@ class Vehicle {
   double throttleAct = 0;
   double brakeAct = 0;
 
+  PowerSpec spec;
+  double boost = 0;  // turbo pressure, 0..1
   Tuning tune;
   bool absActive = false, espActive = false, tcsActive = false;
   void update(Sim& sim, const Controls& in, double dt);
@@ -216,6 +239,7 @@ struct VisLink {
 
 struct CarRig {
   double noseX = 2.26;     // design frame origin ahead of the spawn point
+  float tyreBead = 0.195f, tyreWall = 0.117f, tyreHalfWidth = 0.1025f, rearWidth = 1.0f;
   bool carWheels = true;   // draw road wheels from the mesh's wheel parts
   bool scratches = true;
   std::vector<NodeGroup> groups;
@@ -225,6 +249,7 @@ struct CarRig {
 
 // Spawns a Citroen Xantia Activa into the sim at the given position and yaw.
 Vehicle buildXantia(Sim& sim, V3 pos, double yaw, CarRig* rig);
+Vehicle buildOne1(Sim& sim, V3 pos, CarRig* rig);
 
 // Runs the car for a moment so it rests at its equilibrium ride height.
 void settleVehicle(Sim& sim, Vehicle& v, double seconds);

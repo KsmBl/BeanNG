@@ -130,6 +130,9 @@ uniform sampler2DArray uScratchTex;
 uniform sampler2D uDetailTex;
 uniform float uDetail;
 uniform float uScorch;
+uniform int uCraterCount;
+uniform vec3 uCraters[24];   // x, y, radius
+uniform float uRoadCut;
 layout(location=0) out vec4 frag;
 layout(location=1) out vec2 velOut;
 vec3 sky(vec3 d){
@@ -204,6 +207,17 @@ void main(){
       albedo = mix(albedo, bare, g);
       gloss *= 1.0 - g;
       flash = 0.25*steel*g;
+    }
+  }
+  if(uDetail > 0.0 && uCraterCount > 0){
+    // What a blast leaves: broken-up road around the hole, and burnt ground further out.
+    float rough = texture(uDetailTex, vPos.xy/1.7).r;
+    for(int i = 0; i < uCraterCount; i++){
+      float dc = length(vPos.xy - uCraters[i].xy), rc = uCraters[i].z;
+      if(dc > rc*2.4) continue;
+      if(uRoadCut > 0.5 && N.z > 0.6 && dc < rc*(0.82 + 0.5*rough)) discard;
+      float burn = 1.0 - smoothstep(rc*0.55, rc*(1.4 + 1.2*rough), dc);
+      albedo = mix(albedo, vec3(0.018, 0.015, 0.012) + 0.06*vec3(0.5, 0.36, 0.2)*rough, burn*0.92);
     }
   }
   if(uDetail > 0.0 && N.z > 0.5){
@@ -316,6 +330,9 @@ uniform vec2 uRunout;
 uniform vec3 uPlaneN;     // towards the road, wheel frame
 uniform float uPlaneD;    // hub to road
 uniform float uDeflate;
+uniform float uBead;
+uniform float uWall;
+uniform float uHalfW;
 uniform vec2 uPrevSpin;
 uniform mat4 uPrevVP;
 uniform mat4 uPrevWorld;
@@ -338,11 +355,11 @@ void main(){
     float r2 = r - dent*rimF;
     if(uMode == 2){
       // The carcass above the bead: a flat tyre loses its height and its shape.
-      float bead = 0.195;
+      float bead = uBead;
       float wall = max(r - bead, 0.0);
       float wrinkle = uDeflate * 0.005 * sin(phi*11.0 + p.y*40.0);
       r2 = (bead - dent) + wall*(1.0 - 0.34*uDeflate) + wrinkle;
-      float edge = clamp(wall/0.117, 0.0, 1.0);
+      float edge = clamp(wall/uWall, 0.0, 1.0);
       p.y *= 1.0 + uDeflate*0.10*sin(edge*PI);
     }
     if(r > 1e-4) p.xz *= r2/r;
@@ -359,7 +376,7 @@ void main(){
     float band = 0.05 + 0.05*uDeflate;
     float t = clamp((h - (uPlaneD - band))/band, 0.0, 1.0);
     float bulge = t*t*(0.005 + 0.035*uDeflate);
-    p.y += sign(p.y) * bulge * (1.0 - 0.5*abs(p.y)/0.1025);
+    p.y += sign(p.y) * bulge * (1.0 - 0.5*abs(p.y)/uHalfW);
     if(h > uPlaneD){
       p -= uPlaneN*(h - uPlaneD);
       n = normalize(mix(n, -uPlaneN, 0.85));
@@ -489,6 +506,9 @@ const MatDef kMats[MM_COUNT] = {
     {0.135f, 0.17f, 0.075f, 0.12f},  // NATO olive
     {0.105f, 0.135f, 0.06f, 0.08f},  // darker fittings, weathered
     {0.055f, 0.052f, 0.048f, 0.25f}, // track steel and rubber
+    {0.70f, 0.71f, 0.72f, 0.72f},    // pearl white
+    {0.030f, 0.031f, 0.034f, 0.60f}, // exposed carbon, lacquered
+    {0.92f, 0.30f, 0.03f, 0.55f},    // orange accents
 };
 
 void propColor(u8 c, float& r, float& g, float& b, float& gloss) {
@@ -528,6 +548,7 @@ struct Renderer::Impl {
     GLuint vao = 0, vbo = 0, ibo = 0;
     GLsizei count = 0;
     V3 center;
+    int cx = 0, cy = 0, lod = 0;
   };
   std::vector<Chunk> chunks[2];  // near/far LOD
   GLuint staticVao = 0, staticVbo = 0;
@@ -737,7 +758,7 @@ struct Renderer::Impl {
     for (const MeshPart& p : M.parts) {
       if (!p.bound) continue;
       // Only the outer skin takes scratches. Glass, lenses and everything inside stay as they are.
-      const bool skin = p.mat == MM_PAINT || p.mat == MM_BLACK || p.mat == MM_DARK || p.mat == MM_CHROME;
+      const bool skin = p.mat == MM_PAINT || p.mat == MM_BLACK || p.mat == MM_DARK || p.mat == MM_CHROME || p.mat == MM_PEARL || p.mat == MM_CARBON || p.mat == MM_ACCENT;
       const bool outer = p.group != "frame" && p.group != "engine" && p.group != "gearbox" && p.group != "radiator" && p.group != "battery" && p.group != "tank";
       if (!skin || !outer) continue;
       for (u32 v = p.firstVert; v < p.firstVert + p.vertCount; v++) {
@@ -1006,10 +1027,25 @@ struct Renderer::Impl {
   void buildTerrain() {
     constexpr int kChunk = 64;
     const int N = World::N;
-    for (int lod = 0; lod < 2; lod++) {
-      const int step = lod == 0 ? 1 : 4;
+    for (int lod = 0; lod < 2; lod++)
       for (int cy = 0; cy + kChunk < N; cy += kChunk)
         for (int cx = 0; cx + kChunk < N; cx += kChunk) {
+          Chunk ch;
+          ch.lod = lod;
+          ch.cx = cx;
+          ch.cy = cy;
+          buildChunk(ch);
+          chunks[lod].push_back(ch);
+        }
+  }
+  void buildChunk(Chunk& ch) {
+    constexpr int kChunk = 64;
+    const int N = World::N;
+    const int lod = ch.lod, cx = ch.cx, cy = ch.cy;
+    const int step = lod == 0 ? 1 : 4;
+    {
+      {
+        {
           std::vector<Vtx> v;
           std::vector<u32> idx;
           const int n = kChunk / step + 1;
@@ -1057,21 +1093,48 @@ struct Renderer::Impl {
             skirt(0, 0, 0, 1);
             skirt(n - 1, 0, 0, 1);
           }
-          Chunk ch;
           ch.count = GLsizei(idx.size());
           ch.center = {cx + kChunk * 0.5 - World::kHalf, cy + kChunk * 0.5 - World::kHalf, world->gridHeight(cx + kChunk / 2, cy + kChunk / 2)};
-          glGenVertexArrays(1, &ch.vao);
-          glGenBuffers(1, &ch.vbo);
-          glGenBuffers(1, &ch.ibo);
+          if (!ch.vao) {
+            glGenVertexArrays(1, &ch.vao);
+            glGenBuffers(1, &ch.vbo);
+            glGenBuffers(1, &ch.ibo);
+          }
           glBindVertexArray(ch.vao);
           glBindBuffer(GL_ARRAY_BUFFER, ch.vbo);
           glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(Vtx)), v.data(), GL_STATIC_DRAW);
           glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ch.ibo);
           glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(idx.size() * sizeof(u32)), idx.data(), GL_STATIC_DRAW);
           setupVtxAttribs();
-          chunks[lod].push_back(ch);
         }
+      }
     }
+  }
+  // New craters change the ground, and with it the piece of terrain they lie in.
+  size_t cratersDrawn = 0;
+  std::vector<World::Crater> cratersKnown;
+  void rebuildAround(const World::Crater& c) {
+    const double reach = c.r * 1.5 + 2.0;
+    for (auto& list : chunks)
+      for (Chunk& ch : list) {
+        const double x0 = ch.cx - World::kHalf, y0 = ch.cy - World::kHalf;
+        if (c.x + reach < x0 - 1 || c.x - reach > x0 + 65 || c.y + reach < y0 - 1 || c.y - reach > y0 + 65) continue;
+        buildChunk(ch);
+      }
+  }
+  void updateCraters(const Snapshot& s) {
+    if (s.craters.size() == cratersDrawn) return;
+    if (s.craters.size() < cratersDrawn) {
+      // The world was reset: put the ground back everywhere it was hit.
+      for (const World::Crater& c : cratersKnown) rebuildAround(c);
+      cratersKnown.clear();
+      cratersDrawn = 0;
+    }
+    for (size_t i = cratersDrawn; i < s.craters.size(); i++) {
+      rebuildAround(s.craters[i]);
+      cratersKnown.push_back(s.craters[i]);
+    }
+    cratersDrawn = s.craters.size();
   }
 
   void addQuad(std::vector<Vtx>& out, V3 a, V3 b, V3 c, V3 d, float r, float g, float bl, float gloss) {
@@ -1655,6 +1718,21 @@ struct Renderer::Impl {
             q.drag = 1.6f;
             particles.push_back(q);
           }
+          // Earth thrown out of the hole.
+          if (e.p.z - world->height(e.p.x, e.p.y) < 3.0)
+            for (int i = 0; i < 120; i++) {
+              Particle q;
+              const V3 d = norm(V3{rnd(-1, 1), rnd(-1, 1), rnd(.4f, 1.6f)});
+              q.p = e.p + V3{rnd(-1, 1), rnd(-1, 1), 0} * (R * .08);
+              q.v = d * rnd(.3f, 1.2f) * R;
+              q.maxLife = q.life = rnd(1.2f, 3.2f);
+              q.size = rnd(.05f, .22f);
+              const float g = rnd(.08f, .22f);
+              q.r = g * 1.2f; q.g = g; q.b = g * .75f; q.a = 1.f;
+              q.gravity = 9.81f;
+              q.drag = .15f;
+              particles.push_back(q);
+            }
           // Shrapnel and sparks.
           for (int i = 0; i < 130; i++) {
             Particle q;
@@ -1993,10 +2071,15 @@ struct Renderer::Impl {
         row(IC_OIL, "Öl", float((s.oilTemp - 40.0) / 150.0), s.oilTemp > 135 ? red : amber, buf);
         snprintf(buf, sizeof buf, "%.0f %%", s.oilLevel * 100.0);
         row(IC_OIL, "Ölstand", float(s.oilLevel), s.oilLevel < .35 ? red : green, buf);
-        snprintf(buf, sizeof buf, "%.0f bar", s.accum / 1e5);
-        row(IC_WRENCH, "LHM", float(s.accum / 170e5), s.accum > 90e5 ? green : red, buf);
+        if (s.conventional) {
+          snprintf(buf, sizeof buf, "%.1f bar", s.boost * 1.4);
+          row(IC_ENGINE, "Ladedruck", float(s.boost), s.boost > .85 ? amber : teal, buf);
+        } else {
+          snprintf(buf, sizeof buf, "%.0f bar", s.accum / 1e5);
+          row(IC_WRENCH, "LHM", float(s.accum / 170e5), s.accum > 90e5 ? green : red, buf);
+        }
         snprintf(buf, sizeof buf, "%.0f L", s.fuel);
-        row(IC_FUEL, "Tank", float(s.fuel / 55.0), s.fuel < 6 ? red : green, buf);
+        row(IC_FUEL, "Tank", float(s.fuel / (s.conventional ? 80.0 : 55.0)), s.fuel < 6 ? red : green, buf);
       } else {
         if (s.reload > 0) snprintf(buf, sizeof buf, "%.1f s", s.reload);
         else snprintf(buf, sizeof buf, "bereit");
@@ -2058,9 +2141,11 @@ struct Renderer::Impl {
       lamp(IC_BRAKE, "ABS", s.absOn, s.absActive);
       lamp(IC_SKID, "ESP", s.espOn, s.espActive);
       lamp(IC_TYRE, "ASR", s.tcsOn, s.tcsActive);
-      lamp(IC_WRENCH, s.soft ? "Soft" : "Firm", true, false);
-      if (s.activa) lamp(IC_SKID, "Activa", true, false);
-      if (s.sport) lamp(IC_ENGINE, "Sport", true, true);
+      if (!s.conventional) {
+        lamp(IC_WRENCH, s.soft ? "Soft" : "Firm", true, false);
+        if (s.activa) lamp(IC_SKID, "Activa", true, false);
+        if (s.sport) lamp(IC_ENGINE, "Sport", true, true);
+      }
     }
 
     // ---- Upper left: warnings, as pills with a symbol.
@@ -2246,12 +2331,23 @@ struct Renderer::Impl {
     setMat(prog, "uPrevVP", prevVP);
     setMat(prog, "uPrevWorld", carPrevWorld);
     const GLint uPrevSpin = glGetUniformLocation(prog, "uPrevSpin");
+    glUniform1f(glGetUniformLocation(prog, "uBead"), rig->tyreBead);
+    glUniform1f(glGetUniformLocation(prog, "uWall"), rig->tyreWall);
+    glUniform1f(glGetUniformLocation(prog, "uHalfW"), rig->tyreHalfWidth);
+    int wheelIndex = 0;
     glBindVertexArray(wheelVao2);
     const GLint uMode = glGetUniformLocation(prog, "uMode"), uSpin = glGetUniformLocation(prog, "uSpin");
     for (const WheelView& wv : s.wheels) {
       V3 ex, ey, ez;
       wheelAxes(wv, ex, ey, ez);
-      setMat(prog, "uModel", wheelMatrix(wv));
+      {
+        // The rear tyres of a hypercar are much wider than the front ones.
+        Mat4 mw = wheelMatrix(wv);
+        if (wheelIndex >= 2)
+          for (int k = 4; k < 7; k++) mw.m[k] *= rig->rearWidth;
+        setMat(prog, "uModel", mw);
+        wheelIndex++;
+      }
       glUniform1fv(glGetUniformLocation(prog, "uDent"), 24, wv.dent);
       glUniform2f(glGetUniformLocation(prog, "uRunout"), wv.runoutX, wv.runoutZ);
       glUniform3f(glGetUniformLocation(prog, "uPlaneN"), float(dot(wv.groundN, ex)), float(dot(wv.groundN, ey)), float(dot(wv.groundN, ez)));
@@ -2430,6 +2526,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   D.origin = {};  // positions stay within +-512 m, which is fine for float vertex data
   auto tp0 = std::chrono::steady_clock::now();
   D.handleEvents(s);
+  D.updateCraters(s);
   D.applyScrapes(s, dt);
   D.xrayNow = hud.xray;
   if (s.splitGeneration != D.seenSplit) {
@@ -2607,6 +2704,20 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glUniform1i(glGetUniformLocation(D.progMesh, "uScratchTex"), 1);
   glUniform1i(glGetUniformLocation(D.progMesh, "uDetailTex"), 2);
   glUniform1f(glGetUniformLocation(D.progMesh, "uDetail"), 1.f);
+  glUniform1f(glGetUniformLocation(D.progMesh, "uRoadCut"), 0.f);
+  {
+    // The newest ones, if there are more than the shader takes.
+    const int nc = std::min(int(s.craters.size()), 24);
+    GLfloat cv[24 * 3];
+    for (int i = 0; i < nc; i++) {
+      const World::Crater& c = s.craters[s.craters.size() - size_t(nc) + size_t(i)];
+      cv[i * 3] = float(c.x);
+      cv[i * 3 + 1] = float(c.y);
+      cv[i * 3 + 2] = float(c.r);
+    }
+    glUniform1i(glGetUniformLocation(D.progMesh, "uCraterCount"), nc);
+    if (nc > 0) glUniform3fv(glGetUniformLocation(D.progMesh, "uCraters"), nc, cv);
+  }
 
   // Terrain chunks by distance, with the far LOD beyond 220 m.
   const V3 viewDir = norm(cam.target - cam.eye);
@@ -2619,8 +2730,10 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     glBindVertexArray(ch.vao);
     glDrawElements(GL_TRIANGLES, ch.count, GL_UNSIGNED_INT, nullptr);
   }
+  glUniform1f(glGetUniformLocation(D.progMesh, "uRoadCut"), 1.f);
   glBindVertexArray(D.staticVao);
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
+  glUniform1f(glGetUniformLocation(D.progMesh, "uRoadCut"), 0.f);
 
   glUniform1f(glGetUniformLocation(D.progMesh, "uDetail"), 0.f);
   glUniform1f(glGetUniformLocation(D.progMesh, "uScorch"), float(s.scorch));
@@ -2633,6 +2746,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glUniform1i(glGetUniformLocation(D.progWheel, "uShadow"), 0);
   glUniform1i(glGetUniformLocation(D.progWheel, "uScratchTex"), 1);
   glUniform1i(glGetUniformLocation(D.progWheel, "uDetailTex"), 2);
+  glUniform1i(glGetUniformLocation(D.progWheel, "uCraterCount"), 0);
   glUniform1i(glGetUniformLocation(D.progWheel, "uShadowFar"), 3);
   D.setMat(D.progWheel, "uShadowFarVP", lightFarVP);
   glUniform1f(glGetUniformLocation(D.progWheel, "uDetail"), 0.f);

@@ -64,7 +64,7 @@ constexpr int kMaxStepsPerSlice = 80;  // never spiral: if we fall behind, time 
 V3 kSpawn{-90, 0, 0};
 
 // Everything the input thread hands to the physics thread.
-enum VehicleKind { VK_XANTIA, VK_LEOPARD, VK_COUNT };
+enum VehicleKind { VK_XANTIA, VK_LEOPARD, VK_ONE1, VK_COUNT };
 
 struct SharedInput {
   Tuning tuning;
@@ -171,6 +171,28 @@ struct Game {
       }
       return;
     }
+    if (kind == VK_ONE1) {
+      addPart(nullptr, 8, 2, 84, 46, "body", kAll0, 1.0, 0.08, 0);
+      addPart(nullptr, 2, 48, 96, 44, "body", 1.0, 1.75, 0.08, 0);
+      addPart(nullptr, 2, 92, 11, 62, "door_l", kAll0, kAll1, 0.08, 0);
+      addPart(nullptr, 87, 92, 11, 62, "door_r", kAll0, kAll1, 0.08, 0);
+      addPart(nullptr, 14, 92, 72, 62, "body", 1.75, 2.95, 0.04, 0);
+      addPart(nullptr, 2, 155, 96, 60, "body", 2.95, 99, 0.08, 0);
+      addPart(nullptr, 6, 216, 88, 18, "wing", kAll0, kAll1, 0.06, 0);
+      addPart(nullptr, 24, 6, 52, 9, "radiator", kAll0, kAll1, 0.06, 3);
+      addPart(nullptr, 24, 138, 52, 14, "tank", kAll0, kAll1, 0.05, 4);
+      addPart(nullptr, 26, 156, 48, 32, "engine", kAll0, kAll1, 0.05, 1);
+      addPart(nullptr, 34, 189, 32, 22, "gearbox", kAll0, kAll1, 0.05, 2);
+      const float wx2[2] = {0.f, 85.f};
+      for (int i = 0; i < 4 && i < int(car.wheels.size()); i++) {
+        const Wheel& w = car.wheels[size_t(i)];
+        Gauge g;
+        g.show = {nullptr, w.left ? wx2[0] : wx2[1], w.front ? 24.f : 168.f, 15.f, 34.f, 0.f};
+        g.wheel = i;
+        gauges.push_back(g);
+      }
+      return;
+    }
     // Plan view, nose at the top.
     addPart(nullptr, 12, 2, 76, 16, "bumper_f", kAll0, kAll1, 0.10, 0);
     addPart(nullptr, 14, 19, 72, 52, "hood", kAll0, kAll1, 0.10, 0);
@@ -224,7 +246,7 @@ struct Game {
         if (w.deflate > 0) d = std::max(d, 0.7);
         if (!w.attached) d = 1.0;
       }
-      if (kind == VK_XANTIA) {
+      if (kind != VK_LEOPARD) {
         if (g.flag == 1 && car.dmg.seized) d = 1.0;
         if (g.flag == 1 && car.dmg.oilLeak) d = std::max(d, 0.6);
         if (g.flag == 2 && (car.dmg.gearbox || car.dmg.bellHousing)) d = 1.0;
@@ -252,6 +274,7 @@ struct Game {
     sim.events.clear();
     if (s.scrapes.size() < 2000) s.scrapes.insert(s.scrapes.end(), sim.scrapes.begin(), sim.scrapes.end());
     sim.scrapes.clear();
+    if (s.craters.size() != world.craters().size()) s.craters = world.craters();
     s.physLoad = load;
     s.awake = int(sim.active.size());
     s.objectCount = int(sim.objs.size());
@@ -304,6 +327,10 @@ struct Game {
       s.sight = tank.sight;
       return;
     }
+    s.conventional = car.spec.conventional;
+    s.boost = car.boost;
+    s.rpmMax = car.spec.rpmMax;
+    s.rpmRed = car.spec.rpmRed;
     s.oilTemp = car.dmg.oilTemp;
     s.oilLevel = car.oilLevel;
     s.absOn = car.tune.abs;
@@ -409,13 +436,14 @@ struct Game {
         car.tune = input.tuning;
         tank.reloadTime = input.tankReload;
       }
-      if (debugWheel.exchange(false) && kind == VK_XANTIA && car.wheels[0].deflate == 0) {
+      if (debugWheel.exchange(false) && kind != VK_LEOPARD && car.wheels[0].deflate == 0) {
         Wheel& w = car.wheels[0];
         w.deflate = 0.001;
         w.dent[3] = 0.02f; w.dent[4] = 0.04f; w.dent[5] = 0.045f; w.dent[6] = 0.03f; w.dent[7] = 0.012f;
         w.runoutX = 0.012f;
       }
       if (in.reset || (kind == VK_LEOPARD && in.repair)) {
+        world.clearCraters();
         sim = simStart;
         car = carStart;
         tank = tankStart;
@@ -423,10 +451,11 @@ struct Game {
       }
       // Pieces that have flown off cannot just be put back on: a torn-up car starts over.
       if (in.repair && (car.exploded || sim.splitGeneration != simStart.splitGeneration)) {
+        world.clearCraters();
         sim = simStart;
         car = carStart;
         resetVisuals = true;
-      } else if (in.repair && kind == VK_XANTIA) {
+      } else if (in.repair && kind != VK_LEOPARD) {
         applyRepair();
         resetVisuals = true;
       }
@@ -702,6 +731,11 @@ struct SoundDriver {
     };
 
     f.fire = s.scorch > 0 ? float(clampd(s.scorch, 0, 1)) : 0.f;
+    if (s.conventional) {
+      f.cylinders = 8;
+      f.exhaustPitch = 1.15f;
+      f.turbo = float(s.boost);
+    }
     if (s.tank) {
       f.cylinders = 10;
       f.exhaustPitch = 0.55f;
@@ -884,16 +918,19 @@ static int playSession(int kind, bool openMenu) {
     kSpawn.y = t.y + 0.25;
   }
   kSpawn.z = G.world.height(kSpawn.x, kSpawn.y);
+  // Script 24 stands on a road, so that the crater goes through the tarmac.
   if (kind == VK_LEOPARD) G.tank = buildLeopard(G.sim, kSpawn, &G.rig);
+  else if (kind == VK_ONE1) G.car = buildOne1(G.sim, kSpawn, &G.rig);
   else G.car = buildXantia(G.sim, kSpawn, 0.0, &G.rig);
   populateWorld(G.sim, G.world);
   G.sim.finalize();
   if (kind == VK_LEOPARD) G.tank.settle(G.sim, 3.0);
   else settleVehicle(G.sim, G.car, 4.0);
+  G.sim.craterWorld = &G.world;
   G.simStart = G.sim;
   G.carStart = G.car;
   G.tankStart = G.tank;
-  const char* meshFile = kind == VK_LEOPARD ? "assets/leopard.mesh" : "assets/xantia.mesh";
+  const char* meshFile = kind == VK_LEOPARD ? "assets/leopard.mesh" : (kind == VK_ONE1 ? "assets/one1.mesh" : "assets/xantia.mesh");
   if (!G.mesh.load(meshFile)) {
     fprintf(stderr, "%s fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n", meshFile);
     return -1;
@@ -1040,14 +1077,15 @@ static int playSession(int kind, bool openMenu) {
     } else if (panelKind == PANEL_VEHICLE) {
       items.push_back({"Citroën Xantia Activa", "V6  ·  190 PS  ·  1,5 t", -1.f, [&](int) {}});
       items.push_back({"Leopard 1", "V10  ·  830 PS  ·  42 t", -1.f, [&](int) {}});
+      items.push_back({"Koenigsegg One:1", "V8 Biturbo  ·  1360 PS  ·  1,36 t", -1.f, [&](int) {}});
     } else if (panelKind == PANEL_CAR) {
-      if (kind == VK_XANTIA) {
+      if (kind != VK_LEOPARD) {
         toggle("ABS", tuning.abs, [&] { tuning.abs = !tuning.abs; });
         toggle("ESP", tuning.esp, [&] { tuning.esp = !tuning.esp; });
         toggle("ASR", tuning.tcs, [&] { tuning.tcs = !tuning.tcs; });
-        toggle("Activa", view.activa, [&] { panelEdges.toggleActiva = true; });
-        toggle("Hydractive Sport", view.sport, [&] { panelEdges.toggleSport = true; });
-        {
+        if (kind == VK_XANTIA) {
+          toggle("Activa", view.activa, [&] { panelEdges.toggleActiva = true; });
+          toggle("Hydractive Sport", view.sport, [&] { panelEdges.toggleSport = true; });
           static const char* heights[3] = {"Niedrig", "Straße", "Hoch"};
           items.push_back({"Niveau", heights[std::clamp(view.heightMode, 0, 2)], -1.f, [&](int) { panelEdges.cycleHeight = true; }});
         }
@@ -1462,6 +1500,12 @@ static int playSession(int kind, bool openMenu) {
             quit = true;
           }
           break;
+        case 24:  // the Activa's bomb on the road, then a fixed look at what it left
+          if (tNow > 3.0 && !repairDone) {
+            sendC.fire = true;
+            repairDone = true;
+          }
+          break;
         case 21:  // the vehicle menu, then the settings
           panelKind = shotCount < 1 ? PANEL_MAIN : (shotCount < 2 ? PANEL_VEHICLE : (shotCount < 3 ? PANEL_CAR : (shotCount < 4 ? PANEL_GAME : PANEL_KEYS)));
           break;
@@ -1614,6 +1658,9 @@ static int playSession(int kind, bool openMenu) {
       view.physLoad = G.snap.physLoad;
       view.scorch = G.snap.scorch;
       view.parts = G.snap.parts;
+      view.craters = G.snap.craters;
+      view.conventional = G.snap.conventional;
+      view.boost = G.snap.boost;
       view.oilTemp = G.snap.oilTemp;
       view.oilLevel = G.snap.oilLevel;
       view.tank = G.snap.tank;
@@ -1715,6 +1762,20 @@ static int playSession(int kind, bool openMenu) {
       cam.up = {0, 0, 1};
       cam.fovY = 55.0 * PI / 180.0;
     }
+    if (scriptMode == 24) {
+      const V3 at = kSpawn + V3{0, 0, 0.3};
+      cam.target = at;
+      cam.eye = at + V3{-13, 10, 8};
+      cam.up = {0, 0, 1};
+      cam.fovY = 55.0 * PI / 180.0;
+    }
+    if (scriptMode == 25 || scriptMode == 26) {  // the car from outside: walk round it, close to the ground
+      const double a = 0.55 + double(shotCount) * PI / 3.0;
+      cam.target = view.carCog + V3{0, 0, 0.1};
+      cam.eye = cam.target + V3{std::cos(a) * 5.6, std::sin(a) * 5.6, scriptMode == 25 ? 0.55 : 1.8};
+      cam.up = {0, 0, 1};
+      cam.fovY = 50.0 * PI / 180.0;
+    }
     if (scriptMode == 19) {  // a fixed view of the tree
       const V3 t = G.world.trees()[treeIndex];
       cam.target = t + V3{0, 0, 3.5};
@@ -1755,7 +1816,7 @@ static int playSession(int kind, bool openMenu) {
         const bool burst = scriptMode == 7 || scriptMode == 8;
         nextShot += burst ? 0.0 : 1.0;
         if (burst && nextShot < 6.0) nextShot = 6.0;
-        if (shotCount >= (burst ? 6 : (scriptMode == 9 || scriptMode == 22 ? 7 : (scriptMode == 12 ? 13 : 19)))) quit = true;
+        if (shotCount >= (burst ? 6 : (scriptMode == 9 || scriptMode == 22 || scriptMode == 25 || scriptMode == 26 ? 7 : (scriptMode == 12 ? 13 : 19)))) quit = true;
         if (scriptMode == 14 && tNow > 6.0) quit = true;
         if (scriptMode == 13 && view.carCog.x > 93 && std::fabs(view.speedKmh) < 2) quit = true;
       }
@@ -1802,7 +1863,10 @@ int main(int argc, char** argv) {
       gSpawnBase.x = atof(argv[++i]);
       gSpawnBase.y = atof(argv[++i]);
     }
-    if (!strcmp(argv[i], "--vehicle") && i + 1 < argc) vehicle = !strcmp(argv[++i], "leopard") ? VK_LEOPARD : VK_XANTIA;
+    if (!strcmp(argv[i], "--vehicle") && i + 1 < argc) {
+      i++;
+      vehicle = !strcmp(argv[i], "leopard") ? VK_LEOPARD : (!strcmp(argv[i], "one1") ? VK_ONE1 : VK_XANTIA);
+    }
     if (!strcmp(argv[i], "--help")) {
       printf("beanng [--shots DIR --script N]\n");
       return 0;

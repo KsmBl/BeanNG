@@ -19,6 +19,9 @@ if [[ ! -f assets/leopard.mesh || tools/gen_leopard.py -nt assets/leopard.mesh ]
   python3 tools/gen_leopard.py assets/leopard.mesh
 fi
 
+if [[ ! -f assets/one1.mesh || tools/gen_one1.py -nt assets/one1.mesh ]]; then
+  python3 tools/gen_one1.py assets/one1.mesh
+fi
 if [[ ! -f assets/ui.atlas || tools/gen_ui.py -nt assets/ui.atlas ]]; then
   python3 tools/gen_ui.py assets/ui.atlas
 fi

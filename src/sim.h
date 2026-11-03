@@ -128,6 +128,7 @@ class Sim {
   std::vector<Scrape> scrapes;
 
   const World* world = nullptr;
+  World* craterWorld = nullptr;  // set where explosions may change the ground (the game, not the tests)
   Grab grab;
   double g = 9.81;
   double plasticEnergy = 0;  // cumulative plastic work done on the car [J]
