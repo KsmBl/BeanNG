@@ -2091,7 +2091,7 @@ struct Renderer::Impl {
     {
       float ry = 26 * u;
       const float rx = W - 22 * u;
-      const bool behind = s.realtime < s.timeScale * 0.9;
+      const bool behind = !s.paused && s.realtime < s.timeScale * 0.9;
       if (o.stats) {
         snprintf(buf, sizeof buf, "%.0f FPS  ·  %s", o.fps, o.gpuName.c_str());
         labelRight(rx, ry, buf, 14 * u, dim);
@@ -2123,7 +2123,7 @@ struct Renderer::Impl {
         snprintf(buf, sizeof buf, "Zeitlupe %.2fx", s.timeScale);
         chip(buf, amber);
       }
-      if (s.paused) chip("Pause", amber);
+      if (s.paused && !o.panel.open) chip("Pause", amber);
     }
 
     // Latest damage message, fading out.
