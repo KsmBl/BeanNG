@@ -28,7 +28,7 @@ struct Controls {
 // Everything the driver can set in the overlay.
 struct Tuning {
   bool abs = true, esp = true, tcs = true;
-  double brake = 1, power = 1, grip = 1, damper = 1, bar = 1, steer = 1;
+  double brake = 1, damper = 1, bar = 1, steer = 1;
 };
 
 struct Wheel {

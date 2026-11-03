@@ -57,6 +57,7 @@ struct Snapshot {
   bool tank = false;
   std::vector<V3> trackPath[2];
   double trackPhase[2] = {};
+  double trackSpeed[2] = {};
   double rpmMax = 7000, rpmRed = 6100;
   double turretYaw = 0, gunPitch = 0, reload = 0, reloadTime = 4;
   V3 muzzle, gunDir{1, 0, 0}, sight;

@@ -137,7 +137,7 @@ void Vehicle::updateStability(const Controls& in, double dt) {
     // What the driver asks for: a yaw rate from steering and speed, as far as the tyres can deliver.
     constexpr double kLockAngle = 0.60, kWheelbase = 2.74, kUndersteer = 0.0022;
     const double delta = steerAct * tune.steer * kLockAngle;
-    const double limit = 0.9 * 9.81 * tune.grip / v;
+    const double limit = 0.9 * 9.81 / v;
     const double wanted = clampd(v * delta / (kWheelbase * (1.0 + kUndersteer * v * v)), -limit, limit);
     const double err = yawRate_ - wanted;
     const double slip = std::asin(clampd(dot(norm(vCog), left), -1, 1));
@@ -321,7 +321,7 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
       const double s = std::sqrt(sx * sx + sy * sy);
 
       const double loadSens = 1.0 - 0.08 * (Fz / kFz0 - 1.0);
-      double muS = 1.02 * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf) * tune.grip;
+      double muS = 1.02 * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf);
       if (w.deflate > 0.5) muS *= 0.45;
       const double Ftot = muS * Fz * magic(s);
       double Fx = 0, Fy = 0;
@@ -771,7 +771,7 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   // is what shakes the block on its mounts at idle.
   crankAngle = std::fmod(crankAngle + engineOmega * dt, 2.0 * PI);
   const double fric = frictionTorque(rpmNow) * (oilLevel < 0.2 ? 2.5 : 1.0);
-  double comb = ignition ? load * (fullLoadTorque(rpmNow) * tune.power + fric) : 0.0;
+  double comb = ignition ? load * (fullLoadTorque(rpmNow) + fric) : 0.0;
   comb *= 1.0 + 0.25 * std::cos(3.0 * crankAngle);
   combustionTorque = comb;
   double Te = comb - fric - 2.0 - pumpTorque;

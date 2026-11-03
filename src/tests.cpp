@@ -1470,6 +1470,49 @@ int main(int argc, char** argv) {
     printf("  hull after 5 s: bottom z %.3f, turret off target %.3f m, nodes sane %d\n", s->pos[t.refBottom].z, len(s->pos[t.turretNodes[0]] - s->pos[t.refFL]), std::isfinite(s->pos[t.turretNodes[0]].x));
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "tankcrash")) {
+    // Into the end wall at full speed: how wildly do the track's points jump between frames?
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    s->world = w;
+    Tank t = buildLeopard(*s, V3{130, 0, 0}, &r);
+    s->finalize();
+    t.settle(*s, 3.0);
+    for (u32 i = 0; i < s->pos.size(); i++) s->vel[i] = V3{55 / 3.6, 0, 0};
+    t.trackOmega[0] = t.trackOmega[1] = 55 / 3.6 / Tank::kSprocketR;
+    t.gear = 4;
+    std::vector<V3> prev[2], now;
+    for (int frame = 0; frame < 200; frame++) {
+      Controls c;
+      c.throttle = 1;
+      double maxOm = 0;
+      for (int i = 0; i < 33; i++) {
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+        maxOm = std::max({maxOm, std::fabs(t.trackOmega[0]), std::fabs(t.trackOmega[1])});
+      }
+      double jump = 0, len0 = 0;
+      for (int sd = 0; sd < 2; sd++) {
+        t.trackPath(*s, sd, now);
+        double L = 0;
+        for (size_t k = 0; k < now.size(); k++) L += len(now[(k + 1) % now.size()] - now[k]);
+        len0 = std::max(len0, L);
+        if (prev[sd].size() == now.size())
+          for (size_t k = 0; k < now.size(); k++) {
+            // Against the hull: what the eye sees, since the camera follows it.
+            const V3 d = (now[k] - prev[sd][k]) - t.vCog * (33 * kDt);
+            jump = std::max(jump, len(d));
+          }
+        prev[sd] = now;
+      }
+      if (frame % 10 == 0 || jump > 0.05)
+        printf("f%3d v %5.1f km/h  track speed %5.1f m/s  path point jump %6.3f m  length %.2f m  hull x %.1f\n", frame, t.speed * 3.6, maxOm * Tank::kSprocketR, jump, len0, t.cog.x);
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "esp")) {
     printf("== Stability control: open-loop swerve, same input with and without ==\n");
     for (double kmh : {80.0, 100.0, 120.0, 140.0}) {

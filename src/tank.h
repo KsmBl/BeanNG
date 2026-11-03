@@ -20,6 +20,7 @@ class Tank {
   };
 
   std::vector<RoadWheel> wheels;
+  std::vector<u32> rigidNodes_;      // everything fixed to the hull
   u16 hullObj = 0, turretObj = 0;
   std::vector<u32> turretNodes, gunNodes;
   std::vector<V3> turretRest, gunRest;  // local: turret frame, and gun frame about the trunnions
@@ -40,7 +41,7 @@ class Tank {
   double steerAct = 0;
   double loadNow = 0;
   bool autoBox = true;
-  double power = 1, grip = 1, reloadTime = 4;
+  double reloadTime = 4;
   double shotsFired = 0;
 
   struct Shell {
@@ -63,6 +64,8 @@ class Tank {
 
  private:
   V3 prevV_;
+  double wheelLift_[14] = {};        // road wheel height against the hull, smoothed, as drawn
+  void dampHull(Sim& sim, double dt);
   double tetDet_ = 0;
   void updateFrame(Sim& sim, double dt);
   void updateTurret(Sim& sim, const Controls& in, double dt);

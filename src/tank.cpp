@@ -5,7 +5,7 @@
 
 namespace {
 // Rolled homogeneous armour, welded: takes a beating, and does not simply crumple.
-const Mat mArmour{6e7, 6000, 9e6, 12e6, 2e7, 0.20, 0};
+const Mat mArmour{6e7, 15000, 9e6, 12e6, 2e7, 0.20, 0};
 const Mat mBrace{2.5e7, 2500, 0, 0, 0, 0, 0};
 const Mat mCast{5e7, 5000, 0, 0, 0, 0, 0};
 const Mat mGun{3e7, 3000, 0, 0, 0, 0, 0};
@@ -156,6 +156,11 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig) {
   }
   sim.endObj();
   sim.objs[T.hullObj].armoured = true;
+  T.rigidNodes_ = hull;
+  for (u32 i = sim.objs[T.hullObj].nodeStart; i < sim.objs[T.hullObj].nodeStart + sim.objs[T.hullObj].nodeCount; i++)
+    if (sim.mass[i] < 200.0 && sim.mass[i] > 60.0) T.rigidNodes_.push_back(i);
+  std::sort(T.rigidNodes_.begin(), T.rigidNodes_.end());
+  T.rigidNodes_.erase(std::unique(T.rigidNodes_.begin(), T.rigidNodes_.end()), T.rigidNodes_.end());
 
   // ---- Turret and gun: a body of their own, held to the hull by the turret ring.
   T.turretObj = sim.beginObj(OBJ_CAR, true);
@@ -252,6 +257,45 @@ void Tank::addToHull(Sim& sim, V3 point, V3 force) {
   double w[4];
   tetWeights(p, point, w);
   for (int i = 0; i < 4; i++) sim.force[id[i]] += force * w[i];
+}
+
+// 40 t of welded plate on the stiff beams of this model would ring like a bell after a blow, and throw
+// the tank back off a wall. Real armour soaks that up in its welds, fittings and in the wall itself.
+// Everything that moves differently from the hull as a rigid body has that difference braked.
+void Tank::dampHull(Sim& sim, double dt) {
+  double M = 0;
+  V3 c{}, v{};
+  for (u32 n : rigidNodes_) {
+    M += sim.mass[n];
+    c += sim.pos[n] * sim.mass[n];
+    v += sim.vel[n] * sim.mass[n];
+  }
+  c = c / M;
+  v = v / M;
+  V3 L{};
+  double I[6] = {};  // xx yy zz xy xz yz
+  for (u32 n : rigidNodes_) {
+    const double m = sim.mass[n];
+    const V3 r = sim.pos[n] - c;
+    L += cross(r, sim.vel[n] - v) * m;
+    I[0] += m * (r.y * r.y + r.z * r.z);
+    I[1] += m * (r.x * r.x + r.z * r.z);
+    I[2] += m * (r.x * r.x + r.y * r.y);
+    I[3] -= m * r.x * r.y;
+    I[4] -= m * r.x * r.z;
+    I[5] -= m * r.y * r.z;
+  }
+  // Inverse of the symmetric inertia matrix, by cofactors.
+  const double a = I[1] * I[2] - I[5] * I[5], b = I[4] * I[5] - I[3] * I[2], d = I[3] * I[5] - I[4] * I[1];
+  const double det = I[0] * a + I[3] * b + I[4] * d;
+  if (std::fabs(det) < 1e-6) return;
+  const double e = I[0] * I[2] - I[4] * I[4], f = I[3] * I[4] - I[0] * I[5], g = I[0] * I[1] - I[3] * I[3];
+  const V3 om{(a * L.x + b * L.y + d * L.z) / det, (b * L.x + e * L.y + f * L.z) / det, (d * L.x + f * L.y + g * L.z) / det};
+  const double k = std::min(350.0, 0.3 / dt);
+  for (u32 n : rigidNodes_) {
+    const V3 rigid = v + cross(om, sim.pos[n] - c);
+    sim.force[n] -= (sim.vel[n] - rigid) * (sim.mass[n] * k);
+  }
 }
 
 void Tank::updateFrame(Sim& sim, double dt) {
@@ -393,7 +437,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   if (throttleAct < 0.03 && absV < 0.7) Tconv = 0;
   const double speedRatio = engineOmega > 1.0 ? clampd(inputOmega / engineOmega, 0, 1) : 0;
   const double multiply = lerpd(2.2, 1.0, std::min(speedRatio / 0.85, 1.0));
-  const double Te = loadNow * engineTorque(rpmNow) * power - 80.0 - engineOmega * 0.8;
+  const double Te = loadNow * engineTorque(rpmNow) - 80.0 - engineOmega * 0.8;
   engineOmega += (Te - Tconv) * dt / 7.0;
   engineOmega = clampd(engineOmega, 0.0, 270.0);
 
@@ -437,7 +481,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     V3 t = fwd - nBest * dot(fwd, nBest);
     t = norm(t);
     const V3 l = cross(nBest, t);
-    const double mu = 1.05 * surfaceFriction(surf) * grip;
+    const double mu = 1.05 * surfaceFriction(surf);
     const double Vt = trackOmega[s] * kSprocketR;
     const double slipX = Vt - dot(vC, t);
     const double Fx = mu * Fn * clampd(slipX / 0.45, -1, 1);
@@ -510,6 +554,13 @@ void Tank::updateShells(Sim& sim, double dt) {
 
 void Tank::update(Sim& sim, const Controls& in, double dt) {
   updateFrame(sim, dt);
+  dampHull(sim, dt);
+  // What the track follows: wheel height against the hull, within the travel it really has.
+  for (size_t i = 0; i < wheels.size() && i < 14; i++) {
+    const V3 hub = (sim.pos[wheels[i].in] + sim.pos[wheels[i].out]) * 0.5;
+    const double lift = clampd(dot(hub - sim.pos[idler[wheels[i].left ? 0 : 1][0]], up) - (kWheelR - kIdlerZ), -0.22, 0.30);
+    wheelLift_[i] += (lift - wheelLift_[i]) * clampd(dt / 0.02, 0, 1);
+  }
   updateTurret(sim, in, dt);
   updateDrive(sim, in, dt);
   updateShells(sim, dt);
@@ -528,36 +579,33 @@ void Tank::settle(Sim& sim, double seconds) {
 
 void Tank::trackPath(const Sim& sim, int side, std::vector<V3>& out) const {
   out.clear();
-  // In the hull's frame, measured from where each piece really is now: the wheels move, so the track
-  // visibly follows them over every bump.
-  const u32* S = sprocket[side];
-  const u32* I = idler[side];
-  const V3 sc = (sim.pos[S[0]] + sim.pos[S[1]]) * 0.5;
-  const V3 ic = (sim.pos[I[0]] + sim.pos[I[1]]) * 0.5;
-  auto arc = [&](V3 c, double r, double a0, double a1, int n) {
+  // Everything in the hull's own frame and at its fixed place along the hull, with only the wheels'
+  // smoothed height free to change. So the track keeps its length and shape whatever the hull goes
+  // through, as a real one under tension does, and it still follows every bump.
+  const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
+  const V3 O0 = (sim.rest[refFL] + sim.rest[refFR] + sim.rest[refRL] + sim.rest[refRR]) * 0.25;
+  const double groundZ = sim.rest[idler[side][0]].z - kIdlerZ;
+  const double y = (side == 0 ? 1.0 : -1.0) * kTrackY;
+  const double noseWorldX = sim.rest[idler[side][0]].x + kIdlerX;  // where design x = 0 was built
+  auto P = [&](double x, double z) {
+    const double f = (noseWorldX - x) - O0.x;
+    return O + fwd * f + left * y + up * (z + groundZ - O0.z);
+  };
+  auto arc = [&](double cx, double cz, double r, double a0, double a1, int n) {
+    // Angle measured towards the front of the tank, which is decreasing design x.
     for (int i = 0; i <= n; i++) {
       const double a = lerpd(a0, a1, double(i) / n);
-      out.push_back(c + fwd * (std::cos(a) * r) + up * (std::sin(a) * r));
+      out.push_back(P(cx - std::cos(a) * r, cz + std::sin(a) * r));
     }
   };
   // From the top of the sprocket, forward along the top run, over the idler and back along the ground.
-  arc(sc, kSprocketR, 2.0, 1.57, 2);
-  const double topUp = dot((sc + ic) * 0.5, up);
-  (void)topUp;
-  for (int i = 3; i >= 0; i--) {
-    // Return run, sagging a little between the rollers.
-    const double x = kWheelX[size_t(i) * 2];
-    const V3 wheel = (sim.pos[wheels[size_t(side) * 7 + size_t(i) * 2].in] + sim.pos[wheels[size_t(side) * 7 + size_t(i) * 2].out]) * 0.5;
-    (void)x;
-    const V3 base = sc + (ic - sc) * ((dot(wheel - sc, fwd)) / std::max(dot(ic - sc, fwd), 0.1));
-    out.push_back(base + up * (kTopRunZ - kSprocketZ));
-  }
-  arc(ic, kIdlerR, 1.57, -1.57, 6);
+  arc(kSprocketX, kSprocketZ, kSprocketR, 2.0, 1.57, 2);
+  for (int i = 6; i >= 0; i -= 2) out.push_back(P(kWheelX[i], kTopRunZ - 0.012 * (i % 4 == 0 ? 1.0 : 0.0)));
+  arc(kIdlerX, kIdlerZ, kIdlerR, 1.57, -1.57, 6);
   for (int i = 0; i < 7; i++) {
-    const RoadWheel& w = wheels[size_t(side) * 7 + size_t(i)];
-    const V3 c = (sim.pos[w.in] + sim.pos[w.out]) * 0.5;
-    out.push_back(c - up * kWheelR + fwd * 0.16);
-    out.push_back(c - up * kWheelR - fwd * 0.16);
+    const double z = wheelLift_[size_t(side) * 7 + size_t(i)];
+    out.push_back(P(kWheelX[i] - 0.16, z));
+    out.push_back(P(kWheelX[i] + 0.16, z));
   }
-  arc(sc, kSprocketR, -1.57, -4.28, 6);
+  arc(kSprocketX, kSprocketZ, kSprocketR, -1.57, -4.28, 6);
 }

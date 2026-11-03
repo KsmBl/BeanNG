@@ -68,7 +68,7 @@ enum VehicleKind { VK_XANTIA, VK_LEOPARD, VK_COUNT };
 
 struct SharedInput {
   Tuning tuning;
-  double tankPower = 1, tankGrip = 1, tankReload = 4;
+  double tankReload = 4;
   Controls c;
   bool reset = false, repair = false, paused = false;
   double timeScale = 1.0;
@@ -269,6 +269,7 @@ struct Game {
       for (int i = 0; i < 2; i++) {
         tank.trackPath(sim, i, s.trackPath[i]);
         s.trackPhase[i] = tank.trackPhase[i];
+        s.trackSpeed[i] = tank.trackOmega[i] * Tank::kSprocketR;
       }
       for (int i = 0; i < 4; i++) {
         // What the camera shake and the sound read from the wheels.
@@ -406,8 +407,6 @@ struct Game {
         input.c.fire = false;
         input.reset = input.repair = false;
         car.tune = input.tuning;
-        tank.power = input.tankPower;
-        tank.grip = input.tankGrip;
         tank.reloadTime = input.tankReload;
       }
       if (debugWheel.exchange(false) && kind == VK_XANTIA && car.wheels[0].deflate == 0) {
@@ -955,7 +954,7 @@ static int playSession(int kind, bool openMenu) {
   bool fromMain = false;      // a page opened from the main menu goes back to it
   bool menuSpin = openMenu;   // the first time, the vehicle slowly turns behind the menu
   Tuning tuning;
-  double tankPower = 1, tankGrip = 1, tankReload = 4;
+  double tankReload = 4;
   struct Item {
     std::string label, value;
     float fill;
@@ -1053,16 +1052,12 @@ static int playSession(int kind, bool openMenu) {
           items.push_back({"Niveau", heights[std::clamp(view.heightMode, 0, 2)], -1.f, [&](int) { panelEdges.cycleHeight = true; }});
         }
         items.push_back({"Getriebe", view.autoBox ? "Automatik" : "Manuell", -1.f, [&](int) { panelEdges.toggleAuto = true; }});
-        percent("Motorleistung", tuning.power, 0.3, 3.0, 0.1);
         percent("Bremskraft", tuning.brake, 0.4, 1.6, 0.1);
-        percent("Reifenhaftung", tuning.grip, 0.4, 1.6, 0.05);
         percent("Dämpfung", tuning.damper, 0.4, 2.0, 0.1);
         percent("Stabilisator", tuning.bar, 0.0, 2.0, 0.1);
         percent("Lenkübersetzung", tuning.steer, 0.6, 1.4, 0.05);
       } else {
         items.push_back({"Getriebe", view.autoBox ? "Automatik" : "Manuell", -1.f, [&](int) { panelEdges.toggleAuto = true; }});
-        percent("Motorleistung", tankPower, 0.3, 3.0, 0.1);
-        percent("Kettenhaftung", tankGrip, 0.4, 1.6, 0.05);
         {
           char b[32];
           snprintf(b, sizeof b, "%.1f s", tankReload);
@@ -1551,8 +1546,6 @@ static int playSession(int kind, bool openMenu) {
       G.input.grabNode = grabNode;
       G.input.grabTarget = grabTarget;
       G.input.tuning = tuning;
-      G.input.tankPower = tankPower;
-      G.input.tankGrip = tankGrip;
       G.input.tankReload = tankReload;
       if (rig.tank && scriptMode != 22) {
         // Whatever is under the crosshair is what the gun lays on.
@@ -1627,6 +1620,7 @@ static int playSession(int kind, bool openMenu) {
       for (int i = 0; i < 2; i++) {
         view.trackPath[i] = G.snap.trackPath[i];
         view.trackPhase[i] = G.snap.trackPhase[i];
+        view.trackSpeed[i] = G.snap.trackSpeed[i];
       }
       view.rpmMax = G.snap.rpmMax;
       view.rpmRed = G.snap.rpmRed;

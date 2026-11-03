@@ -1215,16 +1215,21 @@ struct Renderer::Impl {
       setupVtxAttribs();
     }
     const MatDef& md = kMats[MM_TRACK];
-    constexpr double kPitch = 0.19, kThick = 0.05, kLen = 0.165, kHalfW = 0.275;
+    constexpr double kPitch = 0.19, kThick = 0.05, kHalfW = 0.275;
     for (int side = 0; side < 2; side++) {
       const std::vector<V3>& path = s.trackPath[side];
       const size_t n = path.size();
       if (n < 3) continue;
       double total = 0;
       for (size_t i = 0; i < n; i++) total += len(path[(i + 1) % n] - path[i]);
-      const int links = int(total / kPitch);
+      constexpr int links = 76;  // a track has the number of links it has, whatever it is doing
       const double step = total / links;
-      double along = std::fmod(s.trackPhase[side], step);
+      // Above a few m/s single links only strobe at 60 frames a second, as a wagon wheel does. To the
+      // eye a fast track is a smooth blur, so here the links close up into one belt.
+      const double closeUp = clampd((std::fabs(s.trackSpeed[side]) - 2.5) / 3.0, 0, 1);
+      const double kLen = lerpd(step * 0.86, step * 1.04, closeUp);
+      // In the blur the pattern stands still instead of crawling or running backwards.
+      double along = closeUp >= 1.0 ? 0.0 : std::fmod(s.trackPhase[side], step);
       if (along < 0) along += step;
       size_t seg = 0;
       double segStart = 0;
