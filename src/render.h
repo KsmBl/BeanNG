@@ -239,6 +239,10 @@ class Renderer {
   bool init(const World& world, const Sim& sim, const CarRig& rig, CarMesh& mesh, V3 spawn);
   void resetDamage();
   void clearSkidMarks();
+  // What it takes to show a loading screen, long before the world is there to draw.
+  void initUi();
+  // progress from 0 to 1, or below 0 when nobody can say how long it takes.
+  void drawLoading(int w, int h, const char* title, const char* detail, const char* tip, double progress);
   void vegetationStats(int& grass, int& bushes, int& tris, int& statics, double& ms) const;
   V3 nearestBush(V3 from, double beyond) const;
   void draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt);

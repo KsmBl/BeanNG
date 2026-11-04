@@ -3161,8 +3161,94 @@ struct Renderer::Impl {
 
 Renderer::~Renderer() { delete d; }
 
-bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMesh& mesh, V3 spawn) {
+void Renderer::initUi() {
   d = new Impl();
+  d->progHud = program(kHudVS, kHudFS);
+  glGenVertexArrays(1, &d->hudVao);
+  glGenBuffers(1, &d->hudVbo);
+  glBindVertexArray(d->hudVao);
+  glBindBuffer(GL_ARRAY_BUFFER, d->hudVbo);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)8);
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)24);
+  glBindVertexArray(0);
+  d->loadAtlas("assets/ui.atlas");
+}
+
+void Renderer::drawLoading(int w, int h, const char* title, const char* detail, const char* tip, double progress) {
+  Impl& D = *d;
+  D.hudVerts.clear();
+  const float W = float(w), H = float(h), u = std::max(0.7f, H / 900.f);
+  const auto mixCol = [](Impl::Col a, Impl::Col b, float t) { return Impl::Col{a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 1}; };
+  // Evening over the map: a sky, two ranges of mountains, a meadow, and a tank on it.
+  constexpr int kSky = 90;
+  const float horizon = H * .68f;
+  for (int i = 0; i < kSky; i++) {
+    const float t = float(i) / float(kSky - 1);
+    D.rrect(0, horizon * float(i) / kSky, W, horizon / kSky + 1.f, 0, mixCol({.07f, .11f, .19f, 1}, {.74f, .54f, .38f, 1}, t * t));
+  }
+  const float step = std::max(5.f * u, W / 300.f);
+  const auto ridge = [&](float base, float height, float scale, float seed, Impl::Col c) {
+    for (float x = 0; x < W; x += step) {
+      const float q = x / (scale * u) + seed;
+      const float top = base - height * u * (.5f + .3f * std::sin(q) + .15f * std::sin(q * 2.3f + 1.f) + .07f * std::sin(q * 5.1f + 2.f));
+      D.rrect(x, top, step + 1.f, H - top, 0, c);
+    }
+  };
+  ridge(horizon + 10 * u, 260.f, 210.f, 1.3f, {.25f, .25f, .31f, 1});
+  ridge(horizon + 30 * u, 150.f, 120.f, 4.1f, {.15f, .17f, .20f, 1});
+  ridge(horizon + 90 * u, 70.f, 300.f, .4f, {.08f, .13f, .07f, 1});
+  const float tx = W * .78f, ty = horizon + 66 * u;
+  const Impl::Col dark{.025f, .03f, .025f, 1};
+  D.rrect(tx - 74 * u, ty, 148 * u, 22 * u, 9 * u, dark);
+  D.rrect(tx - 64 * u, ty - 14 * u, 124 * u, 18 * u, 3 * u, dark);
+  D.rrect(tx - 30 * u, ty - 34 * u, 58 * u, 24 * u, 9 * u, dark);
+  D.rrect(tx + 24 * u, ty - 27 * u, 84 * u, 5 * u, 1 * u, dark);
+  D.rrect(tx - 16 * u, ty - 48 * u, 1.5f * u, 16 * u, 0, dark);
+
+  const Impl::Col white{1, 1, 1, .96f}, dim{1, 1, 1, .68f};
+  D.labelMid(W * .5f, H * .27f, "BeanNG", 78 * u, white);
+  // The bar, and when nobody can say how long it takes, something moving along it.
+  const float bw = std::min(W * .46f, 640 * u), bx = (W - bw) * .5f, by = H * .78f, bh = 8 * u;
+  D.rrect(bx, by, bw, bh, 4 * u, {0, 0, 0, .45f});
+  const Impl::Col fill{.35f, .85f, .95f, 1};
+  if (progress >= 0) {
+    D.rrect(bx, by, std::max(bw * float(std::min(progress, 1.0)), bh), bh, 4 * u, fill);
+  } else {
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const float t = float(.5 + .5 * std::sin(now * 2.2));
+    D.rrect(bx + (bw - bw * .22f) * t, by, bw * .22f, bh, 4 * u, fill);
+  }
+  D.labelMid(W * .5f, by - 22 * u, title, 24 * u, white);
+  if (detail && detail[0]) D.labelMid(W * .5f, by + 30 * u, detail, 16 * u, dim);
+  if (tip && tip[0]) D.labelMid(W * .5f, H - 42 * u, tip, 16 * u, dim);
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glViewport(0, 0, w, h);
+  glClearColor(.05f, .05f, .06f, 1.f);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glDisable(GL_DEPTH_TEST);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glBindBuffer(GL_ARRAY_BUFFER, D.hudVbo);
+  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(D.hudVerts.size() * sizeof(HudV)), D.hudVerts.data(), GL_STREAM_DRAW);
+  glUseProgram(D.progHud);
+  glUniform2f(glGetUniformLocation(D.progHud, "uRes"), W, H);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, D.atlasTex);
+  glUniform1i(glGetUniformLocation(D.progHud, "uAtlas"), 0);
+  glBindVertexArray(D.hudVao);
+  glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.hudVerts.size()));
+  glDisable(GL_BLEND);
+  glEnable(GL_DEPTH_TEST);
+  glBindVertexArray(0);
+}
+
+bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMesh& mesh, V3 spawn) {
+  if (!d) initUi();
   d->world = &world;
   d->sim = &sim;
   d->rig = &rig;
@@ -3178,7 +3264,6 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   d->progSky = program(kSkyVS, kSkyFS);
   d->progPart = program(kPartVS, kPartFS);
   d->progLine = program(kLineVS, kLineFS);
-  d->progHud = program(kHudVS, kHudFS);
   d->progPost = program(kPostVS, kPostFS);
 
   glGenFramebuffers(1, &d->shadowFbo);
@@ -3234,7 +3319,6 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   d->setupVtxAttribs();
 
   d->buildScratchData();
-  d->loadAtlas("assets/ui.atlas");
   d->buildDetailTexture();
 
   glGenVertexArrays(1, &d->propVao);
@@ -3275,16 +3359,6 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   glEnableVertexAttribArray(1);
   glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(LineV), (void*)12);
 
-  glGenVertexArrays(1, &d->hudVao);
-  glGenBuffers(1, &d->hudVbo);
-  glBindVertexArray(d->hudVao);
-  glBindBuffer(GL_ARRAY_BUFFER, d->hudVbo);
-  glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)0);
-  glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)8);
-  glEnableVertexAttribArray(2);
-  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(HudV), (void*)24);
   glBindVertexArray(0);
 
   glEnable(GL_PROGRAM_POINT_SIZE);

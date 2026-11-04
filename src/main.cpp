@@ -1865,13 +1865,56 @@ static void runGame() {
     fprintf(stderr, "OpenGL: %s\n", SDL_GetError());
     return;
   }
-  glClearColor(.05f, .05f, .06f, 1.f);
-  glClear(GL_COLOR_BUFFER_BIT);
-  SDL_GL_SwapWindow(window);
+  Renderer renderer;
+  renderer.initUi();
+  static const char* const kTips[] = {
+      "Tipp: Schwachstellen wie Optik, Kühler und Ketten lassen sich mit dem Scharfschützengewehr treffen.",
+      "Tipp: Wer beim Gegner den Hauptcomputer anzapft, kann seinen ungefähren Standort abfragen.",
+      "Tipp: In Häusern und bei alten Wracks liegen Kisten mit Waffen, Munition und Bombencodes.",
+      "Tipp: Im hohen Gras und hinter Büschen bist du schwer zu sehen, mit Ghillie-Anzug noch schwerer.",
+      "Tipp: Sag deinem Team mit „Vektor C5“, wo du bist. Dein aktuelles Feld steht oben links.",
+      "Tipp: Reparieren geht nur von außen und nur, wenn das Fahrzeug stillsteht.",
+      "Tipp: Die Artillerie schießt über die Sperrmauern, das Ziel markierst du auf der Karte.",
+      "Tipp: Das Scharfschützengewehr kennt Geschossabfall, Wind und Flugzeit. Stell das Visier auf die Entfernung ein.",
+  };
+  const auto tipNow = [] {
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return kTips[size_t(t / 6.0) % (sizeof kTips / sizeof kTips[0])];
+  };
+  bool closedWhileLoading = false;
+  const auto showLoading = [&](const char* what, double progress) {
+    // The window stays alive meanwhile: it can be moved, resized and closed.
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+      if (e.type == SDL_EVENT_QUIT) closedWhileLoading = true;
+    }
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(window, &w, &h);
+    if (w > 0 && h > 0) renderer.drawLoading(w, h, what, "", tipNow(), progress);
+    SDL_GL_SwapWindow(window);
+    if (scriptMode == 68) printf("Laden: %s, %.0f %%\n", what, progress * 100.0);
+  };
+  SDL_GL_SetSwapInterval(1);
+  showLoading("Die Welt entsteht", 0.0);
   auto* game = new Game();
   Game& G = *game;
   printf("Baue Welt und Fahrzeuge...\n");
-  G.duel.build();
+  {
+    // In its own thread, for this is what takes the time; the bar goes on towards where it usually ends.
+    std::atomic<bool> built{false};
+    std::thread builder([&] {
+      G.duel.build();
+      built = true;
+    });
+    const auto began = std::chrono::steady_clock::now();
+    while (!built.load()) {
+      const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+      showLoading("Die Welt entsteht", 0.6 * (1.0 - std::exp(-t / 2.5)));
+    }
+    builder.join();
+    if (scriptMode == 68) printf("Welt fertig nach %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count());
+  }
+  showLoading("Fahrzeuge werden geladen", 0.62);
   // This copy never takes a step of its own.
   G.sim.mirror = true;
   G.sim.logBlasts = false;
@@ -2001,10 +2044,11 @@ static void runGame() {
   printf("OpenGL %s auf %s\n", glGetString(GL_VERSION), glGetString(GL_RENDERER));
   glEnable(GL_MULTISAMPLE);
 
-  Renderer renderer;
+  showLoading("Grafik wird vorbereitet", 0.85);
   // The renderer reads only topology from this immutable copy (rest pose, triangle list, beam end
   // points). Everything that moves arrives through snapshots, so it never races the physics.
   renderer.init(G.world, G.simStart, G.rig, G.mesh, origin);
+  showLoading("Fertig", 1.0);
 
   G.me = G.duel.players[0].soldier;
   G.fillSnapshot("");
@@ -2046,7 +2090,9 @@ static void runGame() {
   double fpsClock = 0;
   int fpsFrames = 0;
   double keySteer = 0;
-  bool quit = false;
+  bool quit = closedWhileLoading;
+  double newMatchUntil = 0;
+  bool loadingShown = false;
   int shotCount = 0;
   bool wantShot = false;
   Snapshot view;
@@ -2411,6 +2457,11 @@ static void runGame() {
     }
 
     SDL_Event e;
+    const auto leaveLoading = [&] {
+      G.command = Game::CMD_LEAVE;
+      if (panelKind == PANEL_NONE) panelKind = PANEL_MAIN;
+      panelSel = 0;
+    };
     const auto openMenu = [&] {
       if (mapOpen) {
         mapOpen = false;
@@ -2457,6 +2508,11 @@ static void runGame() {
     while (SDL_PollEvent(&e)) {
       if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_WHEEL) padActive = false;
       if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(e.gaxis.value)) > 12000)) padActive = true;
+      if (loadingShown && netState != Game::NET_OFF && ((e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE) || (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e.gbutton.button == SDL_GAMEPAD_BUTTON_EAST))) {
+        // Waiting is the only thing to do on this screen, so that is what the key ends.
+        leaveLoading();
+        continue;
+      }
       if (osk.open) {
         // The keyboard on the screen has the buttons to itself. A real one can still leave it.
         if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
@@ -2881,7 +2937,7 @@ static void runGame() {
     // While a panel is open the pedals rest: its keys are the same ones.
     if (panelKind != 0 || chatting || osk.open) gas = brake = steer = hb = 0;
     {
-      const bool wantRelative = panelKind == 0 && !mapOpen && !osk.open && scriptMode == 0;
+      const bool wantRelative = panelKind == 0 && !mapOpen && !osk.open && !loadingShown && scriptMode == 0;
       if (wantRelative != relativeMouse) {
         SDL_SetWindowRelativeMouseMode(window, wantRelative);
         relativeMouse = wantRelative;
@@ -3291,6 +3347,28 @@ static void runGame() {
       }
     }
 
+    if (scriptMode == 68) {
+      // The loading screens: connecting to nothing, then waiting alone on a server that is there.
+      static double shotAt = 4.0;
+      if (tNow > shotAt && loadingShown) {
+        wantShot = true;
+        shotAt = tNow + 5.0;
+      }
+      static int step = 0;
+      if (step == 0 && tNow > 9.0) {
+        printf("Vor ESC: Netz %d, Ladebildschirm %d, Panel %d\n", netState, int(loadingShown), panelKind);
+        SDL_Event ev{};
+        ev.type = SDL_EVENT_KEY_DOWN;
+        ev.key.key = SDLK_ESCAPE;
+        SDL_PushEvent(&ev);
+        step = 1;
+      }
+      if (step == 1 && tNow > 11.0) {
+        printf("Nach ESC: Netz %d, Ladebildschirm %d, Panel %d\n", netState, int(loadingShown), panelKind);
+        quit = true;
+        step = 2;
+      }
+    }
     if (scriptMode == 67 && netState == Game::NET_IN && inMatch) {
       // The map with its squares, marked.
       panelKind = PANEL_NONE;
@@ -3511,6 +3589,7 @@ static void runGame() {
     G.askForFrame();
     // A new match starts on clean ground.
     if (G.resetVisuals.exchange(false)) {
+      if (netState == Game::NET_IN) newMatchUntil = tNow + 0.9;
       renderer.resetDamage();
       renderer.clearSkidMarks();
     }
@@ -4027,7 +4106,27 @@ static void runGame() {
       }
     }
     const auto drawStart = std::chrono::steady_clock::now();
-    if (w > 0 && h > 0) renderer.draw(view, cam, hud, w, h, dt);
+    {
+      // What has no picture of its own yet gets a loading screen: on the way in, waiting for the others, and a new match.
+      char title[128] = "", detail[160] = "";
+      double progress = -1;
+      const char* back = padActive ? "B: abbrechen" : "ESC: abbrechen";
+      if (netState == Game::NET_CONNECTING) {
+        snprintf(title, sizeof title, "Verbinde mit %s:%d", gServerHost.c_str(), gServerPort);
+        snprintf(detail, sizeof detail, "%s", back);
+      } else if (netState == Game::NET_IN && phase == Duel::WAITING) {
+        snprintf(title, sizeof title, "%s", view.damageMsg.empty() ? "Warte auf Spieler" : view.damageMsg.c_str());
+        snprintf(detail, sizeof detail, "Das Match beginnt, sobald alle da sind  ·  %s", back);
+      } else if (tNow < newMatchUntil) {
+        snprintf(title, sizeof title, "Neues Match");
+        progress = 1.0 - (newMatchUntil - tNow) / 0.9;
+      }
+      loadingShown = title[0] != 0;
+      if (w > 0 && h > 0) {
+        if (loadingShown) renderer.drawLoading(w, h, title, detail, tipNow(), progress);
+        else renderer.draw(view, cam, hud, w, h, dt);
+      }
+    }
     if (getenv("BEANNG_PROFILE")) {
       static int n = 0;
       if (++n % 30 == 0) fprintf(stderr, "draw %.1f ms, before it %.1f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - drawStart).count(), std::chrono::duration<double, std::milli>(drawStart - now).count());
