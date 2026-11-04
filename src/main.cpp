@@ -740,7 +740,10 @@ struct Game {
 
   void netLoop() {
     using Clock = std::chrono::steady_clock;
-    constexpr double kViewDelay = 0.10;
+    // How far back everything else is shown. Far off things come thirty times a second, so one and a half of those at
+    // least; and as much on top as the line has lately held anything up. It changes only slowly, as time going
+    // a little slower or faster for a moment.
+    double viewDelay = 0.10, lineJitter = 0.01;
     constexpr size_t kFramesKept = size_t(net::kSendRate * 0.6);  // enough for the longest way back to be shown
     const auto start = Clock::now();
     const auto clock = [&] { return std::chrono::duration<double>(Clock::now() - start).count(); };
@@ -848,7 +851,7 @@ struct Game {
     // The shape of one's own vehicle goes on at its own pace: slightly late, and between two frames, so that pitching,
     // springs and the turret do not move in steps while position and heading go on with every picture.
     const auto shapeBetween = [&](const auto& q, double nowHere, size_t& ia, size_t& ib, double& a) {
-      const double at = (nowHere - timeOffset - 1.5 / net::kSendRate) * net::kStepRate;
+      const double at = (nowHere - timeOffset - 1.5 / net::kSendRate - lineJitter) * net::kStepRate;
       ib = 0;
       while (ib + 1 < q.size() && double(q[ib].tick) < at) ib++;
       ia = ib > 0 ? ib - 1 : ib;
@@ -951,7 +954,7 @@ struct Game {
     u32 ackedInput = 0;
     double serverStats[3] = {0, 1, 0};  // load, speed against real time, objects awake
     V3 logFoeAt, logFoeStep;
-    double logFoeJerk = 0;
+    double logFoeSum = 0, logFoeN = 0;
     double logWalkErr = 0, logMetaAt = 0, logMetaGap = 0, logLoopGap = 0, logLoopAt = 0, logNext = 0;
     int logMetas = 0, logPackets = 0;
     size_t logBytes = 0;
@@ -1317,12 +1320,6 @@ struct Game {
           f.arrived = now;
           q.push_back(std::move(f));
           while (q.size() > kFramesKept) q.pop_front();
-          // Where this machine's clock stands against the server's, without the jitter of any one packet.
-          const double seen = now - double(tick) / net::kStepRate;
-          if (!replaying) {
-            timeOffset = haveOffset ? timeOffset + (seen - timeOffset) * 0.01 : seen;
-            haveOffset = true;
-          }
         } else if (kind == net::P_META) {
           u32 metaSeq = 0;
           r.get(metaSeq);
@@ -1330,6 +1327,19 @@ struct Game {
           if (lineSeq != 0 && !replaying && int32_t(metaSeq - lineSeq) > 0) lineLost += std::min(int(metaSeq - lineSeq) - 1, 1000);
           lineSeq = metaSeq;
           lineGot++;
+          if (!replaying) {
+            // Where this machine's clock stands against the server's: the quickest packets lately, for those were
+            // held up by nothing. How much later than that the others come is the line's jitter.
+            const double seen = now - double(tick) / net::kStepRate;
+            if (!haveOffset || std::fabs(seen - timeOffset) > 1.0) {
+              timeOffset = seen;
+              lineJitter = 0.01;
+              haveOffset = true;
+            } else {
+              timeOffset += (seen - timeOffset) * (seen < timeOffset ? std::min(20.0 / net::kSendRate, 1.0) : 0.5 / net::kSendRate);
+              lineJitter = std::max(std::max(seen - timeOffset, 0.0), lineJitter * std::exp(-0.3 / net::kSendRate));
+            }
+          }
           u8 ph = 0, mask = 0;
           i8 win = 0;
           float pc = 0;
@@ -1674,7 +1684,11 @@ struct Game {
       if (state == NET_IN && now - lastHeard > 5.0) disconnect("Verbindung zum Server verloren");
 
       // Every tank we have word of, at the moment a little in the past that lies between two frames.
-      const double viewTime = ((replaying ? replayNow : shownNow) - timeOffset - kViewDelay) * net::kStepRate;
+      if (!replaying) {
+        const double wantDelay = clampd(1.5 / 30.0 + lineJitter + 0.005, 0.05, 0.25);
+        viewDelay += clampd(wantDelay - viewDelay, -0.02 * dt, 0.1 * dt);
+      }
+      const double viewTime = ((replaying ? replayNow : shownNow) - timeOffset - viewDelay) * net::kStepRate;
       // The moment on the screen, for the server to judge by.
       const u32 viewTick = u32(std::max(viewTime, 0.0));
       while (!later.empty() && double(later.front().tick) <= viewTime) {
@@ -1902,8 +1916,12 @@ struct Game {
         for (int k = 0; k < Duel::kMaxPlayers; k++) {
           if (k == mySlot || !duel.players[k].present) continue;
           const V3 at = drawnVehicle[k] >= 0 ? duel.frames[drawnVehicle[k]].cog : drawnSoldier[k].p;
-          const V3 step = (at - logFoeAt) / dt;
-          if (len(at - logFoeAt) < 3.0) logFoeJerk = std::max(logFoeJerk, len(step - logFoeStep) * dt);
+          if (dtShown <= 0) break;
+          const V3 step = (at - logFoeAt) / dtShown;
+          if (len(at - logFoeAt) < 3.0) {
+            logFoeSum += len(step - logFoeStep) * dtShown;
+            logFoeN += 1;
+          }
           logFoeAt = at;
           logFoeStep = step;
           break;
@@ -2086,9 +2104,9 @@ struct Game {
               nearest = std::min(nearest, len(them - mine));
             }
             const int awake = int(duel.sim.active.size());
-            fprintf(gPlayLog, "t %.0f netz slot %d phase %d fz %d pos %.0f %.0f gegner %.0f m rtt %.0f ms metas %d luecke %.0f ms eingabepause %.0f ms laufkorrektur %.2f m gegner-ruck %.1f mm pakete %d kB %.0f aktiv %d\n", now, mySlot, phaseNow, vehicleNow, mine.x, mine.y, nearest, rtt * 1000.0, logMetas, logMetaGap * 1000.0, logLoopGap * 1000.0, logWalkErr, logFoeJerk * 1000.0, logPackets, double(logBytes) / 1024.0, awake);
+            fprintf(gPlayLog, "t %.0f netz slot %d phase %d fz %d pos %.0f %.0f gegner %.0f m rtt %.0f ms metas %d luecke %.0f ms eingabepause %.0f ms laufkorrektur %.2f m gegner-ruck %.1f mm pakete %d kB %.0f aktiv %d\n", now, mySlot, phaseNow, vehicleNow, mine.x, mine.y, nearest, rtt * 1000.0, logMetas, logMetaGap * 1000.0, logLoopGap * 1000.0, logWalkErr, logFoeSum / std::max(logFoeN, 1.0) * 1000.0, logPackets, double(logBytes) / 1024.0, awake);
             fflush(gPlayLog);
-            logWalkErr = logMetaGap = logLoopGap = logFoeJerk = 0;
+            logWalkErr = logMetaGap = logLoopGap = logFoeSum = logFoeN = 0;
             logMetas = logPackets = 0;
             logBytes = 0;
             logNext = now + 1.0;
@@ -2238,7 +2256,7 @@ struct Game {
         snap.netOn = true;
         snap.netPing = rtt;
         snap.netLoss = lineLoss;
-        snap.netDelay = kViewDelay;
+        snap.netDelay = viewDelay;
         snap.netKb = lineKb;
       } else {
         snap.netOn = false;
