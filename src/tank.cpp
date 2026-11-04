@@ -81,6 +81,9 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
   T.reloadTime = spec.reload;
   T.missiles = spec.missiles;
   // A lighter turret has softer beams as well: the fastest thing in it sets the limit on the time step.
+  // Nor may it outweigh its hull by too much: the ring holds the two together with a force that goes with the turret's
+  // mass, and on the lightest hull the heaviest turret shakes the tank to pieces at rest.
+  const double turretScale = std::min(spec.massScale, heft * 2.0);
   const double stiff = std::min(spec.massScale, 1.0);
   const Mat mCastT{mCast.k * stiff, mCast.c * stiff, 0, 0, 0, 0, 0};
   const Mat mGunT{mGun.k * stiff, mGun.c * stiff, 0, 0, 0, 0, 0};
@@ -209,7 +212,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
   const double tcx = 2.90, tcz = 1.34;  // the ring's centre, design coordinates
   T.turretAxis = V3{kNoseX - tcx, 0, tcz};
   auto addTurretNode = [&](double f, double l, double z, double m) {
-    const u32 n = sim.addNode(spawn + T.turretAxis + V3{f, l, z}, m * spec.massScale, NF_COLLIDE, 0.5f);
+    const u32 n = sim.addNode(spawn + T.turretAxis + V3{f, l, z}, m * turretScale, NF_COLLIDE, 0.5f);
     T.turretNodes.push_back(n);
     T.turretRest.push_back(V3{f, l, z});
     return n;
@@ -246,7 +249,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
   T.trunnion = V3{0.92, 0, 0.56};
   auto addGunNode = [&](double f, double l, double z, double m) {
     const V3 local{f, l, z};
-    const u32 n = sim.addNode(spawn + T.turretAxis + T.trunnion + local, m * spec.massScale, 0, 0.5f);
+    const u32 n = sim.addNode(spawn + T.turretAxis + T.trunnion + local, m * turretScale, 0, 0.5f);
     T.gunNodes.push_back(n);
     T.gunRest.push_back(local);
     return n;
