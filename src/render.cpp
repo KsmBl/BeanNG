@@ -130,6 +130,8 @@ uniform sampler2DShadow uShadow;
 uniform sampler2DShadow uShadowFar;
 uniform mat4 uShadowFarVP;
 uniform float uHeat;
+uniform int uWeakCount;
+uniform vec4 uWeak[96];  // where a hit counts: centre, and its radius plus ten for each step of how little it matters
 uniform float uAlpha;
 uniform sampler2DArray uScratchTex;
 uniform sampler2D uDetailTex;
@@ -257,7 +259,15 @@ void main(){
   c = c/(c*0.22+0.85);
   frag = vec4(pow(c,vec3(1.0/1.6)), uAlpha);
   // How far this point moves across the screen during the shutter time, for the motion blur.
-  velOut = vec4(vPrevClip.w > 0.05 ? (vClip.xy/vClip.w - vPrevClip.xy/vPrevClip.w)*0.5 : vec2(0.0), uHeat, 0.0);
+  // For the weak-spot sight: the surface inside one of those spheres is the surface where a hit counts. Of several the
+  // smallest, which is the one a bullet has to find. Its level and whether there is one at all go separately, so that
+  // the edges keep their colour when the samples are averaged.
+  float hitLevel = 0.0, hitCover = 0.0, hitBest = 1e9;
+  for(int i = 0; i < uWeakCount; i++){
+    float lv = floor(uWeak[i].w/10.0), rad = uWeak[i].w - lv*10.0;
+    if(rad < hitBest && length(vPos - uWeak[i].xyz) < rad){ hitBest = rad; hitLevel = lv/3.0; hitCover = 1.0; }
+  }
+  velOut = vec4(vPrevClip.w > 0.05 ? (vClip.xy/vClip.w - vPrevClip.xy/vPrevClip.w)*0.5 : vec2(0.0), uWeakCount > 0 ? hitLevel*hitCover : uHeat, hitCover);
 })";
 
 // Motion blur: smears every pixel along its own motion on screen. A blurred background must not pick
@@ -320,8 +330,15 @@ void main(){
     float shade = d0 >= 0.99999 ? 0.05 : 0.09 + 0.20*dot(base, vec3(0.3, 0.59, 0.11));
     float grain = fract(52.9829189*fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))))*0.025;
     c = vec3(mix(shade, 1.0, clamp(heat, 0.0, 1.0)) + grain);
-    // The weak-spot sight has the same grey, a little lighter to aim by, and nothing warm: its spots go over it in red.
-    if(uThermal > 1.5) c = vec3(shade*1.5 + grain);
+    // The weak-spot sight has the same grey, a little lighter to aim by. What is worth hitting lights up on the thing
+    // itself: red ends it, orange cripples it, yellow is a nuisance. The light still shows the surface's shape.
+    if(uThermal > 1.5){
+      vec4 mark = texture(uVel, vUv);
+      float level = mark.b/max(mark.a, 0.001);
+      vec3 col = level < 0.17 ? vec3(1.0, 0.07, 0.04) : (level < 0.5 ? vec3(1.0, 0.48, 0.03) : (level < 0.83 ? vec3(0.95, 0.85, 0.15) : vec3(0.42, 0.2, 0.03)));
+      float lit = dot(base, vec3(0.3, 0.59, 0.11));
+      c = mix(vec3(shade*1.5 + grain), col*(0.65 + 0.7*lit), clamp(mark.a, 0.0, 1.0));
+    }
   }
   // At speed the edges of the view fall away a little, as they do in the eye.
   vec2 e = vUv*2.0-1.0;
@@ -2709,39 +2726,19 @@ struct Renderer::Impl {
     if (o.scope > 0) {
       const float cx = W * .5f, cy = H * .5f, r = H * .46f;
       const Col black{0, 0, 0, 1}, fine = o.scopeView != SV_PLAIN ? Col{1, .75f, .2f, .85f} : Col{0, 0, 0, .9f};
-      // Under the edge of the scope, where to hit, glowing out of the grey: red ends it, orange cripples it, yellow is a
-      // nuisance. The worst go on top, and only what matters gets its name once one is close enough to read it.
+      // The weak spots themselves light up in the picture. Here only the names of what matters, where one can read them.
       if (o.scopeView == SV_WEAK) {
-        static const Col kLevels[3] = {{1, .08f, .05f, 1}, {1, .5f, .05f, 1}, {.95f, .85f, .2f, 1}};
         const Mat4& m = camVP;
         // How much a metre is on the screen at a distance: the lens's part of the matrix, whichever way one looks.
         const double lens = std::sqrt(m.m[1] * m.m[1] + m.m[5] * m.m[5] + m.m[9] * m.m[9]);
-        for (int level = 2; level >= 0; level--) {
-          for (const Snapshot::WeakSpot& spot : s.weakSpots) {
-            if (spot.level != level) continue;
-            const V3 p = spot.p;
-            const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
-            const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
-            const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
-            if (qw < 0.1) continue;
-            const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H);
-            const float pixels = std::clamp(float(spot.radius * lens / qw * .5 * H), 3.f * u, 90.f * u);
-            Col glow = kLevels[level], core = glow;
-            glow.a = .38f;
-            core.a = .85f;
-            circle(sx, sy, pixels * 1.25f, glow);
-            circle(sx, sy, pixels * .85f, core);
-          }
-        }
         for (const Snapshot::WeakSpot& spot : s.weakSpots) {
-          if (spot.level > 1 || !spot.name[0]) continue;
+          if (spot.level == 2 || !spot.name[0]) continue;
           const V3 p = spot.p;
           const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
           const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
           const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
-          if (qw < 0.1) continue;
-          const float pixels = float(spot.radius * lens / qw * .5 * H);
-          if (pixels > 6 * u) labelMid(float((qx / qw * .5 + .5) * W), float((.5 - qy / qw * .5) * H) + 4 * u, spot.name, 13 * u, white);
+          if (qw < 0.1 || spot.radius * lens / qw * .5 * H < 8 * u) continue;
+          labelMid(float((qx / qw * .5 + .5) * W), float((.5 - qy / qw * .5) * H) + 4 * u, spot.name, 13 * u, white);
         }
       }
       rrect(0, 0, cx - r, H, 0, black);
@@ -3714,7 +3711,22 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
 
   glUniform1f(glGetUniformLocation(D.progMesh, "uDetail"), 0.f);
   glUniform1f(glGetUniformLocation(D.progMesh, "uScorch"), float(s.scorch));
+  // Through the weak-spot sight, for what moves. The ground beside a track has no weak spot.
+  if (hud.scopeView == SV_WEAK && !s.weakSpots.empty()) {
+    GLfloat spots[96 * 4];
+    const int count = std::min<int>(int(s.weakSpots.size()), 96);
+    for (int i = 0; i < count; i++) {
+      const Snapshot::WeakSpot& w = s.weakSpots[size_t(i)];
+      spots[i * 4] = float(w.p.x);
+      spots[i * 4 + 1] = float(w.p.y);
+      spots[i * 4 + 2] = float(w.p.z);
+      spots[i * 4 + 3] = w.radius + 10.f * float(w.level);
+    }
+    glUniform4fv(glGetUniformLocation(D.progMesh, "uWeak"), count, spots);
+    glUniform1i(glGetUniformLocation(D.progMesh, "uWeakCount"), count);
+  }
   drawDyn(D.progMesh);
+  glUniform1i(glGetUniformLocation(D.progMesh, "uWeakCount"), 0);
   glUniform1f(glGetUniformLocation(D.progMesh, "uScorch"), 0.f);
   glUseProgram(D.progWheel);
   glUniform3f(glGetUniformLocation(D.progWheel, "uEye"), float(cam.eye.x), float(cam.eye.y), float(cam.eye.z));

@@ -2287,36 +2287,37 @@ struct Game {
             const V3 end = Duel::aimEnd(world, sim.pos, sim.blocks, nullptr, 0, -1, {}, eye, to / d, 0.5);
             return len(end - eye) > d - 4.0;
           };
-          // Of the vehicles only the one under the crosshair, nearest first when one stands behind another: the spots of
-          // a whole yard of tanks in one picture can no longer be told apart.
-          int aimed = -1;
-          double aimedBy = 1e30;
+          // Every vehicle in view, as many as the picture takes, the one under the crosshair first and only that one
+          // with names: several overlapping would be unreadable.
+          std::vector<std::pair<double, int>> inView;
           for (int k = 0; k < Duel::kVehicles; k++) {
             if (k < Duel::kTanks && duel.tanks[k].destroyed) continue;
             const VehicleFrame& f = duel.frames[k];
             const V3 to = f.cog - eye;
             const double along = dot(to, ahead), off = len(to - ahead * along);
-            // How far from the line one looks along, against the size of the thing, and then how far away.
-            const double score = std::max(off - f.halfLength, 0.0) * 1000.0 + along;
-            if (along > 1.0 && off < f.halfLength + 25.0 && score < aimedBy && inSight(f.cog + f.up * 1.2)) {
-              aimedBy = score;
-              aimed = k;
-            }
+            if (along > 1.0 && inSight(f.cog + f.up * 1.2)) inView.push_back({std::max(off - f.halfLength, 0.0) * 1000.0 + along, k});
           }
-          if (aimed >= 0 && aimed < Duel::kTanks) {
-            std::vector<Tank::WeakPoint> points;
-            duel.tanks[aimed].weakPoints(sim, points);
-            for (const Tank::WeakPoint& w : points) snap.weakSpots.push_back({w.at, float(w.radius), u8(w.level), w.name});
-          } else if (aimed >= 0) {
-            const VehicleFrame& f = duel.frames[aimed];
-            snap.weakSpots.push_back({f.cog + f.fwd * 1.3 + f.up * 0.2, 0.45f, 1, "Motor"});
+          std::sort(inView.begin(), inView.end());
+          std::vector<Tank::WeakPoint> points;
+          for (size_t n = 0; n < inView.size(); n++) {
+            const int k = inView[n].second;
+            const size_t first = snap.weakSpots.size();
+            if (k < Duel::kTanks) {
+              points.clear();
+              duel.tanks[k].weakPoints(sim, points);
+              if (first + points.size() > 90) break;
+              for (const Tank::WeakPoint& w : points) snap.weakSpots.push_back({w.at, float(w.radius), u8(w.level), n == 0 ? w.name : ""});
+            } else {
+              const VehicleFrame& f = duel.frames[k];
+              snap.weakSpots.push_back({f.cog + f.fwd * 1.3 + f.up * 0.2, 0.8f, 1, n == 0 ? "Motor" : ""});
+            }
           }
           for (int k = 0; k < Duel::kMaxPlayers; k++) {
             const Soldier& sd = drawnSoldier[k];
             if (k == mySlot || !duel.players[k].present || (Duel::teamOf(k) == Duel::teamOf(mySlot) && scriptMode != 73) || drawnVehicle[k] >= 0 || sd.hp <= 0) continue;
             const V3 head = Duel::eyeOf(sd) + V3{0, 0, 0.1};
             if (!inSight(head)) continue;
-            snap.weakSpots.push_back({head, 0.15f, 0, "Kopf: doppelt"});
+            snap.weakSpots.push_back({head, 0.2f, 0, "Kopf: doppelt"});
           }
         }
         netState = state;

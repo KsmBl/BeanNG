@@ -71,7 +71,7 @@ struct Snapshot {
   struct WeakSpot {
     V3 p;
     float radius = 0;
-    u8 level = 0;  // 0 ends it, 1 cripples it, 2 is a nuisance
+    u8 level = 0;  // 0 ends it, 1 cripples it, 2 is a nuisance, 3 the wide area where only a shell reaches the engine
     const char* name = "";
   };
   std::vector<WeakSpot> weakSpots;  // only while someone looks for them

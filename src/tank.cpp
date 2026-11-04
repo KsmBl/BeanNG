@@ -768,9 +768,9 @@ void Tank::weakPoints(const Sim& sim, std::vector<WeakPoint>& out) const {
   if (destroyed) return;
   const V3 ring = ringPoint(sim);
   const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
-  // Inside, for what comes through the armour: the ammunition ends the tank, as in damageModules.
-  if (mod[TM_AMMO] > 0) out.push_back({ring - up * 0.35, 0.6, 0, "Munition"});
-  if (mod[TM_ENGINE] > 0) out.push_back({O - fwd * 2.6 - up * 0.25, 0.8, 1, "Motor"});
+  // What a shell hurts when it lands this close, as in damageModules: the ammunition ends the tank.
+  if (mod[TM_AMMO] > 0) out.push_back({ring - up * 0.35, 1.2, 0, "Munition"});
+  if (mod[TM_ENGINE] > 0) out.push_back({O - fwd * 2.6 - up * 0.25, 1.8, 3, "Motor"});
   BulletSpot spots[kBulletSpots];
   bulletSpots(sim, ring, spots);
   bool named[TM_COUNT] = {};

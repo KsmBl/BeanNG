@@ -109,7 +109,7 @@ class Tank {
   struct WeakPoint {
     V3 at;
     double radius;
-    int level;  // 0 ends the tank, 1 cripples it, 2 is a nuisance
+    int level;  // 0 ends the tank, 1 cripples it, 2 is a nuisance, 3 reaches the engine, for a shell
     const char* name;
   };
   void weakPoints(const Sim& sim, std::vector<WeakPoint>& out) const;
