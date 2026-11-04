@@ -940,6 +940,8 @@ struct Game {
     u32 wins[2] = {};
     float clockNow = 0;
     double lastHeard = 0, nextInput = 0, last = clock();
+    u64 clockFrame = 0;
+    double clockRaw = last, clockStep = 1.0 / 60.0, shownNow = last, shownLast = last;
     net::InputMsg out;
     std::string error;
     u64 servedFrame = 0;
@@ -999,6 +1001,19 @@ struct Game {
       const double now = clock();
       const double dt = std::max(now - last, 1e-4);
       last = now;
+      // The moment of the picture being made. Pictures come evenly, but the wake-up of this thread does not: at 50 km/h one
+      // millisecond more or less between two of them is over a centimetre. So the even beat is kept, close to the real clock.
+      if (servedFrame != clockFrame) {
+        clockFrame = servedFrame;
+        clockStep += (clampd(now - clockRaw, 0.0, 0.1) - clockStep) * 0.02;
+        clockRaw = now;
+        const double beat = shownNow + clockStep;
+        shownNow = std::fabs(now - beat) > 0.008 ? now : beat + (now - beat) * 0.05;
+      } else if (now - clockRaw > 0.05) {
+        shownNow = now;
+      }
+      const double dtShown = std::max(shownNow - shownLast, 0.0);
+      shownLast = shownNow;
       const int cmd = command.exchange(CMD_NONE);
       if (cmd == CMD_LEAVE) disconnect("");
       if (cmd == CMD_REPLAY && !lastTape.empty()) {
@@ -1563,7 +1578,7 @@ struct Game {
       if (state == NET_IN && now - lastHeard > 5.0) disconnect("Verbindung zum Server verloren");
 
       // Every tank we have word of, at the moment a little in the past that lies between two frames.
-      const double viewTime = ((replaying ? replayNow : now) - timeOffset - kViewDelay) * net::kStepRate;
+      const double viewTime = ((replaying ? replayNow : shownNow) - timeOffset - kViewDelay) * net::kStepRate;
       // The moment on the screen, for the server to judge by.
       const u32 viewTick = u32(std::max(viewTime, 0.0));
       while (!later.empty() && double(later.front().tick) <= viewTime) {
@@ -1620,8 +1635,8 @@ struct Game {
           const double want = double(in.c.steer) * (absV < 5.0 ? 1.1 : clampd(7.5 / absV, 0.32, 1.1));
           // How old the frame is against the server's steady clock, not when this one happened to come in: a packet held
           // up on the way must not move the tank, and the whole world around the camera with it.
-          const double age = clampd(now - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
-          const double turn = ownPredict(side, last.cog, vel, h1, seen, want, age, dt);
+          const double age = clampd(shownNow - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
+          const double turn = ownPredict(side, last.cog, vel, h1, seen, want, age, dtShown);
           const double c = std::cos(turn), sn = std::sin(turn);
           const V3 cog = own.p;
           if (scriptMode == 63) {
@@ -1633,7 +1648,7 @@ struct Game {
           }
           size_t ia = 0, ib = 0;
           double blend = 1;
-          shapeBetween(q, now, ia, ib, blend);
+          shapeBetween(q, shownNow, ia, ib, blend);
           const NetFrame& sa = q[ia];
           const NetFrame& sb = q[ib];
           // The shape as it was then, turned to the heading it has now.
@@ -1687,12 +1702,12 @@ struct Game {
           const V3 vel = (last.cog - before.cog) * (net::kStepRate / ticks);
           const double seen = std::remainder(std::atan2(last.fwd.y, last.fwd.x) - std::atan2(before.fwd.y, before.fwd.x), 2.0 * PI) * (net::kStepRate / ticks);
           const double want = double(in.c.steer) * 0.45 * last.speed / 2.7;  // the bicycle model, with the lock it has
-          const double age = clampd(now - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
-          ownTurn = ownPredict(Duel::kTanks + k, last.cog, vel, std::atan2(last.fwd.y, last.fwd.x), seen, want, age, dt);
+          const double age = clampd(shownNow - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
+          ownTurn = ownPredict(Duel::kTanks + k, last.cog, vel, std::atan2(last.fwd.y, last.fwd.x), seen, want, age, dtShown);
           cog = own.p;
           size_t ia = 0, ib = 0;
           double blend = 1;
-          shapeBetween(q, now, ia, ib, blend);
+          shapeBetween(q, shownNow, ia, ib, blend);
           const CarFrame& sa = q[ia];
           const CarFrame& sb = q[ib];
           const double hA = std::atan2(sa.fwd.y, sa.fwd.x);
@@ -1814,7 +1829,7 @@ struct Game {
           if (shownSoldier[mySlot].prone > 0) wi.forward = wi.strafe = 0, wi.jump = wi.sprint = false;
         }
         wi.yaw = in.yaw;
-        walkDebt += dt;
+        walkDebt += dtShown;
         walkDebt = std::min(walkDebt, 0.1);
         while (walkDebt >= Duel::kWalkDt) {
           walkDebt -= Duel::kWalkDt;
@@ -1839,7 +1854,7 @@ struct Game {
           walkOffset = len(err + walkOffset) > 4.0 ? V3{} : walkOffset + err;
           walkTrue = answer;
         }
-        walkOffset = walkOffset * std::exp(-dt * 10.0);
+        walkOffset = walkOffset * std::exp(-dtShown * 10.0);
         // Between two steps of walking too: at a run, one step more or less in a frame is a good handful of centimetres.
         me = walkTrue;
         me.p += walkOffset + walkTrue.v * walkDebt;
