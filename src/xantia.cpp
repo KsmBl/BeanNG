@@ -531,7 +531,7 @@ Vehicle buildXantia(Sim& sim, V3 spawn, double yaw, CarRig* rig) {
     w.front = front;
     w.left = side == 0;
     w.driven = front;
-    w.brakeMax = front ? 2300.0 : 900.0;
+    w.brakeMax = front ? 3400.0 : 1500.0;
     w.R = 0.312;
     const double hx = front ? 0.90 : 3.64;
     const double hy = front ? 0.745 : 0.735;

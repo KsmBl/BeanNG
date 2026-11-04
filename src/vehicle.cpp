@@ -377,7 +377,8 @@ void Vehicle::updateWheel(Sim& sim, Wheel& w, double dt) {
       const double s = std::sqrt(sx * sx + sy * sy);
 
       const double loadSens = 1.0 - 0.08 * (Fz / kFz0 - 1.0);
-      double muS = spec.tyreMu * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf);
+      // With the pedal down the tyres bite harder than they would in a corner: a game wants its cars to stop.
+      double muS = spec.tyreMu * clampd(loadSens, 0.6, 1.25) * surfaceFriction(surf) * (1.0 + 0.35 * brakeAct);
       if (surf != SURF_ASPHALT && surf != SURF_CONCRETE) muS *= spec.looseGrip;
       if (w.deflate > 0.5) muS *= 0.45;
       const double Ftot = muS * Fz * magic(s);
