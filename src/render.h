@@ -116,6 +116,9 @@ struct Snapshot {
   bool flat[4] = {};
   double timeScale = 1;
   double realtime = 1;   // simulated seconds per real second
+  // The line to the server: there and back, what got lost of it, how far back the others are shown, what comes in.
+  bool netOn = false;
+  double netPing = 0, netLoss = 0, netDelay = 0, netKb = 0;
   bool paused = false;
   std::vector<PartState> parts;
   double oilTemp = 95, oilLevel = 1;

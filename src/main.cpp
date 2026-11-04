@@ -14,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -805,14 +806,32 @@ struct Game {
       ownAhead += clampd(target - ownAhead, -0.7 * dtNow, 0.7 * dtNow);
       return ownSeen * age + ownAhead;
     };
-    // For trying things out on one machine: holds back what arrives, as a slow line would.
-    const double fakeLag = getenv("BEANNG_FAKE_LAG") ? atof(getenv("BEANNG_FAKE_LAG")) / 1000.0 : 0.0;
+    // For trying things out on one machine: behaves like a bad line, both ways. Each figure holds for one direction:
+    // BEANNG_FAKE_LAG and BEANNG_FAKE_JITTER in milliseconds, BEANNG_FAKE_LOSS in percent.
+    const auto fakeSetting = [](const char* name) { return getenv(name) ? atof(getenv(name)) : 0.0; };
+    const double fakeLag = fakeSetting("BEANNG_FAKE_LAG") / 1000.0, fakeJitter = fakeSetting("BEANNG_FAKE_JITTER") / 1000.0, fakeLoss = fakeSetting("BEANNG_FAKE_LOSS") / 100.0;
+    const bool fakeLine = fakeLag > 0 || fakeJitter > 0 || fakeLoss > 0;
     struct Held {
       double at;
       std::vector<u8> bytes;
       net::Addr from;
     };
-    std::deque<Held> held;
+    std::deque<Held> held, heldOut;
+    std::minstd_rand fakeDice(20261104);
+    // Lost, or in the queue for when it comes out. With jitter a packet may overtake another, as on the real thing.
+    const auto fakeHold = [&](std::deque<Held>& queue, double at, const void* data, size_t size, const net::Addr& from) {
+      const auto chance = [&] { return double(fakeDice() - fakeDice.min()) / double(fakeDice.max() - fakeDice.min()); };
+      if (chance() < fakeLoss) return;
+      const double when = at + fakeLag + fakeJitter * chance();
+      const u8* bytes = static_cast<const u8*>(data);
+      auto place = queue.end();
+      while (place != queue.begin() && std::prev(place)->at > when) --place;
+      queue.insert(place, Held{when, std::vector<u8>(bytes, bytes + size), from});
+    };
+    // What the line is like, for the display: counted over the last second.
+    int lineGot = 0, lineLost = 0;
+    size_t lineBytes = 0;
+    double lineNext = 0, lineLoss = 0, lineKb = 0;
     struct RocketSeen {
       u8 what;
       V3 p, v;
@@ -1013,8 +1032,12 @@ struct Game {
       u8 buf[net::kMaxPacket];
       net::Addr from;
       int n;
-      if (sock && fakeLag > 0) {
-        while ((n = sock->recv(buf, sizeof buf, from)) >= 0) held.push_back({now + fakeLag, std::vector<u8>(buf, buf + n), from});
+      if (sock && fakeLine) {
+        while ((n = sock->recv(buf, sizeof buf, from)) >= 0) fakeHold(held, now, buf, size_t(n), from);
+        while (!heldOut.empty() && heldOut.front().at <= now) {
+          sock->send(heldOut.front().bytes.data(), heldOut.front().bytes.size(), heldOut.front().from);
+          heldOut.pop_front();
+        }
       }
       for (;;) {
         if (replaying) {
@@ -1023,7 +1046,7 @@ struct Game {
           n = int(std::min(b.size(), sizeof buf));
           memcpy(buf, b.data(), size_t(n));
           from = server;
-        } else if (fakeLag > 0) {
+        } else if (fakeLine) {
           if (held.empty() || held.front().at > now || !sock) break;
           n = int(held.front().bytes.size());
           memcpy(buf, held.front().bytes.data(), size_t(n));
@@ -1035,6 +1058,7 @@ struct Game {
         if (!(from == server)) continue;
         logPackets++;
         logBytes += size_t(n);
+        lineBytes += size_t(n);
         net::Reader r(buf, size_t(n));
         u8 kind = 0;
         if (!r.header(kind)) continue;
@@ -1120,6 +1144,8 @@ struct Game {
           }
         } else if (kind == net::P_META) {
           if (tick <= metaTick) continue;
+          if (metaTick != 0 && !replaying) lineLost += int(std::min<u32>(tick - metaTick - 1, 1000));
+          lineGot++;
           u8 ph = 0, mask = 0;
           i8 win = 0;
           float pc = 0;
@@ -1719,7 +1745,8 @@ struct Game {
         for (int i = 0; i < IT_COUNT; i++) out.items[i] = in.items[i];
         net::Writer w(net::P_INPUT);
         net::write(w, out);
-        sock->send(w.data(), w.size(), server);
+        if (fakeLine) fakeHold(heldOut, now, w.data(), w.size(), server);
+        else sock->send(w.data(), w.size(), server);
       }
 
       if (vehicleNow >= 0 && vehicleNow < Duel::kTanks) {
@@ -1847,6 +1874,21 @@ struct Game {
         snap.physLoad = serverStats[0];
         snap.realtime = serverStats[1];
         snap.awake = int(serverStats[2]);
+        if (now >= lineNext) {
+          const int due = lineGot + lineLost;
+          lineLoss = due > 0 ? double(lineLost) / due : 0.0;
+          lineKb = double(lineBytes) / 1024.0 / std::max(now - lineNext + 1.0, 0.25);
+          lineGot = lineLost = 0;
+          lineBytes = 0;
+          lineNext = now + 1.0;
+        }
+        snap.netOn = true;
+        snap.netPing = rtt;
+        snap.netLoss = lineLoss;
+        snap.netDelay = kViewDelay;
+        snap.netKb = lineKb;
+      } else {
+        snap.netOn = false;
       }
       {
         std::unique_lock<std::mutex> lock(frameMutex);
@@ -3644,6 +3686,11 @@ static void runGame() {
       view.damageMsg = G.snap.damageMsg;
       view.damageAge = G.snap.damageAge;
       view.physLoad = G.snap.physLoad;
+      view.netOn = G.snap.netOn;
+      view.netPing = G.snap.netPing;
+      view.netLoss = G.snap.netLoss;
+      view.netDelay = G.snap.netDelay;
+      view.netKb = G.snap.netKb;
       view.scorch = G.snap.scorch;
       view.parts = G.snap.parts;
       view.craters = G.snap.craters;

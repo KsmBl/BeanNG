@@ -2635,7 +2635,13 @@ struct Renderer::Impl {
         ry += 22 * u;
         snprintf(buf, sizeof buf, "Physik %.0f %%  ·  Echtzeit %.0f %%  ·  wach %d/%d", s.physLoad * 100.0, s.realtime * 100.0, s.awake, s.objectCount);
         labelRight(rx, ry, buf, 14 * u, behind ? red : dim);
-        ry += 26 * u;
+        ry += 22 * u;
+        if (s.netOn) {
+          snprintf(buf, sizeof buf, "Ping %.0f ms  ·  Verlust %.1f %%  ·  Puffer %.0f ms  ·  %.0f kB/s", s.netPing * 1000.0, s.netLoss * 100.0, s.netDelay * 1000.0, s.netKb);
+          labelRight(rx, ry, buf, 14 * u, s.netLoss > 0.05 ? red : dim);
+          ry += 22 * u;
+        }
+        ry += 4 * u;
       } else if (behind) {
         // Whatever the setting: the driver must know when the simulation cannot keep up.
         snprintf(buf, sizeof buf, "Echtzeit %.0f %%", s.realtime * 100.0);
