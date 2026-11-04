@@ -524,9 +524,12 @@ int main(int argc, char** argv) {
 
   // Where this player is looking from.
   const auto viewerAt = [&](int slot) {
-    const Duel::Player& pl = duel->players[slot];
-    if (pl.droneLive) return pl.droneP;
-    return pl.vehicle >= 0 ? duel->frames[pl.vehicle].cog : pl.soldier.p;
+    const Duel::Player* look = &duel->players[slot];
+    // Fallen, one sees what a team mate sees. Nobody else's view is on offer.
+    const int watched = clients[slot].in.watching;
+    if (look->soldier.hp <= 0 && watched < Duel::kMaxPlayers && clients[watched].used && Duel::teamOf(watched) == Duel::teamOf(slot) && duel->players[watched].soldier.hp > 0) look = &duel->players[watched];
+    if (look->droneLive) return look->droneP;
+    return look->vehicle >= 0 ? duel->frames[look->vehicle].cog : look->soldier.p;
   };
 
   const auto sendMeta = [&](Client& c, int slot) {

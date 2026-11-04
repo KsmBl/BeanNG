@@ -574,6 +574,7 @@ struct Game {
   enum NetState { NET_OFF, NET_CONNECTING, NET_IN, NET_REPLAY };
   // Whose match to look at in a replay, and how fast. Asked for from the window's thread.
   std::atomic<int> replayWatch{0};
+  std::atomic<int> teamWatch{0};  // which of those still standing on one's own side, once one has fallen
   std::atomic<int> replaySpeed{100};  // percent
   bool hasReplay = false;
   double replayLeft = 0;
@@ -2218,6 +2219,15 @@ struct Game {
       } else {
         carWatched = -1;
       }
+      // Fallen, with someone of the same side still up: the picture goes with them. Only with them, not with the enemy.
+      int watching = -1;
+      if (state == NET_IN && phaseNow == Duel::PLAYING && duel.players[mySlot].soldier.hp <= 0) {
+        int mates[Duel::kMaxPlayers], count = 0;
+        for (int k = 0; k < Duel::kMaxPlayers; k++)
+          if (k != mySlot && Duel::teamOf(k) == Duel::teamOf(mySlot) && duel.players[k].present && drawnSoldier[k].hp > 0) mates[count++] = k;
+        if (count > 0) watching = mates[teamWatch.load() % count];
+      }
+      out.watching = watching >= 0 ? u8(watching) : u8(255);
       char msg[128] = "";
       if (replaying) {
         snprintf(msg, sizeof msg, "Replay  ·  noch %.0f s  ·  %s  ·  TAB wechselt die Sicht  ·  [ ] Tempo %d %%", lastTape.back().at - replayNow, names[mySlot].c_str(), replaySpeed.load());
@@ -2225,7 +2235,8 @@ struct Game {
         snprintf(msg, sizeof msg, "%s", alert.c_str());
       } else if (state == NET_IN) {
         const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
-        if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf Spieler  ·  %d von %d da", hereNow, wantedNow);
+        if (watching >= 0) snprintf(msg, sizeof msg, "Gefallen  ·  Du siehst %s  ·  TAB wechselt", names[watching].c_str());
+        else if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf Spieler  ·  %d von %d da", hereNow, wantedNow);
         else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
         else if (phaseNow == Duel::FINISHED) {
           std::lock_guard<std::mutex> lock(snapMutex);
@@ -2360,6 +2371,12 @@ struct Game {
         hasReplay = !lastTape.empty();
       }
       fillSnapshot(msg);
+      snap.watchOn = watching >= 0;
+      if (watching >= 0) {
+        const int inside = drawnVehicle[watching];
+        snap.watchP = inside >= 0 ? duel.frames[inside].cog : drawnSoldier[watching].p + V3{0, 0, 1.2};
+        snap.watchDist = inside < 0 ? 4.0 : (inside < Duel::kTanks ? 12.0 : 7.5);
+      }
       if (state == NET_IN) {
         // The figures of the server: this machine only mirrors the world and has no physics of its own.
         snap.physLoad = serverStats[0];
@@ -2648,6 +2665,8 @@ static void runGame() {
   int kickAmmo = -1, kickWeapon = -1;
   // In a replay: following one of the two, or flying about freely.
   bool replayFree = false;
+  bool watchHad = false;
+  V3 watchShown;
   V3 freeEye;
   // Along the sights, with the right mouse button: every gun, on foot and in a tank. A short weapon just comes up to
   // the eye; the big rifle's scope is its own thing, once it is set up.
@@ -3264,6 +3283,7 @@ static void runGame() {
             case SDL_GAMEPAD_BUTTON_START: case SDL_GAMEPAD_BUTTON_GUIDE: openMenu(); break;
             case SDL_GAMEPAD_BUTTON_WEST:
               if (replayOn) replayNext();
+              else if (view.watchOn) G.teamWatch++;
               else edges.use = true;
               break;
             case SDL_GAMEPAD_BUTTON_EAST:
@@ -3316,6 +3336,7 @@ static void runGame() {
           switch (e.key.key) {
             case SDLK_TAB:
               if (replayOn) replayNext();
+              else if (view.watchOn) G.teamWatch++;
               break;
             case SDLK_LEFTBRACKET: if (replayOn) G.replaySpeed = std::max(25, G.replaySpeed.load() / 2); break;
             case SDLK_RIGHTBRACKET: if (replayOn) G.replaySpeed = std::min(800, G.replaySpeed.load() * 2); break;
@@ -4291,6 +4312,9 @@ static void runGame() {
       view.lhm = G.snap.lhm;
       view.fuel = G.snap.fuel;
       view.damageMsg = G.snap.damageMsg;
+      view.watchOn = G.snap.watchOn;
+      view.watchP = G.snap.watchP;
+      view.watchDist = G.snap.watchDist;
       view.damageAge = G.snap.damageAge;
       view.physLoad = G.snap.physLoad;
       view.netOn = G.snap.netOn;
@@ -4485,7 +4509,7 @@ static void runGame() {
       }
     }
     hud.vehicleHud = inVehicle;
-    hud.crosshair = inMatch && !mapOpen && !view.missileLive && !view.foot.inCar;
+    hud.crosshair = inMatch && !mapOpen && !view.missileLive && !view.foot.inCar && !view.watchOn;
     hud.gunRing = hud.crosshair && inTank;
     // Without its optics the gunner's sight shows nothing any closer.
     if (view.foot.noSight && rig.mode == CAM_HOOD) rig.mode = CAM_CHASE;
@@ -4667,6 +4691,29 @@ static void runGame() {
       gunKick *= std::exp(-dt * 7.0);
     } else {
       gunKick = 0;
+    }
+    if (view.watchOn && !mapOpen) {
+      // Behind a team mate, looking where the hand says, and pulled in rather than through a wall.
+      if (!watchHad || len(view.watchP - watchShown) > 40.0) watchShown = view.watchP;
+      watchHad = true;
+      watchShown += (view.watchP - watchShown) * clampd(dt * 14.0, 0, 1);
+      const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+      const V3 from = watchShown + V3{0, 0, view.watchDist > 5.0 ? 1.6 : 0.3};
+      double reach = view.watchDist;
+      for (double d = 0.5; d < view.watchDist; d += 0.25) {
+        Contact con;
+        if (G.world.contact(from + back * d, con)) {
+          reach = std::max(d - 0.3, 0.4);
+          break;
+        }
+      }
+      cam.eye = from + back * reach;
+      cam.target = from - back * 30.0;
+      cam.up = {0, 0, 1};
+      cam.inside = false;
+      cam.fovY = 66.0 * PI / 180.0 + gSet.fov * PI / 180.0;
+    } else {
+      watchHad = false;
     }
     if (scriptMode == 49 && (inTank || view.missileLive)) {
       // Beside a guided missile in the air.

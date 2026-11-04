@@ -13,7 +13,7 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 35;
+constexpr u16 kProtocol = 36;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1400;  // safely under any path's MTU
 constexpr int kNameBytes = 24;
@@ -128,6 +128,7 @@ struct InputMsg {
   u32 ackBlasts = 0;  // blasts of this match this player has already set off
   u32 ackMatch = 0;
   u32 viewTick = 0;   // which server moment the player is looking at: hits by hand weapons will be judged there
+  u8 watching = 255;  // fallen, and following this team mate: what is near them is what matters to this player now
 };
 void write(Writer& w, const InputMsg& m);
 bool read(Reader& r, InputMsg& m);  // false if malformed; values are sanitised and always safe to use

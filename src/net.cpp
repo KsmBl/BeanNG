@@ -142,6 +142,7 @@ void write(Writer& w, const InputMsg& m) {
   w.put(m.ackBlasts);
   w.put(m.ackMatch);
   w.put(m.viewTick);
+  w.put(m.watching);
 }
 
 static float sane(float v, float lo, float hi) {
@@ -189,6 +190,7 @@ bool read(Reader& r, InputMsg& m) {
   r.get(m.ackBlasts);
   r.get(m.ackMatch);
   r.get(m.viewTick);
+  r.get(m.watching);
   if (!r.ok()) return false;
   // The server must survive anything a player's machine sends it.
   m.steer = sane(m.steer, -1, 1);

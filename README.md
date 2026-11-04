@@ -89,6 +89,8 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Mehr Spieler:** `beanng-server --players 4` oder `6` macht daraus 2v2 oder 3v3, ein Team pro Basis. Im Panzer gibt es zwei Plätze: Wer zuerst einsteigt, fährt, der zweite ist Richtschütze und führt Turm und Kanone. Eine Seite verliert, wenn von ihr niemand mehr lebt.
 
+**Zuschauen:** Wer im Team fällt, sieht danach einem Mitspieler über die Schulter, der noch lebt. Maus oder rechter Stick drehen die Kamera, TAB (Controller: X) wechselt zum nächsten. Dem Gegner schaut niemand zu.
+
 **Vegetation:** Wiesen aus Gras in drei Höhen und Büsche, die im Wind wogen. Was darüberfährt, drückt sie platt, eine Explosion brennt sie weg. Beides sind Instanzen mit je einem Drawcall, das Gras wird nur um die Kamera herum erzeugt und dünnt mit der Entfernung weich aus. Die **Grasdichte** lässt sich in den Spiel-Einstellungen wählen.
 
 ![Die Wiese, mit der Spur eines Panzers](docs/screenshots/wiese.jpg)
@@ -145,6 +147,7 @@ Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom V
 | Menü | ESC | Start |
 | Im Menü wählen, ändern, bestätigen, zurück | Pfeile, ENTER, ESC | Steuerkreuz oder linker Stick, A, B |
 | Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | X, LB RB |
+| Gefallen: Mitspieler wechseln | TAB | X |
 | Screenshot | F12 | – |
 
 **Texteingabe am Controller:** A auf einem Feld im Online-Menü oder **Eigener Text...** im Chat öffnet die Bildschirmtastatur.

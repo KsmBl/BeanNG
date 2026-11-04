@@ -150,6 +150,10 @@ struct Snapshot {
   double engineLoad = 0, inputRpm = 0, clutchSlip = 0;
   bool starter = false, shifting = false;
   std::string damageMsg;
+  // Fallen, and following a team mate.
+  bool watchOn = false;
+  V3 watchP;
+  double watchDist = 4.0;
   double damageAge = 100;
 };
 

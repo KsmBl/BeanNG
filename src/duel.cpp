@@ -1707,6 +1707,22 @@ void Duel::startMatch() {
 void Duel::step(const Intent in[kMaxPlayers]) {
   Tank::fleet = tanks;
   Tank::fleetSize = kTanks;
+  // The fallen do nothing more, whatever their hands are still sending. They only go on looking around.
+  Intent calm[kMaxPlayers];
+  bool anyDead = false;
+  for (int i = 0; i < kMaxPlayers; i++) {
+    calm[i] = in[i];
+    if (!players[i].present || players[i].soldier.hp > 0) continue;
+    anyDead = true;
+    Intent quiet;
+    quiet.c.brake = 1;
+    quiet.seq = in[i].seq;
+    quiet.pitch = in[i].pitch;
+    quiet.weapon = in[i].weapon;
+    quiet.walk.yaw = in[i].walk.yaw;
+    calm[i] = quiet;
+  }
+  if (anyDead) in = calm;
   stepPlayers(in);
   sim.forces(kDt);
   Controls still;
