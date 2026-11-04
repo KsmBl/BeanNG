@@ -224,11 +224,20 @@ struct CameraRig {
       out.fovY = (mode == CAM_HOOD ? 18.0 : 62.0) * PI / 180.0;
     } else {
       const V3 pivot = s.carCog + V3{0, 0, 2.4};
-      V3 eye = pivot + back * (dist + (mode == CAM_ORBIT ? 8.0 : 5.5));
+      const double reach = dist + (mode == CAM_ORBIT ? 8.0 : 5.5);
+      V3 eye = pivot + back * reach;
+      // Looking steeply up the camera would end up under the hull: it stays behind it, low down.
+      const double steep = smooth01(clampd((-pitch - 0.30) / 0.30, 0, 1));
+      if (steep > 0) {
+        const double flat = std::max(reach * std::cos(pitch), 11.0);
+        eye.x = pivot.x + std::cos(yaw) * flat;
+        eye.y = pivot.y + std::sin(yaw) * flat;
+      }
       const double gh = world.height(eye.x, eye.y) + 0.5;
       if (eye.z < gh) eye.z = gh;
       out.eye = eye;
-      out.target = pivot - back * 8.0;
+      // And looks exactly where it was told to: from down there, past a point over the hull it would not.
+      out.target = lerpv(pivot - back * 8.0, eye - back * 20.0, steep);
       out.fovY = (60.0 + 8.0 * feel.speedFx) * PI / 180.0;
     }
     if (shakeOn) addShake(s, out, feel);
@@ -2646,6 +2655,11 @@ static void runGame() {
     const bool inMatch = (netState == Game::NET_IN || replayOn) && phase == Duel::PLAYING;
     const bool inVehicle = inMatch && myVehicle >= 0, onFoot = inMatch && myVehicle < 0;
     const bool inTank = inVehicle && myVehicle < Duel::kTanks;
+    // How far one can look: negative is up. A missile can be flown straight down, and the howitzer and someone on foot
+    // can look up at what they are shooting at.
+    const bool lookHigh = view.missileLive || onFoot || (inTank && myVehicle % TK_COUNT == TK_ARTILLERY);
+    const double pitchUp = lookHigh ? -1.4 : -0.30, pitchDown = view.missileLive ? 1.5 : 1.2;
+    rig.pitch = clampd(rig.pitch, pitchUp, pitchDown);
     // Nothing to do on foot before or after the match itself: one waits where one stands.
     if (!onFoot || weaponPick != WP_SNIPER || view.foot.prone < 0.99) scoped = false;
     // The choosing comes up by itself; afterwards it is gone by itself.
@@ -3232,7 +3246,7 @@ static void runGame() {
           const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse / (scoped ? scopeZoom * 0.5 : 1.0) * lerpd(1.0, inTank ? 0.3 : 0.55, aimBlend);
           if (!mapOpen) {
             rig.yaw -= e.motion.xrel * sens;
-            rig.pitch = clampd(rig.pitch + e.motion.yrel * sens, -0.30, 1.2);
+            rig.pitch = clampd(rig.pitch + e.motion.yrel * sens, pitchUp, pitchDown);
           }
           break;
         }
@@ -3349,7 +3363,7 @@ static void runGame() {
         // As gentle near the middle as a mouse: the first bit of the stick is for aiming, the rest for turning.
         const double slow = (rig.mode == CAM_HOOD ? 0.5 : 1.0) * gSet.padSens / (scoped ? scopeZoom * 0.5 : 1.0) * lerpd(1.0, inTank ? 0.3 : 0.55, aimBlend);
         rig.yaw -= std::copysign(std::pow(std::fabs(rx), 1.7), rx) * dt * 2.6 * slow;
-        rig.pitch = clampd(rig.pitch + std::copysign(std::pow(std::fabs(ry), 1.7), ry) * dt * 1.6 * slow, -0.30, 1.2);
+        rig.pitch = clampd(rig.pitch + std::copysign(std::pow(std::fabs(ry), 1.7), ry) * dt * 1.6 * slow, pitchUp, pitchDown);
       }
       if (scoped) {
         const int zoom = (button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) ? 1 : 0) - (button(SDL_GAMEPAD_BUTTON_DPAD_LEFT) ? 1 : 0);
@@ -3750,7 +3764,7 @@ static void runGame() {
       pickReady = true;
       panelKind = PANEL_NONE;
     }
-    if ((scriptMode == 41 || scriptMode == 48 || scriptMode == 49 || scriptMode == 63) && netState == Game::NET_IN) {
+    if ((scriptMode == 41 || scriptMode == 48 || scriptMode == 49 || scriptMode == 63 || scriptMode == 71) && netState == Game::NET_IN) {
       if (phase == Duel::CHOOSING && tNow > 1.0 && !pickReady) {
         pickItems[IT_REPAIR] = 1;
         pickItems[IT_AR] = 2;
@@ -3777,12 +3791,28 @@ static void runGame() {
           gas = tNow - boarded < 12.0 ? 0.5 : 0.0;
           if (std::fmod(tNow, 3.0) < dt && !view.missileLive) sendC.fire = true;
           static bool leftOnce = false;
-          if (tNow - boarded > 16.0 && !leftOnce && scriptMode != 49) {
+          if (tNow - boarded > 16.0 && !leftOnce && scriptMode != 49 && scriptMode != 71) {
             leftOnce = true;
             sendC.use = true;
             printf("Aussteigen bei t=%.1f\n", tNow);
           }
         }
+      }
+    }
+
+    if (scriptMode == 71 && inMatch) {
+      // As far up as one can look: standing about first, then in the vehicle; and a missile flown up and then straight down.
+      static double started = tNow, boardedAt = -1;
+      if (onFoot && tNow - started < 5.0) {
+        gas = 0;
+        sendC.use = false;
+        rig.pitch = pitchUp;
+      } else if (inVehicle) {
+        if (boardedAt < 0) boardedAt = tNow;
+        gas = 0;
+        sendC.fire = false;
+        if (tNow - boardedAt > 1.0 && tNow - boardedAt < 1.0 + dt * 2.0 && !view.missileLive) sendC.launch = true;
+        rig.pitch = view.missileLive && tNow - boardedAt > 6.0 ? pitchDown : pitchUp;
       }
     }
 
@@ -4372,7 +4402,8 @@ static void runGame() {
       at.p = view.foot.p;
       at.yaw = rig.yaw;
       at.prone = view.foot.prone;
-      const V3 head = Duel::eyeOf(at) + V3{0, 0, 0.12} + right * 0.42;
+      // Looking up, further out to the side: from below the figure would fill half the picture.
+      const V3 head = Duel::eyeOf(at) + V3{0, 0, 0.12} + right * (0.42 + 0.45 * smooth01(clampd((-rig.pitch - 0.3) / 0.8, 0, 1)));
       const double wanted = lerpd(1.9, 1.5, view.foot.prone);
       double reach = wanted;
       for (double d = 0.2; d < wanted; d += 0.1) {
@@ -4402,7 +4433,7 @@ static void runGame() {
         }
         if (weaponPick == WP_SNIPER) {
           gunKick = 1.0;
-          rig.pitch = clampd(rig.pitch - 0.018 * (scoped ? 6.0 / scopeZoom : 1.0), -0.30, 1.2);
+          rig.pitch = clampd(rig.pitch - 0.018 * (scoped ? 6.0 / scopeZoom : 1.0), pitchUp, pitchDown);
           rig.yaw += 0.004 * std::sin(tNow * 91.0) * (scoped ? 6.0 / scopeZoom : 1.0);
         } else if (weaponPick == WP_RPG) {
           gunKick = 0.7;
@@ -4623,7 +4654,7 @@ static void runGame() {
         char path[512];
         snprintf(path, sizeof path, "%s/shot_%02d.png", shotDir.c_str(), shotCount++);
         renderer.savePng(path, w, h);
-        printf("fps %.0f t=%.1f v=%.0f km/h pos %.0f %.0f %.1f Phase %d Fahrzeug %d Munition %d Leben %.0f Gas %.2f Bremse %.2f Ruck %.1f mm\n", hud.fps, tNow, view.speedKmh, view.carCog.x, view.carCog.y, view.carCog.z, phase, myVehicle, view.tankAmmo, view.foot.hp, view.throttle, view.brake, jerkFrames > 0 ? jerkSum / jerkFrames * 1000.0 : 0.0);
+        printf("fps %.0f t=%.1f v=%.0f km/h pos %.0f %.0f %.1f Phase %d Fahrzeug %d Munition %d Leben %.0f Gas %.2f Bremse %.2f Ruck %.1f mm Blick %.2f\n", hud.fps, tNow, view.speedKmh, view.carCog.x, view.carCog.y, view.carCog.z, phase, myVehicle, view.tankAmmo, view.foot.hp, view.throttle, view.brake, jerkFrames > 0 ? jerkSum / jerkFrames * 1000.0 : 0.0, rig.pitch);
         jerkSum = jerkFrames = 0;
         fflush(stdout);
         nextShot += scriptMode == 47 ? 0.3 : (scriptMode == 45 || scriptMode == 51 ? 0.6 : (scriptMode == 53 ? 0.4 : 1.0));

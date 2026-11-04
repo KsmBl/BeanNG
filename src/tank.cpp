@@ -377,7 +377,8 @@ void Tank::aimAngles(V3 ring, const Controls& in, double& wantYaw, double& wantP
   // degree would otherwise put the shell a hundred metres off. High over the top if asked for and possible.
   const double v2 = sp_.shellSpeed * sp_.shellSpeed, range = std::max(std::hypot(to.x, to.y), 1.0), rise = to.z;
   const double disc = v2 * v2 - 9.81 * (9.81 * range * range + 2.0 * rise * v2);
-  double solved = 45.0 * PI / 180.0;  // out of reach: as far as it will go
+  // Out of reach: as far as it will go, or steeper if that is where one is looking. A howitzer can be stood almost on end.
+  double solved = std::max(45.0 * PI / 180.0, std::atan2(rise, range));
   if (disc >= 0) {
     const double high = std::atan2(v2 + std::sqrt(disc), 9.81 * range), low = std::atan2(v2 - std::sqrt(disc), 9.81 * range);
     solved = in.indirect && high <= sp_.pitchMax * PI / 180.0 ? high : low;

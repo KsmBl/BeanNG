@@ -284,7 +284,7 @@ BodyLimbs bodyPose(const Soldier& s, int weapon) {
   const double kneeL = std::max(0.0, -std::cos(phase)) * (0.7 + 0.5 * run) * moving + 0.05, kneeR = std::max(0.0, std::cos(phase)) * (0.7 + 0.5 * run) * moving + 0.05;
   out.drop = 0.02 * moving * std::fabs(std::sin(phase));
   // Where it looks: positive upward. The body follows a little, the head and the weapon all the way.
-  const double look = clampd(-s.pitch, -0.9, 0.9);
+  const double look = clampd(-s.pitch, -0.9, 1.3);
   const bool longGun = weapon >= 2;
   const double lean = look * 0.25 - 0.08 * run - (longGun ? 0.05 : 0.0);
   // The arms hold what is carried up in front: a long gun with both hands, a short one further out.
