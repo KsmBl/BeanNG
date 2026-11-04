@@ -58,10 +58,12 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 | Turm | Waffe | Besonderheit |
 |---|---|---|
-| 105-mm-Kanone | 8 Granaten | fünf Volltreffer bis zur Zerstörung |
+| 105-mm-Kanone | 8 Granaten | fünf Volltreffer von vorn bis zur Zerstörung |
 | Leichte Kanone | 120 Schuss, schnell | leicht, wenig Schaden pro Schuss |
 | Artillerie | 8 Granaten, Steilfeuer auf einen Kartenpunkt | ein Treffer zerstört jeden Panzer und reißt einen großen Krater; schwer und langsam |
 | Lenkraketen | 8 Raketen und ein schwaches Geschütz | Rakete wird mit dem Blick über die ganze Karte geflogen |
+
+**Panzerung:** Es zählt, wo und wie eine Granate auftrifft. Von vorn hält ein mittlerer Panzer fünf Volltreffer der 105 mm aus, in die Seite vier, ins Heck drei; der Turm hat seine eigene Front, und das Dach ist dünn. Je schräger der Treffer, desto weniger richtet er an. Trifft eine Kanonengranate flacher als etwa 75° zur Senkrechten auf, prallt sie ab und fliegt weiter; der Schütze sieht dann „Abpraller“. Die Artillerie schert das nicht, Raketen und Minen prallen ebenfalls nicht ab.
 
 **Schaden am Panzer:** Motor, Kanone, Turmkranz, Munition und Ketten nehmen einzeln Schaden. Schwachstellen wie Optik, Entfernungsmesser, Winkelspiegel, Kühler, Treibstoffleitung, Höhenrichtanlage und Antenne erreicht auch das Scharfschützengewehr, und jede nimmt dem Panzer etwas anderes.
 
@@ -167,7 +169,7 @@ In den Spiel-Einstellungen lassen sich die Empfindlichkeit des Sticks und die Vi
     ./build/beanng-test                    # alles
     ./build/beanng-test crash skidpad      # einzelne Tests
 
-Einzelne Sondertests: `split`, `torn`, `slow`, `winding`. `BEANNG_PROFILE=1 ./run.sh` zeigt die Zeit pro Bild.
+Einzelne Sondertests: `split`, `torn`, `slow`, `winding`, `armour`. `BEANNG_PROFILE=1 ./run.sh` zeigt die Zeit pro Bild.
 
 Tests: `statics bounce accel brake skidpad crash rough jitter response compliance wheel powertrain rest props perf`
 

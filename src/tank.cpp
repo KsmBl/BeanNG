@@ -649,10 +649,35 @@ void Tank::updateShells(Sim& sim, double dt) {
     if (sim.world->contact(s.p, c)) {
       hit = true;
     } else {
-      hit = pathHit(sim, a, s.p, true, at);
+      hit = pathHit(sim, a, s.p, true, at, s.glanced);
+    }
+    // A gun's shell that meets a plate too flat for it goes on past. What weighs as much as the howitzer's does not care.
+    if (hit && spec().blastImpulse < 10000.0) {
+      const V3 dir = norm(s.v);
+      Tank* struck = nullptr;
+      for (int k = 0; k < fleetSize && !struck; k++) {
+        Tank& t = fleet[k];
+        if (&t == this || &t == s.glanced || t.destroyed || len2(at - t.cog) > 7.0 * 7.0) continue;
+        const V3 q = at - t.cog;
+        if (std::fabs(dot(q, t.fwd)) < 4.2 && std::fabs(dot(q, t.left)) < 2.4) struck = &t;
+      }
+      if (struck) {
+        const ArmourHit a2 = struck->armourAt(at, dir);
+        if (a2.facing < kRicochet) {
+          s.v = (s.v - a2.normal * (2.0 * dot(s.v, a2.normal))) * 0.55;
+          s.p = at + norm(s.v) * 0.3;
+          s.glanced = struck;
+          bounces++;
+          sim.event(EV_SPARK, at, a2.normal * 6.0, 1.f);
+          sim.event(EV_SPARK, at, s.v * 0.05, 1.f);
+          i++;
+          continue;
+        }
+      }
     }
     if (hit) {
       // The 105 mm: a high-explosive round, about the 2.3 kg of filler of a HESH shell.
+      sim.blastDir = norm(s.v);
       sim.explode(at, spec().blastImpulse, spec().blastRadius);
       shells[i] = shells.back();
       shells.pop_back();
@@ -670,11 +695,13 @@ void Tank::updateShells(Sim& sim, double dt) {
 
 // Anything within half a metre of the way from a to b; the tank's own nodes only if it asks for them. Hull and
 // turret lie side by side in the arrays, and whatever else is there can be hit whether built before or after.
-bool Tank::pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at) const {
+bool Tank::pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at, const Tank* skipOther) const {
   const V3 d = b - a;
   const double dl2 = std::max(len2(d), 1e-9);
   const u32 ownFirst = sim.objs[hullObj].nodeStart;
   const u32 ownEnd = sim.objs[turretObj].nodeStart + sim.objs[turretObj].nodeCount;
+  const u32 otherFirst = skipOther ? sim.objs[skipOther->hullObj].nodeStart : 0;
+  const u32 otherEnd = skipOther ? sim.objs[skipOther->turretObj].nodeStart + sim.objs[skipOther->turretObj].nodeCount : 0;
   // Bounds first: they may be a moment old, so with something to spare. Most of the world is nowhere near.
   constexpr double kSpare = 2.5;
   const V3 lo{std::min(a.x, b.x) - kSpare, std::min(a.y, b.y) - kSpare, std::min(a.z, b.z) - kSpare};
@@ -683,6 +710,7 @@ bool Tank::pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at) const {
     if (o.bbMin.x > hi.x || o.bbMax.x < lo.x || o.bbMin.y > hi.y || o.bbMax.y < lo.y || o.bbMin.z > hi.z || o.bbMax.z < lo.z) continue;
     for (u32 k : o.nodes) {
       if (skipOwn && k >= ownFirst && k < ownEnd) continue;
+      if (k >= otherFirst && k < otherEnd) continue;
       const V3 r = sim.pos[k] - a;
       const double t = clampd(dot(r, d) / dl2, 0, 1);
       if (len2(r - d * t) < 0.25) {
@@ -740,6 +768,7 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   else hit = pathHit(sim, from, missileP, missileAge < 1.5, at);
   // Enough fuel for the whole map and back; then it comes down wherever it is.
   if (hit || missileAge > 60.0) {
+    sim.blastDir = norm(missileV);
     sim.explode(at, 5000.0, 20.0);
     missileLive = false;
   }
@@ -918,6 +947,37 @@ void Tank::damageModules(Sim& sim, V3 c, double impulse) {
   if (mod[TM_AMMO] <= 0) destroy(sim);
 }
 
+Tank::ArmourHit Tank::armourAt(V3 at, V3 dir) const {
+  // On the turret, if it is above the ring and within reach of it: that has its own front, wherever the hull is going.
+  const V3 r = at - ring_;
+  const double overRing = dot(r, up);
+  const V3 flat = r - up * overRing;
+  const bool onTurret = overRing > -0.05 && len2(flat) < 1.9 * 1.9;
+  const double cy = std::cos(turretYaw), sy = std::sin(turretYaw);
+  const V3 ahead = onTurret ? fwd * cy + left * sy : fwd;
+  const V3 side = onTurret ? left * cy - fwd * sy : left;
+  const V3 q = onTurret ? r : at - (cog + up * 0.45);
+  const double f = dot(q, ahead), l = dot(q, side), z = dot(q, up);
+  const double nf = std::fabs(f) / (onTurret ? 1.6 : 3.6), nl = std::fabs(l) / (onTurret ? 1.4 : 1.75), nz = z / (onTurret ? 1.0 : 0.7);
+  ArmourHit out;
+  // Five square hits from the 105 mm in front; four in the side, three from behind.
+  if (nz > nf && nz > nl) {
+    out.normal = up;
+    out.factor = 1.8;
+  } else if (nl > nf) {
+    out.normal = side * (l > 0 ? 1.0 : -1.0);
+    out.factor = onTurret ? 1.4 : 1.6;
+  } else {
+    out.normal = ahead * (f > 0 ? 1.0 : -1.0);
+    out.factor = f > 0 ? 1.0 : (onTurret ? 1.8 : 2.4);
+  }
+  if (len2(dir) > 0.5) {
+    out.facing = std::fabs(dot(dir, out.normal));
+    out.factor *= lerpd(0.6, 1.0, out.facing);
+  }
+  return out;
+}
+
 void Tank::checkDamage(Sim& sim, double dt) {
   // A blast: what counts is how close it got.
   if (sim.blastCount != blastSeen_) {
@@ -931,7 +991,9 @@ void Tank::checkDamage(Sim& sim, double dt) {
       const double core = sim.lastBlastImpulse >= 10000.0 ? 4.5 : 1.3;
       const double reach = std::min(core / std::max(dmin, 0.3), 1.0);
       // The armour takes several: five direct hits from the 105 mm. What gets hit on the outside is another matter.
-      const double hit = 0.20 * hullSpec().armour * (sim.lastBlastImpulse / 2200.0) * reach * reach;
+      // A near miss has no angle to speak of, only a side it is on.
+      const double plate = armourAt(c, dmin < 1.2 ? sim.lastBlastDir : V3{}).factor;
+      const double hit = 0.20 * plate * hullSpec().armour * (sim.lastBlastImpulse / 2200.0) * reach * reach;
       if (reach > 0.2) damageModules(sim, c, sim.lastBlastImpulse * hullSpec().armour);
       if (destroyed) return;
       if (hit > 0.003) takeHit(sim, hit, c);
@@ -1068,6 +1130,7 @@ Tank::NetState Tank::netState() const {
   n.latAcc = float(latAcc);
   n.lonAcc = float(lonAcc);
   n.fuel = float(fuel);
+  n.bounces = bounces;
   n.load = float(loadNow);
   n.gear = gear;
   n.ammo = ammo;
@@ -1112,6 +1175,7 @@ void Tank::applyNetState(Sim& sim, const NetState& n, double dt) {
   latAcc = n.latAcc;
   lonAcc = n.lonAcc;
   fuel = n.fuel;
+  bounces = n.bounces;
   loadNow = n.load;
   gear = n.gear;
   ammo = n.ammo;

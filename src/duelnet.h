@@ -95,6 +95,7 @@ inline void writeState(Writer& w, const Tank::NetState& n, V3 cog, bool slow) {
   w.put(u8(n.missiles));
   w.put(u8(n.smokeCharges));
   w.put(u8(n.netOn ? 1 : 0));
+  w.put(n.bounces);
 }
 
 inline void readState(Reader& r, Tank::NetState& n, V3 cog) {
@@ -160,6 +161,7 @@ inline void readState(Reader& r, Tank::NetState& n, V3 cog) {
   n.missiles = missiles;
   n.smokeCharges = charges;
   n.netOn = netOn != 0;
+  r.get(n.bounces);
 }
 
 }  // namespace net

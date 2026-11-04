@@ -85,6 +85,7 @@ class Tank {
   struct Shell {
     V3 p, v;
     double age = 0;
+    const Tank* glanced = nullptr;  // what it has just glanced off, and cannot hit again on the way out
   };
   std::vector<Shell> shells;
 
@@ -111,6 +112,19 @@ class Tank {
     bool lying;
   };
   static inline std::vector<Person> people;
+  // What a hit at this point makes of the armour: thick in front, thin behind, and worth less the flatter it comes in.
+  // dir is the way it was flying, or nothing if it came from nowhere in particular.
+  struct ArmourHit {
+    double factor = 1;  // times what a hit does from straight ahead
+    double facing = 1;  // how square it came in, 1 head on and 0 along the plate
+    V3 normal;
+  };
+  ArmourHit armourAt(V3 at, V3 dir) const;
+  static constexpr double kRicochet = 0.26;  // flatter than about 75 degrees from square, and a gun's shell glances off
+  // The tanks a shell may glance off: set by whoever runs the match.
+  static inline Tank* fleet = nullptr;
+  static inline int fleetSize = 0;
+  u16 bounces = 0;  // how many of this tank's shells have glanced off, for the gunner's screen
   // Where a bullet or a blast does something, as a scope would show it.
   struct WeakPoint {
     V3 at;
@@ -151,6 +165,7 @@ class Tank {
     int missiles = 0, smokeCharges = 0;
     bool netOn = false;
     float netClock = 0;
+    u16 bounces = 0;
     bool missileLive = false;
     V3 missileP, missileV;
   };
@@ -198,7 +213,7 @@ class Tank {
   void addToHull(Sim& sim, V3 point, V3 force);
   void damageModules(Sim& sim, V3 c, double impulse);
   void updateMissile(Sim& sim, const Controls& in, double dt);
-  bool pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at) const;
+  bool pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at, const Tank* skipOther = nullptr) const;
   V3 ring_;
 };
 

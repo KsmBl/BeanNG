@@ -424,6 +424,8 @@ void Sim::explode(V3 c, double impulse, double radius, double hole) {
   lastBlast = c;
   lastBlastRadius = radius;
   lastBlastImpulse = impulse;
+  lastBlastDir = blastDir;
+  blastDir = V3{};
   if (logBlasts) blastLog.push_back({c, impulse, radius, hole});
   if (craterWorld) {
     // Only what goes off close to the ground digs into it.

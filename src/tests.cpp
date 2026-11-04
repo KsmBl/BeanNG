@@ -2769,6 +2769,56 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "armour")) {
+    // The same shell at the same tank from all round: square from in front, the side and behind, then flat along the side.
+    auto* w = new World();
+    w->build();
+    w->clearBoxes();
+    auto* start = new Sim();
+    start->world = w;
+    CarRig r;
+    Tank target = buildLeopard(*start, V3{60, 0, 0}, &r);
+    Tank shooter = buildLeopard(*start, V3{60, 60, 0}, &r);
+    start->finalize();
+    for (int i = 0; i < 6000; i++) {
+      Controls still;
+      still.brake = 1;
+      start->forces(kDt);
+      target.update(*start, still, kDt);
+      shooter.update(*start, still, kDt);
+      start->finish(kDt);
+    }
+    auto* s = new Sim();
+    const Tank target0 = target, shooter0 = shooter;
+    const auto fire = [&](const char* name, V3 from, V3 to) {
+      *s = *start;
+      Tank tanks[2] = {target0, shooter0};
+      Tank::fleet = tanks;
+      Tank::fleetSize = 2;
+      Tank::Shell shell;
+      shell.p = from;
+      shell.v = norm(to - from) * 1100.0;
+      tanks[1].shells.push_back(shell);
+      Controls c;
+      for (int i = 0; i < 400; i++) {
+        s->forces(kDt);
+        tanks[0].update(*s, c, kDt);
+        tanks[1].update(*s, c, kDt);
+        s->finish(kDt);
+      }
+      printf("%-10s Schaden %.3f, Abpraller %d, Sprengungen %u\n", name, tanks[0].damage, int(tanks[1].bounces), s->blastCount);
+      Tank::fleet = nullptr;
+      Tank::fleetSize = 0;
+    };
+    const V3 mid = target.cog + V3{0, 0, 0.45}, ahead = norm(V3{target.fwd.x, target.fwd.y, 0}), side = norm(V3{target.left.x, target.left.y, 0});
+    // Low on the hull, away from the turret, which has a front of its own.
+    fire("vorn", mid + ahead * 40.0, mid + ahead * 3.0);
+    fire("Seite", mid + ahead * 2.0 + side * 40.0, mid + ahead * 2.0);
+    fire("hinten", mid - ahead * 40.0, mid - ahead * 3.0);
+    fire("schraeg", mid + ahead * 30.0 + side * 25.0, mid + ahead * 2.0 + side * 1.6);
+    fire("flach", mid + ahead * 40.0 + side * (1.75 + 3.5), mid + ahead * 1.0 + side * 1.75);
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "tankkill")) {
     // Three shells at it, then into a wall, on a second one: nothing may blow up numerically, and it has to die.
     auto* w = new World();

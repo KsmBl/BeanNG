@@ -1209,6 +1209,7 @@ void Duel::stepBullets(double dt) {
       }
     }
     if (stop) {
+      if (b.kind == WP_RPG || b.kind == kKindStrike) sim.blastDir = norm(b.v);
       if (b.kind == WP_RPG) sim.explode(at, 2800.0, 10.0);
       else if (b.kind == kKindStrike) sim.explode(at, 6500.0, 24.0);
       else if (b.kind == WP_SNIPER && b.age < 6.0) {
@@ -1693,6 +1694,8 @@ void Duel::startMatch() {
 }
 
 void Duel::step(const Intent in[kMaxPlayers]) {
+  Tank::fleet = tanks;
+  Tank::fleetSize = kTanks;
   stepPlayers(in);
   sim.forces(kDt);
   Controls still;

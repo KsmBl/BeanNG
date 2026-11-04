@@ -972,6 +972,7 @@ struct Game {
     double lastMod[TM_COUNT];
     for (double& m : lastMod) m = 1;
     int lastTankWatched = -1;
+    u16 lastBounces = 0;
     std::string alert;
     double alertUntil = 0;
     u8 carHurt[Duel::kCars] = {}, carFlat[Duel::kCars] = {};
@@ -2177,6 +2178,11 @@ struct Game {
           }
           lastMod[i] = watched.mod[i];
         }
+        if (lastTankWatched == vehicleNow && watched.bounces > lastBounces) {
+          alert = "Abpraller";
+          alertUntil = now + 2.0;
+        }
+        lastBounces = watched.bounces;
         lastTankWatched = vehicleNow;
       } else {
         lastTankWatched = -1;

@@ -140,6 +140,8 @@ class Sim {
   u32 blastCount = 0;   // for whoever wants to know what just went off
   V3 lastBlast;
   double lastBlastRadius = 0, lastBlastImpulse = 0;
+  // Which way what went off was flying, for armour to judge the angle. Set just before explode(); nothing for a mine.
+  V3 blastDir, lastBlastDir;
   // For the duel server: what went off, for the players' machines to set off as well.
   struct BlastRecord {
     V3 c;
