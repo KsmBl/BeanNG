@@ -20,6 +20,12 @@ constexpr int kNodeChange = 2;  // in steps of kNodeScale: a node this far from 
 constexpr int kNodeHeal = 3;    // and this many with every packet in any case, a packet may have got lost
 constexpr u32 kSlowEvery = u32(kSendRate / 10.0);  // ticks between the parts that change only now and then
 constexpr int kBundleBytes = 1300;
+// What is near goes with every tick, what is far off only often enough to be drawn smoothly: the far end of the map needs
+// no more than a player can see through a scope. In ticks between one word and the next, by distance in metres.
+inline u32 sendEvery(double distance) {
+  const double rate = distance < 150.0 ? kSendRate : (distance < 400.0 ? 60.0 : 30.0);
+  return std::max(1u, u32(std::lround(kSendRate / rate)));
+}
 constexpr double kNodeScale = 256.0;  // a tank's nodes go as offsets of 4 mm steps from its middle, 128 m either way
 
 inline i16 packOffset(double v) { return i16(std::clamp(std::lround(v * kNodeScale), -32767L, 32767L)); }

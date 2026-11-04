@@ -481,6 +481,13 @@ int main(int argc, char** argv) {
     post(c, w);
   };
 
+  // Where this player is looking from.
+  const auto viewerAt = [&](int slot) {
+    const Duel::Player& pl = duel->players[slot];
+    if (pl.droneLive) return pl.droneP;
+    return pl.vehicle >= 0 ? duel->frames[pl.vehicle].cog : pl.soldier.p;
+  };
+
   const auto sendMeta = [&](Client& c, int slot) {
     Writer w(P_META);
     w.put(simStep);
@@ -500,7 +507,12 @@ int main(int argc, char** argv) {
       w.put(ready);
       w.put(u8(duel->playersWanted));
     }
-    const u8 told = here;
+    // Oneself with every tick, the others by how far away they are.
+    u8 told = 0;
+    for (int k = 0; k < Duel::kMaxPlayers; k++) {
+      if (!clients[k].used) continue;
+      if (k == slot || (tick + u32(k)) % sendEvery(len(duel->players[k].soldier.p - viewerAt(slot))) == 0) told |= u8(1 << k);
+    }
     w.put(told);
     for (int k = 0; k < Duel::kMaxPlayers; k++) {
       if (!clients[k].used) continue;
@@ -913,12 +925,15 @@ int main(int argc, char** argv) {
         // The tanks in play every time, and now and then the others, should a packet have gone astray.
         for (int k = 0; k < Duel::kTanks; k++) {
           const Tank& t = duel->tanks[k];
-          if (duel->occupied(k) || duel->sim.objs[t.hullObj].awake || duel->sim.objs[t.turretObj].awake || tick % u32(kSendRate) == u32(k) * u32(kSendRate) / u32(Duel::kTanks)) sendTank(c, k);
+          const bool inPlay = duel->occupied(k) || duel->sim.objs[t.hullObj].awake || duel->sim.objs[t.turretObj].awake;
+          const bool mine = duel->players[i].vehicle == k;
+          if ((inPlay && (mine || (tick + u32(k)) % sendEvery(len(t.cog - viewerAt(i))) == 0)) || tick % u32(kSendRate) == u32(k) * u32(kSendRate) / u32(Duel::kTanks)) sendTank(c, k);
         }
         // Cars while they move and now and then otherwise.
         for (int k = 0; k < Duel::kCars; k++) {
           const Vehicle& v = duel->cars[size_t(k)];
-          if (duel->sim.objs[v.obj].awake || (tick + 7) % u32(2.0 * kSendRate) == u32(k)) sendCar(c, k);
+          const bool mine = duel->players[i].vehicle == Duel::kTanks + k;
+          if ((duel->sim.objs[v.obj].awake && (mine || (tick + u32(k)) % sendEvery(len(duel->frames[Duel::kTanks + k].cog - viewerAt(i))) == 0)) || (tick + 7) % u32(2.0 * kSendRate) == u32(k)) sendCar(c, k);
         }
         if (tick % u32(kSendRate / 30.0) == 0) sendScenery(c);
         flush(c);
