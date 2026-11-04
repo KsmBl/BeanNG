@@ -69,6 +69,7 @@ class World {
   // What one would stand on coming down from z here: the ground, or whatever solid lies on it, such as a bridge.
   double groundUnder(double x, double y, double z) const;
   static V3 fordPoint(int i);  // the middle of a ford, without its height
+  static double riverAt(double y);  // where the river runs at this y
   const Base& base(int side) const { return bases_[side]; }
   // Places set aside on the map: villages for houses, old wrecks for what can be taken from them.
   const std::vector<V3>& houseSites() const { return houseSites_; }

@@ -91,6 +91,8 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Zuschauen:** Wer im Team fällt, sieht danach einem Mitspieler über die Schulter, der noch lebt. Maus oder rechter Stick drehen die Kamera, TAB (Controller: X) wechselt zum nächsten. Dem Gegner schaut niemand zu.
 
+**Bots:** `beanng-server --bots 1` lässt dich gegen den Rechner antreten, `--players 4 --bots 3` ergibt zwei gegen zwei mit einem Bot an deiner Seite. Fehlen Plätze, erhöht `--bots` die Spielerzahl von selbst, und auf der Serverkonsole geht es mit `/bot add` und `/bot remove` auch mitten im Spiel. Verbindet sich ein Mensch und alle Plätze sind belegt, übernimmt er den Platz eines Bots, und zwar dort, wo der gerade steht. Bots nehmen sich einen Panzer mit 105 mm (notfalls die leichte Kanone), folgen den Straßen, weichen bei gesprengten Brücken auf die Furten aus, reparieren mit ihrem Set und kämpfen zu Fuß weiter, wenn es sein muss. Artillerie, Lenkraketen, Autos, Minen und Drohnen benutzen sie nicht. Sie spielen nach denselben Regeln wie alle anderen, nur wissen sie alle 30 Sekunden ungefähr, wo der nächste Gegner ist, damit ein Match nicht ewig dauert, wenn sich jemand versteckt. Sie treffen nicht immer, sehen aber auch durch Bäume und Büsche.
+
 **Vegetation:** Wiesen aus Gras in drei Höhen und Büsche, die im Wind wogen. Was darüberfährt, drückt sie platt, eine Explosion brennt sie weg. Beides sind Instanzen mit je einem Drawcall, das Gras wird nur um die Kamera herum erzeugt und dünnt mit der Entfernung weich aus. Die **Grasdichte** lässt sich in den Spiel-Einstellungen wählen.
 
 ![Die Wiese, mit der Spur eines Panzers](docs/screenshots/wiese.jpg)
@@ -99,7 +101,7 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Replay:** Nach dem Verlassen eines Matches zeigt das Hauptmenü **Letztes Match ansehen**, aus der Sicht jedes Spielers oder frei fliegend.
 
-**Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill`, `/kick`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt beiden von Anfang an alle Waffen, zum Ausprobieren.
+**Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill`, `/kick`, `/bot add|remove`, `/bridge <1-3>`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt beiden von Anfang an alle Waffen, zum Ausprobieren.
 
 ### Netz
 
@@ -159,6 +161,7 @@ In den Spiel-Einstellungen lassen sich die Empfindlichkeit des Sticks und die Vi
 ## Aufbau
 
 - `src/duel.*`: ein Match ohne Grafik: Karte, Fahrzeuge, Spieler, Waffen, Minen, Loot, Ragdolls
+- `src/bot.*`: Spieler, die der Server selbst spielt: Wege, Sicht und Gefecht
 - `src/server.cpp`: der Server mit Konsole; `src/net.*`, `src/duelnet.h`, `src/shape.h`: die Pakete über UDP
 - `src/main.cpp`, `src/render.*`, `src/audio.*`: der Spieler-Client: Netz, Eingabe, Kamera, Grafik und Ton
 - `src/sim.*`: Node-Beam-Solver mit 2 kHz, elastoplastische Beams, Kollisionen, Schlafzustand
@@ -174,7 +177,7 @@ In den Spiel-Einstellungen lassen sich die Empfindlichkeit des Sticks und die Vi
     ./build/beanng-test                    # alles
     ./build/beanng-test crash skidpad      # einzelne Tests
 
-Einzelne Sondertests: `split`, `torn`, `slow`, `winding`, `armour`, `bridge`. `BEANNG_PROFILE=1 ./run.sh` zeigt die Zeit pro Bild.
+Einzelne Sondertests: `split`, `torn`, `slow`, `winding`, `armour`, `bridge`, `bots [anzahl] [sekunden] [cut|ford]`. `BEANNG_PROFILE=1 ./run.sh` zeigt die Zeit pro Bild.
 
 Tests: `statics bounce accel brake skidpad crash rough jitter response compliance wheel powertrain rest props perf`
 

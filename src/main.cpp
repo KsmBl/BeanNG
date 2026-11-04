@@ -2376,6 +2376,8 @@ struct Game {
         const int inside = drawnVehicle[watching];
         snap.watchP = inside >= 0 ? duel.frames[inside].cog : drawnSoldier[watching].p + V3{0, 0, 1.2};
         snap.watchDist = inside < 0 ? 4.0 : (inside < Duel::kTanks ? 12.0 : 7.5);
+        // What the camera follows does not smear in the motion blur.
+        snap.selfInstance = inside >= 0 ? inside : Duel::kVehicles + watching;
       }
       if (state == NET_IN) {
         // The figures of the server: this machine only mirrors the world and has no physics of its own.
@@ -3944,6 +3946,14 @@ static void runGame() {
       }
     }
 
+    if (scriptMode == 75 && netState == Game::NET_IN) {
+      // Standing still and looking at a bridge, until someone at the console has done something about either.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      if (inMatch) panelKind = PANEL_NONE;
+    }
     if (scriptMode == 73 && netState == Game::NET_IN) {
       // Lying behind the big rifle, the found sights in turn, on a tank someone is walking to.
       if (phase == Duel::CHOOSING && !pickReady) {
@@ -4736,6 +4746,13 @@ static void runGame() {
       const double a = 0.9 + tNow * 0.15;
       cam.target = view.foot.p + V3{0, 0, 0.5};
       cam.eye = cam.target + V3{std::cos(a) * 4.5, std::sin(a) * 4.5, 1.8};
+      cam.up = {0, 0, 1};
+      cam.fovY = 55.0 * PI / 180.0;
+    }
+    if (scriptMode == 75 && inMatch && !view.watchOn && !G.world.bridges().empty()) {
+      const V3 at = G.world.bridges()[0];
+      cam.target = at;
+      cam.eye = at + V3{-30, 42, 22};
       cam.up = {0, 0, 1};
       cam.fovY = 55.0 * PI / 180.0;
     }

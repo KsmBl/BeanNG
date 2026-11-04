@@ -34,7 +34,7 @@ find_package(Threads REQUIRED)
 
 # Physics core: no graphics dependency, so the headless test bench links only this.
 add_library(core STATIC
-  src/sim.cpp src/world.cpp src/vehicle.cpp src/xantia.cpp src/one1.cpp src/hummer.cpp src/tank.cpp src/props.cpp src/carmesh.cpp src/net.cpp src/duel.cpp src/asset.cpp src/platform.cpp)
+  src/sim.cpp src/world.cpp src/vehicle.cpp src/xantia.cpp src/one1.cpp src/hummer.cpp src/tank.cpp src/props.cpp src/carmesh.cpp src/net.cpp src/duel.cpp src/bot.cpp src/asset.cpp src/platform.cpp)
 target_link_libraries(core PUBLIC Threads::Threads)
 
 if(BEANNG_RELEASE)

@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "bot.h"
 #include "duel.h"
 #include "props.h"
 #include "tank.h"
@@ -2767,6 +2768,67 @@ int main(int argc, char** argv) {
       step(C, 3.0, [&](double, Controls&) {});
       printf("  wall at %3.0f km/h: plastic %.0f kJ, broken %u, pieces %zu, cabin %.3f m (was %.3f), guard %llu, sane %d\n", kmh, C->s.plasticEnergy / 1e3, C->s.brokenBeams, C->s.objs.size(), len(C->s.pos[C->c.refFrontL] - C->s.pos[C->c.refRearL]), len(C->s.rest[C->c.refFrontL] - C->s.rest[C->c.refRearL]), (unsigned long long)C->s.clampedSteps, std::isfinite(C->c.cog.x));
     }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "bots")) {
+    // Two to six bots against each other, without a server: does it come to a fight, and to an end?
+    const int count = argc > 2 ? std::clamp(atoi(argv[2]), 2, int(Duel::kMaxPlayers)) : 2;
+    const double most = argc > 3 ? atof(argv[3]) : 400.0;
+    const bool cut = argc > 4 && (!strcmp(argv[4], "cut") || !strcmp(argv[4], "ford"));  // with every bridge down from the start
+    const bool idle = argc > 4 && !strcmp(argv[4], "ford");  // and the other side just standing there, out of sight until one is close
+    auto* d = new Duel();
+    d->playersWanted = count;
+    d->build();
+    std::vector<Bot> bots;
+    for (int i = 0; i < count; i++) {
+      bots.push_back(Bot(u32(i + 1)));
+      d->players[i].present = true;
+    }
+    Duel::Intent in[Duel::kMaxPlayers];
+    double t = 0, nextSay = 0;
+    u32 winsSeen = 0;
+    const u32 startMatch = d->matchId;
+    bool cutDone = false;
+    const auto wall0 = std::chrono::steady_clock::now();
+    while (t < most) {
+      for (int i = 0; i < count; i++) {
+        if (idle && i % 2 == 1) {
+          in[i] = Duel::Intent{};
+          u8 hide[IT_COUNT] = {};
+          hide[IT_GHILLIE] = 1;
+          if (d->phase == Duel::CHOOSING) d->choose(i, hide, true);
+          continue;
+        }
+        bots[size_t(i)].step(*d, i, in[i]);
+      }
+      d->step(in);
+      std::vector<SimEvent> ev;
+      d->drainEvents(ev);
+      t += Duel::kDt;
+      if (cut && !cutDone && d->phase == Duel::PLAYING) {
+        cutDone = true;
+        for (const World::Bridge& br : d->world.bridgeSpans()) d->sim.explode(br.at + V3{std::cos(br.yaw) * 6.0, std::sin(br.yaw) * 6.0, 0.1}, 12000.0, 30.0);
+        printf("Alle Bruecken unten: Maske %x\n", d->world.bridgeMask());
+      }
+      if (t >= nextSay) {
+        nextSay = t + 10.0;
+        printf("t %3.0f Phase %d Match %u Stand %u:%u", t, int(d->phase), d->matchId, d->wins[0], d->wins[1]);
+        for (int i = 0; i < count; i++) {
+          const Duel::Player& pl = d->players[i];
+          const V3 p = pl.vehicle >= 0 ? d->frames[pl.vehicle].cog : pl.soldier.p;
+          printf(" | %d: %.0f %.0f z%.0f fz %d hp %.0f", i, p.x, p.y, p.z, pl.vehicle, pl.soldier.hp);
+          if (pl.vehicle >= 0 && pl.vehicle < Duel::kTanks) printf(" sch %.2f mun %d v %.1f", d->tanks[pl.vehicle].damage, d->tanks[pl.vehicle].ammo, d->frames[pl.vehicle].speed);
+        }
+        printf("\n");
+        fflush(stdout);
+      }
+      if (d->wins[0] + d->wins[1] > winsSeen) {
+        winsSeen = d->wins[0] + d->wins[1];
+        printf("-> Match entschieden nach %.0f s: Stand %u:%u\n", t, d->wins[0], d->wins[1]);
+      }
+      if (d->matchId > startMatch + 3) break;
+    }
+    printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "bridge")) {

@@ -17,6 +17,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include "bot.h"
 #include "duel.h"
 #include "platform.h"
 #include "duelnet.h"
@@ -192,6 +193,7 @@ constexpr double kTimeout = 5.0;
 
 struct Client {
   bool used = false;
+  bool bot = false;  // played right here: nothing to send it, nothing to wait for
   Addr addr;
   u32 token = 0;
   double lastHeard = 0;
@@ -229,6 +231,7 @@ int main(int argc, char** argv) {
   int port = kDefaultPort;
   bool giveAll = false;
   int wanted = 2;
+  int botsWanted = 0;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--log")) {
       const std::string path = tempPath("beanng-server");
@@ -236,10 +239,13 @@ int main(int argc, char** argv) {
       printf("Log: %s\n", path.c_str());
     } else if (!strcmp(argv[i], "--give-all")) giveAll = true;  // every weapon from the start, for trying things out
     else if (!strcmp(argv[i], "--players") && i + 1 < argc) wanted = std::clamp(atoi(argv[++i]) / 2 * 2, 2, int(Duel::kMaxPlayers));  // 2, 4 or 6, half to a side
+    else if (!strcmp(argv[i], "--bots") && i + 1 < argc) botsWanted = std::clamp(atoi(argv[++i]), 0, int(Duel::kMaxPlayers));
     else port = atoi(argv[i]);
   }
+  // Room for them and at least one person, half to a side.
+  wanted = std::clamp(std::max(wanted, (botsWanted + 2) / 2 * 2), 2, int(Duel::kMaxPlayers));
   if (port <= 0 || port > 65535) {
-    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all] [--players 2|4|6] [--log]\n");
+    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all] [--players 2|4|6] [--bots n] [--log]\n");
     return 1;
   }
   std::signal(SIGINT, onSignal);
@@ -273,6 +279,28 @@ int main(int argc, char** argv) {
     std::string text;
   };
   std::vector<ChatLine> chat;
+  Bot bots[Duel::kMaxPlayers];
+  u32 botSeed = 1;
+  // As many as asked for, from the last seat on, so that people get the first ones.
+  const auto seatBots = [&] {
+    int have = 0;
+    for (const Client& c : clients) have += c.used && c.bot ? 1 : 0;
+    for (int i = duel->playersWanted - 1; i >= 0 && have < botsWanted; i--) {
+      if (clients[i].used) continue;
+      clients[i] = Client{};
+      clients[i].used = true;
+      clients[i].bot = true;
+      snprintf(clients[i].name, kNameBytes, "Bot %d", i + 1);
+      bots[i] = Bot(botSeed++);
+      have++;
+    }
+    for (int i = duel->playersWanted - 1; i >= 0 && have > botsWanted; i--) {
+      if (!clients[i].used || !clients[i].bot) continue;
+      clients[i].used = false;
+      have--;
+    }
+  };
+  seatBots();
   std::random_device entropy;
   using Clock = std::chrono::steady_clock;
   const auto t0 = Clock::now();
@@ -298,7 +326,7 @@ int main(int argc, char** argv) {
       if (!r.header(kind)) continue;
       int slot = -1;
       for (int i = 0; i < Duel::kMaxPlayers; i++)
-        if (clients[i].used && clients[i].addr == from) slot = i;
+        if (clients[i].used && !clients[i].bot && clients[i].addr == from) slot = i;
       if (kind == P_HELLO) {
         u16 protocol = 0;
         r.get(protocol);
@@ -313,6 +341,12 @@ int main(int argc, char** argv) {
         if (slot < 0) {
           for (int i = 0; i < duel->playersWanted && slot < 0; i++)
             if (!clients[i].used) slot = i;
+          // A person takes the place of a bot, and takes over where it stands.
+          for (int i = duel->playersWanted - 1; i >= 0 && slot < 0; i--)
+            if (clients[i].bot) {
+              slot = i;
+              say("%s macht Platz", clients[i].name);
+            }
           if (slot < 0) {
             Writer w(P_FULL);
             w.put(u8(0));
@@ -726,7 +760,12 @@ int main(int argc, char** argv) {
   shell.complete = [&](const std::vector<std::string>& words) {
     std::vector<std::string> out;
     if (words.size() == 1) {
-      for (const char* c : {"/give", "/kill", "/kick", "/players", "/restart", "/wind", "/help", "/quit"}) out.push_back(c);
+      for (const char* c : {"/give", "/kill", "/kick", "/bot", "/bridge", "/players", "/restart", "/wind", "/help", "/quit"}) out.push_back(c);
+    } else if (words[0] == "/bot") {
+      if (words.size() == 2) {
+        out.push_back("add");
+        out.push_back("remove");
+      }
     } else if (words[0] == "/give" || words[0] == "/kick" || words[0] == "/kill") {
       if (words.size() == 2) {
         for (int i = 0; i < duel->playersWanted; i++) out.push_back("player" + std::to_string(i + 1));
@@ -759,7 +798,7 @@ int main(int argc, char** argv) {
     }
     const std::string& cmd = words[0];
     if (cmd == "/help") {
-      shell.print("Text ohne / geht in den Chat. /give <spieler> <sache> [anzahl]  /kill <spieler>  /kick <spieler>  /players  /restart  /wind <m/s>  /quit");
+      shell.print("Text ohne / geht in den Chat. /give <spieler> <sache> [anzahl]  /kill <spieler>  /kick <spieler>  /bot add|remove  /bridge <n>  /players  /restart  /wind <m/s>  /quit");
       std::string all = "Sachen:";
       for (const char* n : Duel::kGiveNames) all += std::string(" ") + n;
       shell.print(all);
@@ -778,7 +817,8 @@ int main(int argc, char** argv) {
       if (who < 0 || !clients[who].used) {
         shell.print("Den Spieler gibt es nicht");
       } else {
-        // The client notices by itself when nothing comes any more.
+        // The client notices by itself when nothing comes any more. A bot would only be seated again.
+        if (clients[who].bot) botsWanted--;
         clients[who].used = false;
         say("Spieler %d entfernt", who + 1);
       }
@@ -793,6 +833,33 @@ int main(int argc, char** argv) {
         duel->sim.event(EV_BLOOD, pl.soldier.p + V3{0, 0, 1.2}, pl.lastBlow * 0.5, 1.f);
         say("Spieler %d stirbt", who + 1);
       }
+    } else if (cmd == "/bridge") {
+      const int which = words.size() > 1 ? atoi(words[1].c_str()) : -1;
+      const auto& all = duel->world.bridgeSpans();
+      if (which < 1 || which > int(all.size())) {
+        say("/bridge 1..%d", int(all.size()));
+      } else {
+        // A howitzer's shell on the deck, a little off the middle.
+        const World::Bridge& br = all[size_t(which - 1)];
+        duel->sim.explode(br.at + V3{std::cos(br.yaw) * 6.0, std::sin(br.yaw) * 6.0, 0.1}, 12000.0, 30.0);
+        say("Bruecke %d getroffen", which);
+      }
+    } else if (cmd == "/bot") {
+      const bool add = words.size() > 1 && words[1] == "add", remove = words.size() > 1 && words[1] == "remove";
+      int free = 0, have = 0;
+      for (int i = 0; i < duel->playersWanted; i++) {
+        free += clients[i].used ? 0 : 1;
+        have += clients[i].used && clients[i].bot ? 1 : 0;
+      }
+      if (add && free == 0) shell.print("Kein Platz frei. --players legt beim Start fest, wie viele mitspielen.");
+      else if (remove && have == 0) shell.print("Es spielt kein Bot mit");
+      else if (add || remove) {
+        botsWanted = have + (add ? 1 : -1);
+        seatBots();
+        say("Bots: %d", botsWanted);
+      } else {
+        shell.print("/bot add|remove");
+      }
     } else if (cmd == "/players") {
       for (int i = 0; i < duel->playersWanted; i++) {
         if (!clients[i].used) {
@@ -800,7 +867,7 @@ int main(int argc, char** argv) {
           continue;
         }
         const Duel::Player& pl = duel->players[i];
-        say("player%d: %s, %s, Leben %.0f, Fahrzeug %d, Position %.0f %.0f", i + 1, clients[i].name, toString(clients[i].addr).c_str(), pl.soldier.hp, pl.vehicle, pl.soldier.p.x, pl.soldier.p.y);
+        say("player%d: %s%s, %s, Leben %.0f, Fahrzeug %d, Position %.0f %.0f", i + 1, clients[i].name, clients[i].bot ? " (Bot)" : "", clients[i].bot ? "hier" : toString(clients[i].addr).c_str(), pl.soldier.hp, pl.vehicle, pl.soldier.p.x, pl.soldier.p.y);
       }
     } else if (cmd == "/restart") {
       duel->restart();
@@ -835,11 +902,12 @@ int main(int argc, char** argv) {
     }
     const double t = now();
     for (int i = 0; i < Duel::kMaxPlayers; i++) {
-      if (clients[i].used && t - clients[i].lastHeard > kTimeout) {
+      if (clients[i].used && !clients[i].bot && t - clients[i].lastHeard > kTimeout) {
         say("Spieler %d: keine Verbindung mehr", i + 1);
         clients[i].used = false;
       }
     }
+    seatBots();
     // Never more than a fifth of a second to catch up: past that, time simply stands still for a moment.
     if (t - wall0 - simTime > 0.2) simTime = t - wall0 - 0.2;
     const auto q0 = Clock::now();
@@ -848,6 +916,10 @@ int main(int argc, char** argv) {
       Duel::Intent in[Duel::kMaxPlayers];
       for (int i = 0; i < Duel::kMaxPlayers; i++) {
         Client& c = clients[i];
+        if (c.used && c.bot) {
+          bots[i].step(*duel, i, in[i]);
+          continue;
+        }
         if (!c.used || !c.haveInput) {
           in[i].c.brake = 1;
           continue;
@@ -916,7 +988,7 @@ int main(int argc, char** argv) {
       say("Match %u: Stand %u : %u", duel->matchId, duel->wins[0], duel->wins[1]);
       pending.clear();
       for (Client& c : clients)
-        if (c.used) {
+        if (c.used && !c.bot) {
           c.toldTanks = shapes->restTanks;
           c.toldCars = shapes->restCars;
           for (size_t i = 0; i < duel->sim.pos.size(); i++) {
@@ -948,7 +1020,7 @@ int main(int argc, char** argv) {
       pending.erase(pending.begin(), pending.begin() + long(nEv));
       for (int i = 0; i < Duel::kMaxPlayers; i++) {
         Client& c = clients[i];
-        if (!c.used) continue;
+        if (!c.used || c.bot) continue;
         sendMeta(c, i);
         if (tick % kSlowEvery == 0) sendSelf(c, i);
         if (tick % u32(kSendRate / 5.0) == 0 && (!chat.empty() || c.chatSeq)) {

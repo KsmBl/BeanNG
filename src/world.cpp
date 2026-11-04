@@ -801,6 +801,8 @@ void World::addCommandCentre(Base& b) {
   b.computer = at - V3{cx, sx, 0} * (kF - 2.6) + V3{0, 0, kYardZ + 1.0};
 }
 
+double World::riverAt(double y) { return riverX(y); }
+
 V3 World::fordPoint(int i) { return V3{riverX(kFords[i]), kFords[i], 0}; }
 
 double World::groundUnder(double x, double y, double z) const {
