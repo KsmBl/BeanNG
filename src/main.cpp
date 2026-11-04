@@ -823,6 +823,18 @@ struct Game {
       ownAhead += clampd(target - ownAhead, -0.7 * dtNow, 0.7 * dtNow);
       return ownSeen * age + ownAhead;
     };
+    double timeOffset = 0;
+    bool haveOffset = false;
+    // The shape of one's own vehicle goes on at its own pace: slightly late, and between two frames, so that pitching,
+    // springs and the turret do not move in steps while position and heading go on with every picture.
+    const auto shapeBetween = [&](const auto& q, double nowHere, size_t& ia, size_t& ib, double& a) {
+      const double at = (nowHere - timeOffset - 1.5 / net::kSendRate) * net::kStepRate;
+      ib = 0;
+      while (ib + 1 < q.size() && double(q[ib].tick) < at) ib++;
+      ia = ib > 0 ? ib - 1 : ib;
+      const double span = double(q[ib].tick) - double(q[ia].tick);
+      a = span > 0 ? clampd((at - double(q[ia].tick)) / span, 0, 1) : 1.0;
+    };
     // For trying things out on one machine: behaves like a bad line, both ways. Each figure holds for one direction:
     // BEANNG_FAKE_LAG and BEANNG_FAKE_JITTER in milliseconds, BEANNG_FAKE_LOSS in percent.
     const auto fakeSetting = [](const char* name) { return getenv(name) ? atof(getenv(name)) : 0.0; };
@@ -914,8 +926,6 @@ struct Game {
     bool freshAnswer = false;
     u32 wins[2] = {};
     float clockNow = 0;
-    double timeOffset = 0;
-    bool haveOffset = false;
     double lastHeard = 0, nextInput = 0, last = clock();
     net::InputMsg out;
     std::string error;
@@ -1608,12 +1618,28 @@ struct Game {
               nextSay = now + 20.0;
             }
           }
-          const size_t n3 = last.offsets.size() / 3;
+          size_t ia = 0, ib = 0;
+          double blend = 1;
+          shapeBetween(q, now, ia, ib, blend);
+          const NetFrame& sa = q[ia];
+          const NetFrame& sb = q[ib];
+          // The shape as it was then, turned to the heading it has now.
+          const double hA = heading(sa);
+          const double shapeTurn = h1 + turn - (hA + std::remainder(heading(sb) - hA, 2.0 * PI) * blend);
+          const double cs = std::cos(shapeTurn), ss = std::sin(shapeTurn);
+          const size_t n3 = sb.offsets.size() / 3;
           for (size_t k = 0; k < n3; k++) {
-            const V3 o{double(last.offsets[k * 3]) / net::kNodeScale, double(last.offsets[k * 3 + 1]) / net::kNodeScale, double(last.offsets[k * 3 + 2]) / net::kNodeScale};
-            sim.pos[first + k] = cog + V3{o.x * c - o.y * sn, o.x * sn + o.y * c, o.z};
+            const V3 oa{double(sa.offsets[k * 3]), double(sa.offsets[k * 3 + 1]), double(sa.offsets[k * 3 + 2])};
+            const V3 ob{double(sb.offsets[k * 3]), double(sb.offsets[k * 3 + 1]), double(sb.offsets[k * 3 + 2])};
+            const V3 o = (oa + (ob - oa) * blend) * (1.0 / net::kNodeScale);
+            sim.pos[first + k] = cog + V3{o.x * cs - o.y * ss, o.x * ss + o.y * cs, o.z};
           }
           t.applyNetState(sim, last.state, dt);
+          // What is aimed with goes where the gun is drawn.
+          const auto ahead = [&](V3 d) { return V3{d.x * c - d.y * sn, d.x * sn + d.y * c, d.z}; };
+          t.muzzle = cog + ahead(last.state.muzzle - last.cog);
+          t.sight = cog + ahead(last.state.sight - last.cog);
+          t.gunDir = ahead(last.state.gunDir);
           continue;
         }
         const V3 cog = fa.cog + (fb.cog - fa.cog) * a;
@@ -1651,9 +1677,18 @@ struct Game {
           const double age = clampd(now - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
           cog = last.cog + vel * (age + ownLookAhead());
           ownTurn = ownTurnFor(Duel::kTanks + k, seen, want, age, dt);
-          const double c2 = std::cos(ownTurn), s2 = std::sin(ownTurn);
-          for (size_t i = 0; i < last.offsets.size() / 3; i++) {
-            const V3 o{double(last.offsets[i * 3]) / net::kNodeScale, double(last.offsets[i * 3 + 1]) / net::kNodeScale, double(last.offsets[i * 3 + 2]) / net::kNodeScale};
+          size_t ia = 0, ib = 0;
+          double blend = 1;
+          shapeBetween(q, now, ia, ib, blend);
+          const CarFrame& sa = q[ia];
+          const CarFrame& sb = q[ib];
+          const double hA = std::atan2(sa.fwd.y, sa.fwd.x);
+          const double shapeTurn = std::atan2(last.fwd.y, last.fwd.x) + ownTurn - (hA + std::remainder(std::atan2(sb.fwd.y, sb.fwd.x) - hA, 2.0 * PI) * blend);
+          const double c2 = std::cos(shapeTurn), s2 = std::sin(shapeTurn);
+          for (size_t i = 0; i < sb.offsets.size() / 3; i++) {
+            const V3 oa{double(sa.offsets[i * 3]), double(sa.offsets[i * 3 + 1]), double(sa.offsets[i * 3 + 2])};
+            const V3 ob{double(sb.offsets[i * 3]), double(sb.offsets[i * 3 + 1]), double(sb.offsets[i * 3 + 2])};
+            const V3 o = (oa + (ob - oa) * blend) * (1.0 / net::kNodeScale);
             sim.pos[first + i] = cog + V3{o.x * c2 - o.y * s2, o.x * s2 + o.y * c2, o.z};
           }
         } else {
