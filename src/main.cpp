@@ -769,6 +769,17 @@ struct Game {
     } shown[Duel::kCars];
     // Walking answers at once, and is checked against the server's answer afterwards.
     Soldier shownSoldier[Duel::kMaxPlayers];
+    // The others on foot, a little late like the vehicles: between two things the server has said, not the last of them.
+    // That is also the moment the server looks at when it judges a shot at them.
+    struct SoldierFrame {
+      u32 tick = 0;
+      Soldier s;
+      int vehicle = -1;
+    };
+    std::deque<SoldierFrame> soldierPast[Duel::kMaxPlayers];
+    Soldier drawnSoldier[Duel::kMaxPlayers];
+    int drawnVehicle[Duel::kMaxPlayers];
+    for (int& v : drawnVehicle) v = -1;
     struct Past {
       u32 seq;
       V3 p;
@@ -868,6 +879,8 @@ struct Game {
     int carWatched = -1;
     u32 ackedInput = 0;
     double serverStats[3] = {0, 1, 0};  // load, speed against real time, objects awake
+    V3 logFoeAt, logFoeStep;
+    double logFoeJerk = 0;
     double logWalkErr = 0, logMetaAt = 0, logMetaGap = 0, logLoopGap = 0, logLoopAt = 0, logNext = 0;
     int logMetas = 0, logPackets = 0;
     size_t logBytes = 0;
@@ -905,6 +918,7 @@ struct Game {
       for (CarShown& c : shown) c = CarShown{};
       me = duel.players[mySlot].soldier;
       past.clear();
+      for (auto& q : soldierPast) q.clear();
       blastsDone = 0;
       metaTick = 0;
       vehicleNow = -1;
@@ -1271,6 +1285,11 @@ struct Game {
           r.get(count);
           if (!r.ok()) continue;
           metaTick = tick;
+          for (int i = 0; i < Duel::kMaxPlayers; i++) {
+            if (!(mask & (1 << i))) continue;
+            soldierPast[i].push_back({tick, shownSoldier[i], vehicles[i]});
+            while (soldierPast[i].size() > 96) soldierPast[i].pop_front();
+          }
           phaseNow = ph;
           winner = win;
           clockNow = pc;
@@ -1572,6 +1591,46 @@ struct Game {
       }
       duel.updateFrames();
 
+      for (int i = 0; i < Duel::kMaxPlayers; i++) {
+        const auto& q = soldierPast[i];
+        if (q.empty()) {
+          drawnSoldier[i] = shownSoldier[i];
+          drawnVehicle[i] = duel.players[i].vehicle;
+          continue;
+        }
+        size_t b = 0;
+        while (b + 1 < q.size() && double(q[b].tick) < viewTime) b++;
+        const SoldierFrame& fb = q[b];
+        const SoldierFrame& fa = b > 0 ? q[b - 1] : fb;
+        const double span = double(fb.tick) - double(fa.tick);
+        const double a = span > 0 ? clampd((viewTime - double(fa.tick)) / span, 0, 1) : 1.0;
+        Soldier s = fb.s;
+        // Someone who has just got out of a vehicle or come back to life has not gone there on foot.
+        if (fa.vehicle == fb.vehicle && len(fb.s.p - fa.s.p) < 5.0) {
+          s.p = fa.s.p + (fb.s.p - fa.s.p) * a;
+          s.v = fa.s.v + (fb.s.v - fa.s.v) * a;
+          s.yaw = fa.s.yaw + std::remainder(fb.s.yaw - fa.s.yaw, 2.0 * PI) * a;
+          s.pitch = lerpd(fa.s.pitch, fb.s.pitch, a);
+          s.stride = lerpd(fa.s.stride, fb.s.stride, a);
+          s.prone = lerpd(fa.s.prone, fb.s.prone, a);
+        }
+        drawnSoldier[i] = s;
+        drawnVehicle[i] = a >= 1.0 ? fb.vehicle : fa.vehicle;
+      }
+
+      if (gPlayLog) {
+        // How evenly the other player moves on this screen: 0 would be perfectly smooth.
+        for (int k = 0; k < Duel::kMaxPlayers; k++) {
+          if (k == mySlot || !duel.players[k].present) continue;
+          const V3 at = drawnVehicle[k] >= 0 ? duel.frames[drawnVehicle[k]].cog : drawnSoldier[k].p;
+          const V3 step = (at - logFoeAt) / dt;
+          if (len(at - logFoeAt) < 3.0) logFoeJerk = std::max(logFoeJerk, len(step - logFoeStep) * dt);
+          logFoeAt = at;
+          logFoeStep = step;
+          break;
+        }
+      }
+
       // On foot one's own legs answer at once.
       duel.players[mySlot].vehicle = vehicleNow;
       const bool playingNow = (state == NET_IN || replaying) && (phaseNow == Duel::PLAYING || phaseNow == Duel::CHOOSING || phaseNow == Duel::FINISHED);
@@ -1638,8 +1697,8 @@ struct Game {
         sightFrames.assign(duel.frames, duel.frames + Duel::kVehicles);
         sightFoes.clear();
         for (int k = 0; k < Duel::kMaxPlayers; k++) {
-          if (Duel::teamOf(k) == Duel::teamOf(mySlot) || duel.players[k].vehicle >= 0 || shownSoldier[k].hp <= 0) continue;
-          sightFoes.push_back({shownSoldier[k].p, shownSoldier[k].prone > 0.5 ? 0.6 : Soldier::kHeight});
+          if (Duel::teamOf(k) == Duel::teamOf(mySlot) || drawnVehicle[k] >= 0 || drawnSoldier[k].hp <= 0) continue;
+          sightFoes.push_back({drawnSoldier[k].p, drawnSoldier[k].prone > 0.5 ? 0.6 : Soldier::kHeight});
         }
         snap.foot.launcher = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? duel.tanks[vehicleNow].smokeCharges : 0;
       }
@@ -1664,17 +1723,18 @@ struct Game {
         for (int k = 0; k < 2; k++)
           for (int i = used[k]; i < limit[k]; i++) Duel::poseMissile(sim, duel.rocketFirst[base[k] + i], false, V3{}, V3{1, 0, 0}, scale[k]);
       }
-      // The soldiers drawn: oneself where one thinks one is, the others as the server last said.
+      // The soldiers drawn: oneself where one thinks one is, the others a moment ago, as the vehicles are.
       for (int i = 0; i < Duel::kMaxPlayers; i++) {
         // Through the scope one's own head would be in the way.
         // Someone who has died on foot falls as a body from then on.
         if (!duel.players[i].present) {
-          Duel::poseSoldier(sim, duel.soldierFirst[i], shownSoldier[i], true, 0);
+          Duel::poseSoldier(sim, duel.soldierFirst[i], drawnSoldier[i], true, 0);
           continue;
         }
-        const bool deadOnFoot = (state == NET_IN || replaying) && duel.players[i].soldier.hp <= 0 && duel.players[i].vehicle < 0;
+        const bool isMe = i == mySlot && !replaying;
+        const bool deadOnFoot = (state == NET_IN || replaying) && (isMe ? duel.players[i].soldier.hp <= 0 && duel.players[i].vehicle < 0 : drawnSoldier[i].hp <= 0 && drawnVehicle[i] < 0);
         if (deadOnFoot && !bodies[i].on) {
-          Soldier last = i == mySlot ? me : shownSoldier[i];
+          Soldier last = isMe ? me : drawnSoldier[i];
           Duel::ragdollStart(bodies[i], last, i == mySlot ? in.weapon : weaponShown[i], blowShown[i]);
         }
         if (bodies[i].on) {
@@ -1697,8 +1757,8 @@ struct Game {
           }
           continue;
         }
-        const bool hidden = (state != NET_IN && !replaying) || !playingNow || duel.players[i].vehicle >= 0 || (i == mySlot && !replaying && in.scoped);
-        Duel::poseSoldier(sim, duel.soldierFirst[i], i == mySlot ? me : shownSoldier[i], hidden, i == mySlot && !replaying ? in.weapon : weaponShown[i], i == mySlot && !replaying && in.aiming && !in.scoped, ghillieShown[i]);
+        const bool hidden = (state != NET_IN && !replaying) || !playingNow || (isMe ? duel.players[i].vehicle >= 0 : drawnVehicle[i] >= 0) || (isMe && in.scoped);
+        Duel::poseSoldier(sim, duel.soldierFirst[i], isMe ? me : drawnSoldier[i], hidden, i == mySlot && !replaying ? in.weapon : weaponShown[i], i == mySlot && !replaying && in.aiming && !in.scoped, ghillieShown[i]);
       }
 
       if (state == NET_IN && now >= nextInput && sock) {
@@ -1734,9 +1794,9 @@ struct Game {
               nearest = std::min(nearest, len(them - mine));
             }
             const int awake = int(duel.sim.active.size());
-            fprintf(gPlayLog, "t %.0f netz slot %d phase %d fz %d pos %.0f %.0f gegner %.0f m rtt %.0f ms metas %d luecke %.0f ms eingabepause %.0f ms laufkorrektur %.2f m pakete %d kB %.0f aktiv %d\n", now, mySlot, phaseNow, vehicleNow, mine.x, mine.y, nearest, rtt * 1000.0, logMetas, logMetaGap * 1000.0, logLoopGap * 1000.0, logWalkErr, logPackets, double(logBytes) / 1024.0, awake);
+            fprintf(gPlayLog, "t %.0f netz slot %d phase %d fz %d pos %.0f %.0f gegner %.0f m rtt %.0f ms metas %d luecke %.0f ms eingabepause %.0f ms laufkorrektur %.2f m gegner-ruck %.1f mm pakete %d kB %.0f aktiv %d\n", now, mySlot, phaseNow, vehicleNow, mine.x, mine.y, nearest, rtt * 1000.0, logMetas, logMetaGap * 1000.0, logLoopGap * 1000.0, logWalkErr, logFoeJerk * 1000.0, logPackets, double(logBytes) / 1024.0, awake);
             fflush(gPlayLog);
-            logWalkErr = logMetaGap = logLoopGap = 0;
+            logWalkErr = logMetaGap = logLoopGap = logFoeJerk = 0;
             logMetas = logPackets = 0;
             logBytes = 0;
             logNext = now + 1.0;
