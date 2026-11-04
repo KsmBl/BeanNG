@@ -806,22 +806,35 @@ struct Game {
     // How long a question takes to come back: from when an input went out to when the server says it has used it.
     std::deque<std::pair<u32, double>> sentAt;
     double rtt = 0.05;
-    // One's own vehicle, shown ahead of what the server last said. Carrying on as it is going is safe; guessing at what
-    // the steering is about to do is eased in, for a sudden change of the guess would be a sudden jump of the tank.
-    double ownAhead = 0, ownSeen = 0;
-    int ownFor = -1;
-    // Half a round trip, as far as guessing is any use at all.
-    const auto ownLookAhead = [&] { return clampd(rtt * 0.5, 0.0, 0.15); };
-    const auto ownTurnFor = [&](int who, double seen, double want, double age, double dtNow) {
-      if (who != ownFor) {
-        ownFor = who;
-        ownAhead = 0;
-        ownSeen = seen;
+    // One's own vehicle, shown ahead of what the server last said: where it will be by the time one's latest input has
+    // arrived. It runs on by itself, turned by the steering at once, and is drawn towards that place all the time
+    // instead of being put there: the server's word moves it no more than a little with any one packet.
+    struct OwnShown {
+      int who = -1;
+      V3 p;
+      double heading = 0, seenTurn = 0;
+    } own;
+    const auto ownLookAhead = [&] { return clampd(rtt, 0.0, 0.2); };
+    // Returns how far the heading on the screen is ahead of the last frame's, and leaves own.p where to draw it.
+    const auto ownPredict = [&](int who, V3 lastCog, V3 vel, double lastHeading, double seen, double want, double age, double dtNow) {
+      const double ahead = age + ownLookAhead();
+      own.seenTurn = who == own.who ? own.seenTurn + (seen - own.seenTurn) * clampd(dtNow * 12.0, 0.0, 1.0) : seen;
+      const V3 target = lastCog + vel * ahead;
+      const double targetHeading = lastHeading + own.seenTurn * ahead;
+      if (who != own.who || len(target - own.p) > 6.0) {
+        own.who = who;
+        own.p = target;
+        own.heading = targetHeading;
       }
-      ownSeen += (seen - ownSeen) * clampd(dtNow * 12.0, 0.0, 1.0);
-      const double target = lerpd(ownSeen, want, 0.7) * ownLookAhead();
-      ownAhead += clampd(target - ownAhead, -0.7 * dtNow, 0.7 * dtNow);
-      return ownSeen * age + ownAhead;
+      // The longer the way to the server, the more the steering is taken on trust; on a short line the server's own
+      // answer is nearly here already.
+      const double trust = 0.7 * clampd(ownLookAhead() / 0.1, 0.0, 1.0);
+      own.heading += lerpd(own.seenTurn, want, trust) * dtNow;
+      const double headingError = std::remainder(targetHeading - own.heading, 2.0 * PI);
+      own.heading += headingError * (1.0 - std::exp(-dtNow * 6.0));
+      own.p += vel * dtNow;
+      own.p += (target - own.p) * (1.0 - std::exp(-dtNow * 10.0));
+      return std::remainder(own.heading - lastHeading, 2.0 * PI);
     };
     double timeOffset = 0;
     bool haveOffset = false;
@@ -1608,13 +1621,13 @@ struct Game {
           // How old the frame is against the server's steady clock, not when this one happened to come in: a packet held
           // up on the way must not move the tank, and the whole world around the camera with it.
           const double age = clampd(now - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
-          const double turn = ownTurnFor(side, seen, want, age, dt);
+          const double turn = ownPredict(side, last.cog, vel, h1, seen, want, age, dt);
           const double c = std::cos(turn), sn = std::sin(turn);
-          const V3 cog = last.cog + vel * (age + ownLookAhead());
+          const V3 cog = own.p;
           if (scriptMode == 63) {
             static double nextSay = 0;
             if (now > nextSay) {
-              printf("Laufzeit %.0f ms, Rahmenalter %.0f ms, Vorlauf Kurs %.2f Grad\n", rtt * 1000.0, age * 1000.0, ownAhead * 180.0 / PI);
+              printf("Laufzeit %.0f ms, Rahmenalter %.0f ms, Vorlauf Kurs %.2f Grad\n", rtt * 1000.0, age * 1000.0, turn * 180.0 / PI);
               nextSay = now + 20.0;
             }
           }
@@ -1675,8 +1688,8 @@ struct Game {
           const double seen = std::remainder(std::atan2(last.fwd.y, last.fwd.x) - std::atan2(before.fwd.y, before.fwd.x), 2.0 * PI) * (net::kStepRate / ticks);
           const double want = double(in.c.steer) * 0.45 * last.speed / 2.7;  // the bicycle model, with the lock it has
           const double age = clampd(now - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
-          cog = last.cog + vel * (age + ownLookAhead());
-          ownTurn = ownTurnFor(Duel::kTanks + k, seen, want, age, dt);
+          ownTurn = ownPredict(Duel::kTanks + k, last.cog, vel, std::atan2(last.fwd.y, last.fwd.x), seen, want, age, dt);
+          cog = own.p;
           size_t ia = 0, ib = 0;
           double blend = 1;
           shapeBetween(q, now, ia, ib, blend);
