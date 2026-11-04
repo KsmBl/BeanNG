@@ -261,6 +261,13 @@ class Duel {
   void updateFrames();
   // weapon: 0 knife, 1 pistol, 2 assault rifle, 3 big rifle, 4 rocket launcher
   // sightsOnly: looking along one's own weapon. No body in the way, just the gun held up under the eye.
+  // Where a line of sight ends, in what a bullet would stop at: the world, stones, vehicles and enemies on foot.
+  struct AimFoe {
+    V3 p;
+    double height;
+  };
+  static V3 aimEnd(const World& world, const std::vector<V3>& pos, const std::vector<Block>& blocks, const VehicleFrame* frames, int vehicles, int skipVehicle,
+                   const std::vector<AimFoe>& foes, V3 from, V3 dir, double clear);
   static void poseSoldier(Sim& sim, u32 first, const Soldier& s, bool hidden, int weapon, bool sightsOnly = false, bool ghillie = false);
   V3 vehicleExit(int v) const;
   static void ragdollStart(Ragdoll& r, const Soldier& s, int weapon, V3 push);

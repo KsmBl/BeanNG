@@ -884,6 +884,63 @@ int Duel::enemyNearest(int p, V3 from) const {
   return best;
 }
 
+V3 Duel::aimEnd(const World& world, const std::vector<V3>& pos, const std::vector<Block>& blocks, const VehicleFrame* frames, int vehicles, int skipVehicle,
+                 const std::vector<AimFoe>& foes, V3 from, V3 dir, double clear) {
+  constexpr double kFar = 1800.0;
+  double end = kFar;
+  for (int v = 0; v < vehicles; v++) {
+    if (v == skipVehicle) continue;
+    const VehicleFrame& f = frames[v];
+    const V3 q = from - f.cog;
+    const V3 ax[3] = {f.fwd, f.left, f.up};
+    const double half[3] = {f.halfLength, f.halfWidth, f.height};
+    double in = -1e30, out = 1e30;
+    for (int k = 0; k < 3; k++) {
+      const double o = dot(q, ax[k]), d = dot(dir, ax[k]);
+      if (std::fabs(d) < 1e-9) {
+        if (std::fabs(o) > half[k]) in = 1e30;
+        continue;
+      }
+      const double a = (-half[k] - o) / d, b = (half[k] - o) / d;
+      in = std::max(in, std::min(a, b));
+      out = std::min(out, std::max(a, b));
+    }
+    if (in > out || out < clear) continue;
+    end = std::min(end, std::max(in, clear));
+  }
+  for (const AimFoe& foe : foes) {
+    const double h2 = dir.x * dir.x + dir.y * dir.y;
+    if (h2 < 1e-9) continue;
+    const double t = ((foe.p.x - from.x) * dir.x + (foe.p.y - from.y) * dir.y) / h2;
+    if (t < clear || t > end) continue;
+    const V3 at = from + dir * t;
+    if (std::hypot(at.x - foe.p.x, at.y - foe.p.y) < 0.38 && at.z > foe.p.z && at.z < foe.p.z + foe.height) end = t;
+  }
+  // The stones near the line, once, so that going along it asks only those.
+  std::vector<const Block*> near;
+  for (const Block& b : blocks) {
+    if (size_t(b.n[0]) >= pos.size()) continue;
+    const V3 a = pos[b.n[0]] - from;
+    const double t = dot(a, dir);
+    if (t > -6.0 && t < end + 6.0 && len2(a - dir * t) < 36.0) near.push_back(&b);
+  }
+  // Finely close by, where it matters; further off a bullet is not going to notice.
+  double d = clear;
+  while (d < end) {
+    const V3 p = from + dir * d;
+    Contact c;
+    if (world.contact(p, c)) return p;
+    for (const Block* b : near) {
+      const V3 a = pos[b->n[0]];
+      const V3 ex = pos[b->n[1]] - a, ey = pos[b->n[2]] - a, ez = pos[b->n[4]] - a, q = p - a;
+      const double lx = dot(q, ex) / len2(ex), ly = dot(q, ey) / len2(ey), lz = dot(q, ez) / len2(ez);
+      if (lx >= 0 && lx <= 1 && ly >= 0 && ly <= 1 && lz >= 0 && lz <= 1) return p;
+    }
+    d += d < 100.0 ? 0.1 : (d < 400.0 ? 1.0 : 3.0);
+  }
+  return from + dir * end;
+}
+
 void Duel::fireWeapon(int p, const Intent& in) {
   Player& pl = players[p];
   const int w = pl.weapon;

@@ -527,6 +527,9 @@ struct Game {
   SharedInput input;
   std::mutex snapMutex;
   Snapshot snap;
+  // What a line of sight can end on, for the window's thread.
+  std::vector<VehicleFrame> sightFrames;
+  std::vector<Duel::AimFoe> sightFoes;
   std::atomic<bool> running{true};
   std::atomic<bool> resetVisuals{false};
   // Every picture asks for its own moment: where things are is worked out just then, not some milliseconds before.
@@ -1594,6 +1597,12 @@ struct Game {
         snap.foot.droneBattery = droneShown[mySlot].battery;
         snap.foot.drones = duel.players[mySlot].drones;
         snap.foot.medkits = duel.players[mySlot].medkits;
+        sightFrames.assign(duel.frames, duel.frames + Duel::kVehicles);
+        sightFoes.clear();
+        for (int k = 0; k < Duel::kMaxPlayers; k++) {
+          if (Duel::teamOf(k) == Duel::teamOf(mySlot) || duel.players[k].vehicle >= 0 || shownSoldier[k].hp <= 0) continue;
+          sightFoes.push_back({shownSoldier[k].p, shownSoldier[k].prone > 0.5 ? 0.6 : Soldier::kHeight});
+        }
         snap.foot.launcher = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? duel.tanks[vehicleNow].smokeCharges : 0;
       }
       // A guided missile is a real thing to look at, for whoever is flying it and whoever it comes for.
@@ -2059,6 +2068,8 @@ static void runGame() {
   bool mapOpen = false;
   bool hasMark = false;
   V3 markPoint;
+  std::vector<VehicleFrame> aimFrames;
+  std::vector<Duel::AimFoe> aimFoes;
   double figureOff = 0;  // for a test: the drawn figure's bearing against the camera's, in degrees
   bool strikePending = false;  // a strike code chosen: the next click on the map says where
   // The controller's part of all that.
@@ -3351,13 +3362,9 @@ static void runGame() {
         const V3 f = norm(cam.target - cam.eye);
         // From beyond whatever one is sitting in, or just past one's own shoulder.
         const double clear = onFoot ? 2.6 : 14.0;
-        V3 p = cam.eye + f * clear;
-        for (double d = clear; d < 1800.0; d += 3.0) {
-          Contact con;
-          if (G.world.contact(p, con)) break;
-          p += f * 3.0;
-        }
-        c.aimPoint = p;
+        // Exactly what the crosshair lies on: the shot starts from elsewhere than the camera, so close by it only goes
+        // to the right place if that place is known.
+        c.aimPoint = Duel::aimEnd(G.world, view.pos, G.simStart.blocks, aimFrames.data(), int(aimFrames.size()), myVehicle, aimFoes, cam.eye, f, clear);
         // Through the scope it goes exactly where the scope points. Drop and wind are the shooter's business.
         // Except that it is set for a range: the barrel points up by what the bullet will fall on the way there.
         if (scoped) {
@@ -3462,6 +3469,8 @@ static void runGame() {
       view.tankTracks = G.snap.tankTracks;
       view.groundMarks = G.snap.groundMarks;
       view.selfInstance = G.snap.selfInstance;
+      aimFrames = G.sightFrames;
+      aimFoes = G.sightFoes;
       view.selfOnFoot = G.snap.selfOnFoot;
       view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
