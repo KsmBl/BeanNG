@@ -17,6 +17,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "audio.h"
 #include "duel.h"
@@ -848,8 +849,24 @@ struct Game {
       u8 what;
       V3 p, v;
     };
-    std::vector<RocketSeen> rocketsSeen;
-    double rocketsAt = 0;
+    struct RocketsThen {
+      u32 tick = 0;
+      std::vector<RocketSeen> list;
+    };
+    std::deque<RocketsThen> rocketPast;
+    // What happens in the world waits for the moment on the screen. Told at once, a tank's muzzle flash would hang in
+    // front of its gun and a blast go off before the thing that caused it had got there.
+    struct Later {
+      u32 tick = 0;
+      enum What : u8 { BLAST, EVENT, NODE } what = EVENT;
+      u8 kind = 0;
+      u32 node = 0;
+      V3 p, v;
+      float a = 0, b = 0, c = 0;
+    };
+    std::deque<Later> later;
+    // Scenery comes thirty times a second at most, so it slides from one word to the next.
+    std::unordered_map<u32, V3> sliding;
     // A line of chat is sent again and again until the server's log says it has it.
     std::string saying;
     u32 chatSeq = 0, chatAcked = 0;
@@ -919,6 +936,9 @@ struct Game {
       me = duel.players[mySlot].soldier;
       past.clear();
       for (auto& q : soldierPast) q.clear();
+      later.clear();
+      sliding.clear();
+      rocketPast.clear();
       blastsDone = 0;
       metaTick = 0;
       vehicleNow = -1;
@@ -1319,21 +1339,29 @@ struct Game {
             r.get(hole);
             if (!r.ok()) break;
             if (i == blastsDone) {
-              sim.explode(c, impulse, radius, hole);
+              Later blast;
+              blast.tick = tick;
+              blast.what = Later::BLAST;
+              blast.p = c;
+              blast.a = impulse;
+              blast.b = radius;
+              blast.c = hole;
+              later.push_back(blast);
               blastsDone++;
             }
           }
           u8 rockets = 0;
           r.get(rockets);
-          rocketsSeen.clear();
+          RocketsThen rocketsNow;
+          rocketsNow.tick = tick;
           for (int i = 0; i < rockets; i++) {
             u8 what = 0;
             r.get(what);
             const V3 p = r.getV3();
             const V3 v = r.getV3();
-            if (r.ok()) rocketsSeen.push_back({what, p, v});
+            if (r.ok()) rocketsNow.list.push_back({what, p, v});
           }
-          rocketsAt = now;
+          if (!rocketsNow.list.empty() || (!rocketPast.empty() && !rocketPast.back().list.empty())) rocketPast.push_back(std::move(rocketsNow));
           u8 nEv = 0;
           r.get(nEv);
           for (int i = 0; i < nEv; i++) {
@@ -1344,7 +1372,13 @@ struct Game {
             r.get(strength);
             r.get(evKind);
             if (!r.ok() || evKind > EV_SMOKE) break;
-            sim.event(EventKind(evKind), p, v, strength);
+            Later ev;
+            ev.tick = tick;
+            ev.kind = evKind;
+            ev.p = p;
+            ev.v = v;
+            ev.a = strength;
+            later.push_back(ev);
           }
         } else if (kind == net::P_CHATLOG) {
           u32 ack = 0, from = 0;
@@ -1442,7 +1476,13 @@ struct Game {
             r.get(k);
             const V3 p = r.getV3();
             if (!r.ok()) break;
-            if (k >= sim.firstSceneryNode && k < sim.pos.size()) sim.pos[k] = p;
+            if (k < sim.firstSceneryNode || k >= sim.pos.size()) continue;
+            Later moved;
+            moved.tick = tick;
+            moved.what = Later::NODE;
+            moved.node = k;
+            moved.p = p;
+            later.push_back(moved);
           }
         }
       }
@@ -1452,6 +1492,24 @@ struct Game {
       const double viewTime = ((replaying ? replayNow : now) - timeOffset - kViewDelay) * net::kStepRate;
       // The moment on the screen, for the server to judge by.
       const u32 viewTick = u32(std::max(viewTime, 0.0));
+      while (!later.empty() && double(later.front().tick) <= viewTime) {
+        const Later& l = later.front();
+        if (l.what == Later::BLAST) sim.explode(l.p, l.a, l.b, l.c);
+        else if (l.what == Later::EVENT) sim.event(EventKind(l.kind), l.p, l.v, l.a);
+        else if (len2(sim.pos[l.node] - l.p) > 8.0 * 8.0) sim.pos[l.node] = l.p;
+        else sliding[l.node] = l.p;
+        later.pop_front();
+      }
+      for (auto it = sliding.begin(); it != sliding.end();) {
+        V3& at = sim.pos[it->first];
+        at += (it->second - at) * clampd(dt * 30.0, 0, 1);
+        if (len2(it->second - at) < 1e-6) {
+          at = it->second;
+          it = sliding.erase(it);
+        } else {
+          ++it;
+        }
+      }
       for (int side = 0; side < Duel::kTanks; side++) {
         const auto& q = frames[side];
         if (q.empty()) continue;
@@ -1709,14 +1767,17 @@ struct Game {
           Duel::poseMissile(sim, duel.missileFirst[side * HK_COUNT + hull], launcher.missileLive, launcher.missileP, launcher.missileV);
         }
       }
-      // And rockets, carried on from where they were last heard of. A tenth of a second late, like everything.
+      // And rockets, carried on from where they were at the moment on the screen.
       {
+        while (rocketPast.size() > 1 && double(rocketPast[1].tick) <= viewTime) rocketPast.pop_front();
         int used[2] = {0, 0};
         const int limit[2] = {Duel::kRpgRockets, Duel::kStrikeRockets};
         const int base[2] = {0, Duel::kRpgRockets};
         const double scale[2] = {Duel::kRpgScale, Duel::kStrikeScale};
-        const double ahead = std::clamp(now - rocketsAt, 0.0, 0.1);
-        for (const RocketSeen& rs : rocketsSeen) {
+        const bool rocketsDue = !rocketPast.empty() && double(rocketPast.front().tick) <= viewTime;
+        const double ahead = rocketsDue ? std::clamp((viewTime - double(rocketPast.front().tick)) / net::kStepRate, 0.0, 0.1) : 0.0;
+        static const std::vector<RocketSeen> kNoRockets;
+        for (const RocketSeen& rs : rocketsDue ? rocketPast.front().list : kNoRockets) {
           const int k = rs.what ? 1 : 0;
           if (used[k] < limit[k]) Duel::poseMissile(sim, duel.rocketFirst[base[k] + used[k]++], true, rs.p + rs.v * ahead, rs.v, scale[k]);
         }
