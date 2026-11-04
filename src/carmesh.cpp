@@ -1,3 +1,4 @@
+#include "asset.h"
 #include "carmesh.h"
 #include <algorithm>
 #include <cstdio>
@@ -35,12 +36,11 @@ bool solve4(double A[4][4], double s[4]) {
 }  // namespace
 
 bool CarMesh::load(const std::string& path) {
-  FILE* f = fopen(path.c_str(), "rb");
+  AssetFile f(path.c_str());
   if (!f) return false;
   char magic[4];
   u32 count = 0;
-  if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "XMSH", 4) != 0 || fread(&count, 4, 1, f) != 1) {
-    fclose(f);
+  if (f.read(magic, 1, 4) != 4 || memcmp(magic, "XMSH", 4) != 0 || f.read(&count, 4, 1) != 1) {
     return false;
   }
   parts.clear();
@@ -50,8 +50,7 @@ bool CarMesh::load(const std::string& path) {
   for (u32 i = 0; i < count; i++) {
     char name[41] = {}, group[25] = {};
     u32 hdr[3];
-    if (fread(name, 1, 40, f) != 40 || fread(group, 1, 24, f) != 24 || fread(hdr, 4, 3, f) != 3) {
-      fclose(f);
+    if (f.read(name, 1, 40) != 40 || f.read(group, 1, 24) != 24 || f.read(hdr, 4, 3) != 3) {
       return false;
     }
     MeshPart p;
@@ -66,17 +65,15 @@ bool CarMesh::load(const std::string& path) {
     restPos.resize(vOld + size_t(hdr[1]) * 3);
     restNormal.resize(vOld + size_t(hdr[1]) * 3);
     tris.resize(tOld + size_t(hdr[2]) * 3);
-    bool ok = fread(&restPos[vOld], 12, hdr[1], f) == hdr[1];
-    ok = ok && fread(&restNormal[vOld], 12, hdr[1], f) == hdr[1];
-    ok = ok && fread(&tris[tOld], 12, hdr[2], f) == hdr[2];
+    bool ok = f.read(&restPos[vOld], 12, hdr[1]) == hdr[1];
+    ok = ok && f.read(&restNormal[vOld], 12, hdr[1]) == hdr[1];
+    ok = ok && f.read(&tris[tOld], 12, hdr[2]) == hdr[2];
     if (!ok) {
-      fclose(f);
       return false;
     }
     for (size_t k = tOld; k < tris.size(); k++) tris[k] += p.firstVert;
     parts.push_back(std::move(p));
   }
-  fclose(f);
 
   restEdge2.resize(tris.size());
   auto vpos = [&](u32 v) { return V3{restPos[v * 3], restPos[v * 3 + 1], restPos[v * 3 + 2]}; };

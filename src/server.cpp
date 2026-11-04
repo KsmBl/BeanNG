@@ -6,13 +6,19 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
-#include <termios.h>
 #include <thread>
+#ifdef _WIN32
+#include <conio.h>
+#include <io.h>
+#else
+#include <termios.h>
 #include <unistd.h>
+#endif
 #include <functional>
 #include <string>
 #include <vector>
 #include "duel.h"
+#include "platform.h"
 #include "duelnet.h"
 #include "shape.h"
 
@@ -25,6 +31,10 @@ namespace {
 class Shell {
  public:
   void start() {
+#ifdef _WIN32
+    interactive_ = _isatty(_fileno(stdin));
+    if (!interactive_) return;
+#else
     interactive_ = isatty(STDIN_FILENO);
     if (!interactive_) return;
     tcgetattr(STDIN_FILENO, &saved_);
@@ -33,13 +43,16 @@ class Shell {
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+#endif
     active_ = true;
     redraw();
   }
   void stop() {
     if (!active_) return;
     active_ = false;
+#ifndef _WIN32
     tcsetattr(STDIN_FILENO, TCSANOW, &saved_);
+#endif
     fputs("\r\033[K", stdout);
     fflush(stdout);
   }
@@ -54,7 +67,7 @@ class Shell {
   bool poll(std::string& out) {
     if (!active_) return false;
     char c;
-    while (read(STDIN_FILENO, &c, 1) == 1) {
+    while (nextKey(c)) {
       if (escape_ == 1) {
         escape_ = c == '[' ? 2 : 0;
         continue;
@@ -98,6 +111,23 @@ class Shell {
   }
 
  private:
+#ifdef _WIN32
+  // The arrow keys come as two values there. Made to look like what a terminal sends.
+  bool nextKey(char& c) {
+    if (!_kbhit()) return false;
+    const int key = _getch();
+    if (key == 0 || key == 224) {
+      const int code = _getch();
+      escape_ = 2;
+      c = code == 72 ? 'A' : (code == 80 ? 'B' : '?');
+      return true;
+    }
+    c = char(key);
+    return true;
+  }
+#else
+  bool nextKey(char& c) { return ::read(STDIN_FILENO, &c, 1) == 1; }
+#endif
   void redraw() {
     if (!active_) {
       fflush(stdout);
@@ -146,7 +176,9 @@ class Shell {
     redraw();
   }
   bool interactive_ = false, active_ = false;
+#ifndef _WIN32
   termios saved_{};
+#endif
   std::string line_;
   std::vector<std::string> past_;
   int history_ = 0;
@@ -187,16 +219,20 @@ struct Client {
 // --log: once a second what the server is doing.
 static FILE* playLog = nullptr;
 
+#ifdef BEANNG_ONE_PROGRAM
+int serverMain(int argc, char** argv) {
+#else
 int main(int argc, char** argv) {
+#endif
+  platformStart();
   int port = kDefaultPort;
   bool giveAll = false;
   int wanted = 2;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--log")) {
-      char path[64];
-      snprintf(path, sizeof path, "/tmp/beanng-server-%d.log", int(getpid()));
-      playLog = fopen(path, "w");
-      printf("Log: %s\n", path);
+      const std::string path = tempPath("beanng-server");
+      playLog = fopen(path.c_str(), "w");
+      printf("Log: %s\n", path.c_str());
     } else if (!strcmp(argv[i], "--give-all")) giveAll = true;  // every weapon from the start, for trying things out
     else if (!strcmp(argv[i], "--players") && i + 1 < argc) wanted = std::clamp(atoi(argv[++i]) / 2 * 2, 2, int(Duel::kMaxPlayers));  // 2, 4 or 6, half to a side
     else port = atoi(argv[i]);

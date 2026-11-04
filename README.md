@@ -21,6 +21,14 @@ Auf Laptops mit zwei GPUs nutzt das Spiel automatisch die dedizierte Karte. Mit 
 
 Abhängigkeiten: SDL3, libepoxy, CMake, ein C++20-Compiler, Python 3 mit numpy, scipy und shapely.
 
+### Windows
+
+    ./build-windows.sh
+
+Baut unter Linux mit MinGW-w64 alles in eine einzige Datei, `dist/BeanNG.exe`: Spiel, Server und Modelle. Es muss nichts dazu installiert werden, die Datei läuft ab Windows 10. Das Skript braucht `mingw-w64-gcc`, `cmake`, `ninja`, `meson`, `python` und `curl`, und lädt SDL3 und libepoxy beim ersten Mal selbst herunter. Einstellungen landen im Ordner, aus dem das Spiel gestartet wird.
+
+Der Server steckt in derselben Datei: `BeanNG.exe --server 27015`, mit denselben Optionen wie `beanng-server`. Windows- und Linux-Spieler können zusammen spielen. Die Windows-Version kommt ohne AVX aus und läuft damit auch auf älteren Rechnern.
+
 ## Online-Duell
 
 Zwei bis sechs Spieler auf einer eigenen Karte: je eine Basis im Westen und im Osten, dazwischen Dörfer, Hügel, Wälder, ein Fluss mit drei Brücken und zwei hohe Sperrmauern, über die nur die Artillerie schießen kann. Die Physik läuft allein auf dem Server, die Spieler schicken nur ihre Eingaben.
@@ -144,6 +152,7 @@ In den Spiel-Einstellungen lassen sich die Empfindlichkeit des Sticks und die Vi
 - `src/tank.*`: Panzer, Türme, Module und Schwachstellen; `src/vehicle.*` mit `xantia`, `one1`, `hummer`: die Autos
 - `src/props.*`: Häuser, Bäume und anderes Zerstörbare; `src/world.*`: Karte, Gelände, Straßen, Fluss, Mauern
 - `src/vegetation.*`: Gras und Büsche, instanziert, mit einer Karte für das, was platt gefahren oder verbrannt ist
+- `src/platform.*`, `src/asset.*`: was sich zwischen Linux und Windows unterscheidet, und Modelle aus Datei oder aus der `.exe`
 - `src/carmesh.*`: bindet die Modelle an die Physik-Nodes; `tools/gen_*.py` erzeugt sie (`./run.sh` macht das von selbst)
 - `src/tests.cpp`: Prüfstand ohne Grafik, auf der alten Teststrecke
 

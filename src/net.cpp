@@ -1,17 +1,38 @@
 #include "net.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 #include <cmath>
 #include <cstdio>
 
 namespace net {
 
+#ifdef _WIN32
+// Winsock wants to be asked first, once.
+static void netStart() {
+  static const bool started = [] {
+    WSADATA data;
+    return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+  }();
+  (void)started;
+}
+#else
+static void netStart() {}
+#endif
+
 bool resolve(const char* host, u16 port, Addr& out) {
+  netStart();
   addrinfo hints{};
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_DGRAM;
@@ -31,17 +52,32 @@ std::string toString(const Addr& a) {
 }
 
 Socket::~Socket() {
+#ifdef _WIN32
+  if (fd_ >= 0) closesocket(SOCKET(fd_));
+#else
   if (fd_ >= 0) close(fd_);
+#endif
 }
 
 bool Socket::open(u16 port) {
-  fd_ = socket(AF_INET, SOCK_DGRAM, 0);
+  netStart();
+  fd_ = int(socket(AF_INET, SOCK_DGRAM, 0));
   if (fd_ < 0) return false;
+#ifdef _WIN32
+  u_long nonBlocking = 1;
+  ioctlsocket(SOCKET(fd_), FIONBIO, &nonBlocking);
+  // Someone gone away would otherwise make the next read fail, however much else is waiting.
+  constexpr DWORD kUdpConnReset = 0x9800000C;
+  BOOL report = FALSE;
+  DWORD returned = 0;
+  WSAIoctl(SOCKET(fd_), kUdpConnReset, &report, sizeof report, nullptr, 0, &returned, nullptr, nullptr);
+#else
   fcntl(fd_, F_SETFL, fcntl(fd_, F_GETFL, 0) | O_NONBLOCK);
+#endif
   // Room for a burst, should the receiving thread be held up for a moment.
   const int room = 1 << 20;
-  setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &room, sizeof room);
-  setsockopt(fd_, SOL_SOCKET, SO_SNDBUF, &room, sizeof room);
+  setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&room), sizeof room);
+  setsockopt(fd_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&room), sizeof room);
   sockaddr_in a{};
   a.sin_family = AF_INET;
   a.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -52,7 +88,7 @@ bool Socket::open(u16 port) {
 int Socket::recv(void* buf, size_t cap, Addr& from) {
   sockaddr_in a{};
   socklen_t len = sizeof a;
-  const ssize_t n = recvfrom(fd_, buf, cap, 0, reinterpret_cast<sockaddr*>(&a), &len);
+  const long n = long(recvfrom(fd_, static_cast<char*>(buf), int(cap), 0, reinterpret_cast<sockaddr*>(&a), &len));
   if (n < 0) return -1;
   from.ip = ntohl(a.sin_addr.s_addr);
   from.port = ntohs(a.sin_port);
@@ -64,7 +100,7 @@ void Socket::send(const void* buf, size_t n, const Addr& to) {
   a.sin_family = AF_INET;
   a.sin_addr.s_addr = htonl(to.ip);
   a.sin_port = htons(to.port);
-  if (sendto(fd_, buf, n, 0, reinterpret_cast<const sockaddr*>(&a), sizeof a) < 0) {
+  if (sendto(fd_, static_cast<const char*>(buf), int(n), 0, reinterpret_cast<const sockaddr*>(&a), sizeof a) < 0) {
     sendFailed++;
   } else {
     sentPackets++;

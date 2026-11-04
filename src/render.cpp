@@ -1,3 +1,4 @@
+#include "asset.h"
 #include "render.h"
 #include <array>
 #include <epoxy/gl.h>
@@ -2284,26 +2285,26 @@ struct Renderer::Impl {
   std::unordered_map<u32, Glyph> glyphs;
   GLuint atlasTex = 0;
   bool loadAtlas(const char* path) {
-    FILE* f = fopen(path, "rb");
+    AssetFile f(path);
     if (!f) {
       fprintf(stderr, "%s fehlt: Starte das Spiel mit ./run.sh\n", path);
       return false;
     }
     char magic[4];
     u32 head[3];
-    bool ok = fread(magic, 1, 4, f) == 4 && !memcmp(magic, "UIAT", 4) && fread(head, 4, 3, f) == 3;
+    bool ok = f.read(magic, 1, 4) == 4 && !memcmp(magic, "UIAT", 4) && f.read(head, 4, 3) == 3;
     if (ok) {
       for (u32 i = 0; i < head[2]; i++) {
         u32 code;
         float m[9];
-        if (fread(&code, 4, 1, f) != 1 || fread(m, 4, 9, f) != 9) {
+        if (f.read(&code, 4, 1) != 1 || f.read(m, 4, 9) != 9) {
           ok = false;
           break;
         }
         glyphs[code] = Glyph{m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]};
       }
       std::vector<u8> px(size_t(head[0]) * head[1]);
-      ok = ok && fread(px.data(), 1, px.size(), f) == px.size();
+      ok = ok && f.read(px.data(), 1, px.size()) == px.size();
       if (ok) {
         glGenTextures(1, &atlasTex);
         glBindTexture(GL_TEXTURE_2D, atlasTex);
@@ -2315,7 +2316,6 @@ struct Renderer::Impl {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
       }
     }
-    fclose(f);
     return ok;
   }
   void tri(float x0, float y0, Col c0, float x1, float y1, Col c1, float x2, float y2, Col c2) {

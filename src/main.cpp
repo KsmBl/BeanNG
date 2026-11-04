@@ -1,4 +1,3 @@
-#include <unistd.h>
 // BeanNG: game loop, input, cameras and the physics thread.
 #include <SDL3/SDL.h>
 #include <epoxy/gl.h>
@@ -19,6 +18,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include "platform.h"
 #include "audio.h"
 #include "duel.h"
 #include "duelnet.h"
@@ -448,6 +448,13 @@ static void writeWav(const std::string& path, const std::vector<float>& samples)
   fclose(f);
 }
 
+#ifdef _WIN32
+// Laptops with two GPUs read these two out of the program, and give it the fast one.
+extern "C" __declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+extern "C" __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+int serverMain(int argc, char** argv);
+static void preferDiscreteGpu() {}
+#else
 static void preferDiscreteGpu() {
   const char* choice = getenv("BEANNG_GPU");
   if (choice && !strcmp(choice, "integrated")) return;
@@ -467,6 +474,7 @@ static void preferDiscreteGpu() {
     setenv("DRI_PRIME", "1", 0);  // AMD or nouveau discrete cards under Mesa
   }
 }
+#endif
 
 // Command line, the window and the sound outlive a session with one vehicle.
 static std::string shotDir, wavPath;
@@ -4855,6 +4863,14 @@ static void runGame() {
 }
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  if (argc > 1 && !strcmp(argv[1], "--server")) {
+    platformConsole(true);
+    return serverMain(argc - 1, argv + 1);
+  }
+  platformConsole(false);
+#endif
+  platformStart();
   preferDiscreteGpu();
   loadSettings();
   loadServerAddress();
@@ -4862,10 +4878,9 @@ int main(int argc, char** argv) {
     if (!strcmp(argv[i], "--shots") && i + 1 < argc) shotDir = argv[++i];
     if (!strcmp(argv[i], "--script") && i + 1 < argc) scriptMode = atoi(argv[++i]);
     if (!strcmp(argv[i], "--log")) {
-      char path[64];
-      snprintf(path, sizeof path, "/tmp/beanng-client-%d.log", int(getpid()));
-      gPlayLog = fopen(path, "w");
-      printf("Log: %s\n", path);
+      const std::string path = tempPath("beanng-client");
+      gPlayLog = fopen(path.c_str(), "w");
+      printf("Log: %s\n", path.c_str());
     }
     if (!strcmp(argv[i], "--wav") && i + 1 < argc) wavPath = argv[++i];
     if (!strcmp(argv[i], "--turret") && i + 1 < argc) gPickTurret = std::clamp(atoi(argv[++i]), 0, World::kBaseSlots - 1);
