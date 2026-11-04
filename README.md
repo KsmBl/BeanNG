@@ -27,7 +27,13 @@ Abhängigkeiten: SDL3, libepoxy, CMake, ein C++20-Compiler, Python 3 mit numpy, 
 
 Baut unter Linux mit MinGW-w64 alles in eine einzige Datei, `dist/BeanNG.exe`: Spiel, Server und Modelle. Es muss nichts dazu installiert werden, die Datei läuft ab Windows 10. Das Skript braucht `mingw-w64-gcc`, `cmake`, `ninja`, `meson`, `python` und `curl`, und lädt SDL3 und libepoxy beim ersten Mal selbst herunter. Einstellungen landen im Ordner, aus dem das Spiel gestartet wird.
 
-Der Server steckt in derselben Datei: `BeanNG.exe --server 27015`, mit denselben Optionen wie `beanng-server`. Windows- und Linux-Spieler können zusammen spielen. Die Windows-Version kommt ohne AVX aus und läuft damit auch auf älteren Rechnern.
+Der Server steckt in derselben Datei: `BeanNG.exe --server 27015`, mit denselben Optionen wie `beanng-server`. `dist/BeanNG-Server.exe` ist er allein, ohne Grafik. Windows- und Linux-Spieler können zusammen spielen. Die Windows-Version kommt ohne AVX aus und läuft damit auch auf älteren Rechnern.
+
+### Release
+
+    ./build-release.sh
+
+Legt die vier Dateien eines Releases in `dist/release/`: Client und Server für Windows und Linux, jede für sich lauffähig. Der Linux-Client trägt SDL3, libepoxy und die Modelle in sich und braucht glibc 2.38 oder neuer.
 
 ## Online-Duell
 

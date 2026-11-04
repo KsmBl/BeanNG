@@ -5,10 +5,11 @@ import sys
 
 out, files = sys.argv[1], sys.argv[2:]
 os.makedirs(out, exist_ok=True)
-asm, labels = ['.section .rdata,"dr"'], []
+asm, labels = ['#ifdef _WIN32', '.section .rdata,"dr"', '#else', '.section .rodata,"a"', '#endif'], []
 for i, path in enumerate(files):
     asm += [f".balign 16", f".global beanng_asset_{i}", f"beanng_asset_{i}:", f'.incbin "{os.path.abspath(path)}"', f".global beanng_asset_{i}_end", f"beanng_asset_{i}_end:"]
     labels.append(i)
+asm += ['#ifndef _WIN32', '.section .note.GNU-stack,"",@progbits', '#endif']
 with open(os.path.join(out, "embed.S"), "w") as f:
     f.write("\n".join(asm) + "\n")
 with open(os.path.join(out, "embed_table.cpp"), "w") as f:

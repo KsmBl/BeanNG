@@ -225,6 +225,7 @@ int serverMain(int argc, char** argv) {
 int main(int argc, char** argv) {
 #endif
   platformStart();
+  platformConsole(true);
   int port = kDefaultPort;
   bool giveAll = false;
   int wanted = 2;

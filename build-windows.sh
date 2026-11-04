@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the whole game into one Windows program, dist/BeanNG.exe, from Linux with MinGW-w64.
+# Builds the whole game into one Windows program, dist/BeanNG.exe, from Linux with MinGW-w64, and the server on its own.
 # On Arch:  pacman -S mingw-w64-gcc cmake ninja meson python curl
 # SDL3 and libepoxy are downloaded once and linked in statically: the .exe needs nothing else, and carries its models too.
 set -euo pipefail
@@ -63,8 +63,9 @@ python3 tools/gen_embed.py "$ROOT/embed" assets/*.mesh assets/ui.atlas
 echo "== Spiel =="
 cmake -S . -B "$ROOT/game" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/mingw-w64.cmake" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_FIND_ROOT_PATH="$PREFIX" -DBEANNG_EMBED_DIR="$ROOT/embed" > /dev/null
-cmake --build "$ROOT/game" --target beanng
+cmake --build "$ROOT/game" --target beanng beanng-server
 
 cp "$ROOT/game/beanng.exe" dist/BeanNG.exe
-x86_64-w64-mingw32-strip dist/BeanNG.exe
-echo "Fertig: dist/BeanNG.exe ($(du -h dist/BeanNG.exe | cut -f1))"
+cp "$ROOT/game/beanng-server.exe" dist/BeanNG-Server.exe
+x86_64-w64-mingw32-strip dist/BeanNG.exe dist/BeanNG-Server.exe
+echo "Fertig: dist/BeanNG.exe ($(du -h dist/BeanNG.exe | cut -f1)), dist/BeanNG-Server.exe ($(du -h dist/BeanNG-Server.exe | cut -f1))"

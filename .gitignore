@@ -6,3 +6,4 @@ settings.cfg
 server.cfg
 build-windows/
 dist/
+build-release/

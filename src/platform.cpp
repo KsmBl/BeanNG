@@ -18,12 +18,14 @@ std::string tempPath(const char* prefix) {
 void platformStart() { timeBeginPeriod(1); }
 
 void platformConsole(bool wantOwn) {
-  // Already going somewhere, into a file say: then that is where it should stay.
-  if (GetStdHandle(STD_OUTPUT_HANDLE) && GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_UNKNOWN) return;
-  if (!AttachConsole(ATTACH_PARENT_PROCESS) && (!wantOwn || !AllocConsole())) return;
-  freopen("CONIN$", "r", stdin);
-  freopen("CONOUT$", "w", stdout);
-  freopen("CONOUT$", "w", stderr);
+  // Already going somewhere, into a file or a console of its own: then that is where it should stay.
+  const HANDLE was = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (!was || GetFileType(was) == FILE_TYPE_UNKNOWN) {
+    if (!AttachConsole(ATTACH_PARENT_PROCESS) && (!wantOwn || !AllocConsole())) return;
+    freopen("CONIN$", "r", stdin);
+    freopen("CONOUT$", "w", stdout);
+    freopen("CONOUT$", "w", stderr);
+  }
   SetConsoleOutputCP(CP_UTF8);
   // The server's prompt is drawn with the same escape sequences as on Linux.
   const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
