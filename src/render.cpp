@@ -1021,8 +1021,15 @@ struct Renderer::Impl {
       }
       const double step = len((l + r) * 0.5 - (t.l + t.r) * 0.5);
       if (step < 0.5) continue;
+      // A rolling tyre moves along itself, whichever way it is steered. Across its own direction it is sliding: more than
+      // about ten degrees of that is a drift, and only that leaves rubber on the road.
+      const bool sliding = std::fabs(dot((l + r) * 0.5 - (t.l + t.r) * 0.5, norm(V3{g.across.x, g.across.y, 0}))) > 0.18 * step;
+      if (g.tyre && !soft && !sliding) {
+        t = {true, l, r, 0.f};
+        continue;
+      }
       if (step < 6.0) {
-        const float a = soft ? 0.62f : (road ? 0.22f : 0.3f);
+        const float a = soft ? 0.62f : (g.tyre ? 0.5f : (road ? 0.22f : 0.3f));
         const float cr = soft ? 0.10f : 0.03f, cg = soft ? 0.075f : 0.03f, cb = soft ? 0.045f : 0.03f;
         auto v = [&](V3 p) { return LineV{float(p.x), float(p.y), float(p.z), cr, cg, cb, a}; };
         q[0] = v(t.l);

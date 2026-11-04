@@ -53,6 +53,7 @@ struct Snapshot {
   struct GroundMark {
     V3 at, across;
     float halfWidth;
+    bool tyre = false;  // on a hard road a tyre only marks it when it goes sideways
   };
   std::vector<GroundMark> groundMarks;
   // What presses down what grows under it: a moving vehicle's footprint.

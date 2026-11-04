@@ -654,7 +654,7 @@ struct Game {
     for (int k = 0; k < Duel::kCars; k++) {
       const Vehicle& car = duel.cars[size_t(k)];
       if (car.exploded) continue;
-      for (const Wheel& w : car.wheels) s.groundMarks.push_back({(sim.pos[w.axIn] + sim.pos[w.axOut]) * 0.5, sim.pos[w.axOut] - sim.pos[w.axIn], 0.1f});
+      for (const Wheel& w : car.wheels) s.groundMarks.push_back({(sim.pos[w.axIn] + sim.pos[w.axOut]) * 0.5, sim.pos[w.axOut] - sim.pos[w.axIn], 0.1f, true});
     }
     s.foot.onFoot = playing && myVehicle < 0;
     s.selfInstance = myVehicle >= 0 ? myVehicle : (playing ? Duel::kVehicles + slot : -1);
