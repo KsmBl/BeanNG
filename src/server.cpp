@@ -467,6 +467,8 @@ int main(int argc, char** argv) {
       }
     }
     w.put(duel->players[slot].lastInput);
+    w.put(duel->players[slot].walkedSinceInput);
+    w.put(u8(duel->players[slot].soldier.grounded ? 1 : 0));
     // What this player carries, as it stands now.
     for (int k = 0; k < IT_COUNT; k++) w.put(duel->players[slot].items[k]);
     w.put(float(duel->players[slot].repairClock));

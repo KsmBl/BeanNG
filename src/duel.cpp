@@ -1454,6 +1454,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     Player& pl = players[i];
     if (!pl.present) continue;
     Soldier& s = pl.soldier;
+    if (pl.lastInput != in[i].seq) pl.walkedSinceInput = 0;
     pl.lastInput = in[i].seq;
     pl.shotClock = std::max(0.0, pl.shotClock - kDt);
     if (in[i].weapon >= 0 && in[i].weapon < WP_COUNT && pl.hasWeapon[in[i].weapon]) pl.weapon = in[i].weapon;
@@ -1578,8 +1579,10 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       if (phase != PLAYING) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
       if (s.prone > 0) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
       walk(s, wi, kWalkDt);
+      if (pl.walkedSinceInput < 255) pl.walkedSinceInput++;
     }
     s.pitch = in[i].pitch;
+    if (pl.lastInput != in[i].seq) pl.walkedSinceInput = 0;
     pl.lastInput = in[i].seq;
     // What drives into someone at speed does not stop to apologise.
     for (const VehicleFrame& f : frames) {

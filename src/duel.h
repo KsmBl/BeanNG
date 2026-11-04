@@ -124,6 +124,7 @@ class Duel {
     double repairClock = 0;  // working on a vehicle from outside, which takes a kit and being there
     int repairing = -1;
     u32 lastInput = 0;  // the input the soldier has last been moved by, for the player's prediction
+    u8 walkedSinceInput = 0;  // and how many steps of walking it has been since that one came in
   };
   // What a player does this step beyond the pedals of a vehicle.
   struct Intent {

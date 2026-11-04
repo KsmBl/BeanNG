@@ -781,11 +781,16 @@ struct Game {
     Soldier drawnSoldier[Duel::kMaxPlayers];
     int drawnVehicle[Duel::kMaxPlayers];
     for (int& v : drawnVehicle) v = -1;
-    struct Past {
+    // Every step taken is kept until the server has answered for it. Its answer is then taken as it is and the steps it
+    // has not seen yet are walked again from there. What that changes is not shown as a jump, but melts away.
+    struct WalkStep {
       u32 seq;
-      V3 p;
+      WalkInput in;
     };
-    std::deque<Past> past;
+    std::deque<WalkStep> walkSteps;
+    Soldier walkTrue;
+    V3 walkOffset;
+    u8 ackedSteps = 0;
     double walkDebt = 0;
     // The last match, as it arrived: everything needed to see it again, from any side.
     struct Taped {
@@ -938,7 +943,9 @@ struct Game {
       duel.updateFrames();
       for (CarShown& c : shown) c = CarShown{};
       me = duel.players[mySlot].soldier;
-      past.clear();
+      walkTrue = me;
+      walkOffset = V3{};
+      walkSteps.clear();
       for (auto& q : soldierPast) q.clear();
       later.clear();
       sliding.clear();
@@ -1271,6 +1278,9 @@ struct Game {
           }
           u32 ack = 0;
           r.get(ack);
+          u8 stepsSinceAck = 0, onGround = 1;
+          r.get(stepsSinceAck);
+          r.get(onGround);
           for (int i = 0; i < IT_COUNT; i++) {
             u8 count = 0;
             r.get(count);
@@ -1349,6 +1359,8 @@ struct Game {
           hereNow = 0;
           for (int i = 0; i < Duel::kMaxPlayers; i++) hereNow += (mask >> i) & 1;
           ackedInput = ack;
+          ackedSteps = stepsSinceAck;
+          shownSoldier[mySlot].grounded = onGround != 0;
           logMetas++;
           logMetaGap = std::max(logMetaGap, now - logMetaAt);
           logMetaAt = now;
@@ -1734,7 +1746,9 @@ struct Game {
       const bool canWalk = state == NET_IN && phaseNow == Duel::PLAYING && !droneShown[mySlot].live;
       if (vehicleNow >= 0 || replaying) {
         me = shownSoldier[mySlot];
-        past.clear();
+        walkTrue = me;
+        walkOffset = V3{};
+        walkSteps.clear();
       } else if (playingNow) {
         WalkInput wi;
         const double aimSlow = in.aiming ? 0.55 : 1.0;
@@ -1743,32 +1757,40 @@ struct Game {
           wi.strafe = in.c.steer * aimSlow;
           wi.jump = in.c.handbrake > 0.5;
           wi.sprint = in.sprint && !in.aiming;
+          if (shownSoldier[mySlot].prone > 0) wi.forward = wi.strafe = 0, wi.jump = wi.sprint = false;
         }
         wi.yaw = in.yaw;
         walkDebt += dt;
         walkDebt = std::min(walkDebt, 0.1);
         while (walkDebt >= Duel::kWalkDt) {
           walkDebt -= Duel::kWalkDt;
-          duel.walk(me, wi, Duel::kWalkDt);
+          duel.walk(walkTrue, wi, Duel::kWalkDt);
+          walkSteps.push_back({out.seq + 1, wi});
         }
-        me.pitch = in.pitch;
-        me.prone = shownSoldier[mySlot].prone;
+        while (walkSteps.size() > 100) walkSteps.pop_front();
         if (freshAnswer) {
           freshAnswer = false;
-          // Where it thought it was when the server's answer was made, against the answer.
-          while (past.size() > 1 && int32_t(past.front().seq - ackedInput) < 0) past.pop_front();
-          const V3 was = past.empty() ? me.p : past.front().p;
-          const V3 err = serverP - was;
+          // What the server has walked already: all that was meant for inputs it has used, and the few steps since.
+          while (!walkSteps.empty() && int32_t(walkSteps.front().seq - ackedInput) <= 0) walkSteps.pop_front();
+          for (int k = 0; k < ackedSteps && !walkSteps.empty(); k++) walkSteps.pop_front();
+          Soldier answer = walkTrue;
+          answer.p = shownSoldier[mySlot].p;
+          answer.v = shownSoldier[mySlot].v;
+          answer.grounded = shownSoldier[mySlot].grounded;
+          for (const WalkStep& step : walkSteps) duel.walk(answer, step.in, Duel::kWalkDt);
+          answer.stride = walkTrue.stride;
+          answer.yaw = walkTrue.yaw;
+          const V3 err = walkTrue.p - answer.p;
           logWalkErr = std::max(logWalkErr, len(err));
-          if (len(err) > 4.0) {
-            me.p = serverP;
-            past.clear();
-          } else {
-            const V3 fix = err * 0.15;
-            me.p += fix;
-            for (Past& q : past) q.p += fix;
-          }
+          walkOffset = len(err + walkOffset) > 4.0 ? V3{} : walkOffset + err;
+          walkTrue = answer;
         }
+        walkOffset = walkOffset * std::exp(-dt * 10.0);
+        // Between two steps of walking too: at a run, one step more or less in a frame is a good handful of centimetres.
+        me = walkTrue;
+        me.p += walkOffset + walkTrue.v * walkDebt;
+        me.pitch = in.pitch;
+        me.prone = shownSoldier[mySlot].prone;
       } else {
         me = duel.players[mySlot].soldier;
       }
@@ -1902,8 +1924,6 @@ struct Game {
             logNext = now + 1.0;
           }
         }
-        if (vehicleNow < 0) past.push_back({out.seq, me.p});
-        while (past.size() > 200) past.pop_front();
         out.ready = in.ready ? 1 : 0;
         for (int i = 0; i < IT_COUNT; i++) out.items[i] = in.items[i];
         net::Writer w(net::P_INPUT);
@@ -3687,6 +3707,22 @@ static void runGame() {
           printf("Pflanzen: %.0f fps, Gras %d, Buesche %d, Dreiecke %d, statisch %d, Neuaufbau %.2f ms, %.0f km/h, Pos %.0f %.0f\n", hud.fps, grass, bushes, tris, statics, ms, view.speedKmh, view.carCog.x, view.carCog.y);
           nextSay = tNow + 3.0;
         }
+      }
+    }
+    if (scriptMode == 70 && netState == Game::NET_IN) {
+      // Running about without a plan: forwards, sideways, turning, jumping. What the correction of walking comes to is in the log.
+      if (phase == Duel::CHOOSING) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      if (onFoot) {
+        panelKind = PANEL_NONE;
+        const double part = std::fmod(tNow, 8.0);
+        gas = part < 5.0 ? 1.0 : 0.0;
+        steer = part > 3.0 && part < 7.0 ? (std::fmod(tNow, 2.0) < 1.0 ? 1.0 : -1.0) : 0.0;
+        rig.yaw += dt * 0.6 * std::sin(tNow * 0.7);
+        rig.pitch = 0.1;
+        hb = std::fmod(tNow, 3.0) < 0.1 ? 1.0 : 0.0;
       }
     }
     if (scriptMode == 65 && netState == Game::NET_IN) {
