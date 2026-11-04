@@ -2769,6 +2769,31 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "bridge")) {
+    // What it takes to bring one down, that a tank then falls, and that the next match has it back.
+    auto* d = new Duel();
+    d->build();
+    const World::Bridge& br = d->world.bridgeSpans()[0];
+    printf("%zu Bruecken, je %zu Felder\n", d->world.bridgeSpans().size(), br.spans.size());
+    const double cy = std::cos(br.yaw), sy = std::sin(br.yaw);
+    const V3 onDeck = br.at + V3{cy * 6.0, sy * 6.0, 0.1};
+    printf("Boden auf dem Feld vorher %.1f (Deck %.1f)\n", d->world.groundUnder(onDeck.x, onDeck.y, onDeck.z + 2.0), br.at.z);
+    int shots = 0;
+    while (d->world.bridgeSpans()[0].open() && shots < 50) {
+      d->sim.explode(onDeck, 2200.0, 15.0);
+      shots++;
+    }
+    printf("105 mm: %d Treffer, Boden danach %.1f, Maske %x, Strasse weg %d\n", shots, d->world.groundUnder(onDeck.x, onDeck.y, onDeck.z + 2.0), d->world.bridgeMask(), int(d->world.overFallenSpan(onDeck.x, onDeck.y)));
+    d->world.clearCraters();
+    printf("Neues Match: Boden %.1f, Maske %x\n", d->world.groundUnder(onDeck.x, onDeck.y, onDeck.z + 2.0), d->world.bridgeMask());
+    d->sim.explode(onDeck, 12000.0, 30.0);
+    printf("Artillerie: Maske %x\n", d->world.bridgeMask());
+    d->world.clearCraters();
+    // A second world, told only by the mask, comes to the same.
+    d->world.applyBridgeMask(5);
+    printf("Maske uebernommen: %x, Feld 2 Boden %.1f\n", d->world.bridgeMask(), d->world.groundUnder(onDeck.x, onDeck.y, onDeck.z + 2.0));
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "armour")) {
     // The same shell at the same tank from all round: square from in front, the side and behind, then flat along the side.
     auto* w = new World();

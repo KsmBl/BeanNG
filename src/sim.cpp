@@ -437,6 +437,15 @@ void Sim::explode(V3 c, double impulse, double radius, double hole) {
     // On a player's machine the server has already sent the dust.
     for (const auto& hit : craterWorld->breakRocks(c, radius * 0.42))
       if (!mirror) event(EV_ROCK, hit.first, V3{}, float(hit.second));
+    // A bridge comes down, and whatever was standing on it does not stay up there asleep.
+    for (const V3& fell : craterWorld->hitBridges(c, impulse, radius)) {
+      if (mirror) continue;
+      for (int k = -2; k <= 2; k++) event(EV_ROCK, fell + V3{k * 3.0, k * -2.0, -1.0}, V3{}, 3.f);
+      for (size_t oi = 0; oi < objs.size(); oi++) {
+        const Obj& o = objs[oi];
+        if (o.bbMin.x < fell.x + 22.0 && o.bbMax.x > fell.x - 22.0 && o.bbMin.y < fell.y + 22.0 && o.bbMax.y > fell.y - 22.0 && o.bbMax.z > fell.z - 3.0 && o.bbMin.z < fell.z + 6.0) wake(u16(oi));
+      }
+    }
   }
   if (mirror) {
     blasts.clear();

@@ -249,6 +249,11 @@ void World::addCrater(double x, double y, double r, double depth) {
 }
 
 void World::clearCraters() {
+  for (Bridge& b : bridgeSpans_)
+    for (BridgeSpan& s : b.spans) {
+      s.strength = 1;
+      s.gone = false;
+    }
   if (!boxes0_.empty()) {
     // assign() keeps the storage: the renderer may be looking at this list.
     boxes_.assign(boxes0_.begin(), boxes0_.end());
@@ -301,6 +306,102 @@ std::vector<std::pair<V3, double>> World::breakRocks(V3 c, double reach) {
   }
   if (!out.empty()) boxGeneration_++;
   return out;
+}
+
+void World::bringDownSpan(Bridge& br, BridgeSpan& sp) {
+  if (sp.gone) return;
+  sp.gone = true;
+  sp.strength = 0;
+  bridgeFalls_++;
+  if (boxes0_.empty()) {
+    boxes0_ = boxes_;
+    boxGrid0_ = boxGrid_;
+  }
+  for (u16 i : sp.boxes) {
+    StaticBox& b = boxes_[i];
+    const double rad = len(b.h) + 1.0;
+    const int x0 = std::max(0, int((b.c.x - rad + kHalf) / kBoxCell)), x1 = std::min(kBoxGrid - 1, int((b.c.x + rad + kHalf) / kBoxCell));
+    const int y0 = std::max(0, int((b.c.y - rad + kHalf) / kBoxCell)), y1 = std::min(kBoxGrid - 1, int((b.c.y + rad + kHalf) / kBoxCell));
+    for (int y = y0; y <= y1; y++)
+      for (int x = x0; x <= x1; x++) {
+        auto& cell = boxGrid_[size_t(y) * kBoxGrid + x];
+        cell.erase(std::remove(cell.begin(), cell.end(), i), cell.end());
+      }
+    b.h = {0, 0, 0};
+  }
+  // What fell lies below in lumps, the same on every machine: a span comes down only once a match.
+  const double c = std::cos(br.yaw), s = std::sin(br.yaw);
+  u32 seed = u32(std::fabs(br.at.y) * 7.0) + u32(std::fabs(sp.from) * 13.0) + 41u;
+  const auto rnd = [&](double a, double b) {
+    seed = seed * 1664525u + 1013904223u;
+    return a + (b - a) * double(seed >> 16) / 65535.0;
+  };
+  const int lumps = 9;
+  for (int k = 0; k < lumps && boxes_.size() < 60000; k++) {
+    const double along = rnd(sp.from, sp.to), across = rnd(-br.halfWidth, br.halfWidth);
+    const double x = br.at.x + c * along - s * across, y = br.at.y + s * along + c * across;
+    const double size = rnd(0.5, 1.4);
+    addBox({x, y, height(x, y) + size * 0.2}, {size * rnd(1.0, 1.8), size, size * 0.5}, rnd(0, 3.1), rnd(-0.25, 0.25), SURF_ROCK, .5f, .48f, .45f);
+  }
+  boxGeneration_++;
+}
+
+std::vector<V3> World::hitBridges(V3 c, double impulse, double radius) {
+  std::vector<V3> fallen;
+  const double reach = std::max(3.0, radius * 0.3);
+  for (Bridge& br : bridgeSpans_) {
+    if (len2(V3{br.at.x - c.x, br.at.y - c.y, 0}) > (40.0 + reach) * (40.0 + reach)) continue;
+    const double cy = std::cos(br.yaw), sy = std::sin(br.yaw);
+    const double dx = c.x - br.at.x, dy = c.y - br.at.y;
+    const double along = dx * cy + dy * sy, across = -dx * sy + dy * cy;
+    for (BridgeSpan& sp : br.spans) {
+      if (sp.gone) continue;
+      const double offAlong = std::max({sp.from - along, along - sp.to, 0.0}), offAcross = std::max(std::fabs(across) - br.halfWidth, 0.0);
+      const double d = std::sqrt(offAlong * offAlong + offAcross * offAcross + (c.z - br.at.z) * (c.z - br.at.z));
+      const double k = clampd(1.3 * (1.0 - d / reach), 0.0, 1.0);
+      if (k <= 0) continue;
+      // The howitzer takes a span with one good shell; a 105 mm needs half a dozen in the same place.
+      sp.strength -= impulse / 12000.0 * k;
+      if (sp.strength > 1e-6) continue;
+      bringDownSpan(br, sp);
+      const double mid = (sp.from + sp.to) * 0.5;
+      fallen.push_back(V3{br.at.x + cy * mid, br.at.y + sy * mid, br.at.z});
+    }
+  }
+  return fallen;
+}
+
+bool World::overFallenSpan(double x, double y) const {
+  for (const Bridge& br : bridgeSpans_) {
+    if (br.open()) continue;
+    const double cy = std::cos(br.yaw), sy = std::sin(br.yaw);
+    const double dx = x - br.at.x, dy = y - br.at.y;
+    const double along = dx * cy + dy * sy, across = -dx * sy + dy * cy;
+    if (std::fabs(across) > br.halfWidth + 3.0) continue;
+    for (const BridgeSpan& sp : br.spans)
+      if (sp.gone && along >= sp.from && along <= sp.to) return true;
+  }
+  return false;
+}
+
+u32 World::bridgeMask() const {
+  u32 mask = 0;
+  int bit = 0;
+  for (const Bridge& br : bridgeSpans_)
+    for (const BridgeSpan& sp : br.spans) {
+      if (sp.gone) mask |= 1u << bit;
+      bit++;
+    }
+  return mask;
+}
+
+void World::applyBridgeMask(u32 mask) {
+  int bit = 0;
+  for (Bridge& br : bridgeSpans_)
+    for (BridgeSpan& sp : br.spans) {
+      if (mask & (1u << bit)) bringDownSpan(br, sp);
+      bit++;
+    }
 }
 
 void World::pave() { std::fill(surf_.begin(), surf_.end(), u8(SURF_ASPHALT)); }
@@ -835,7 +936,8 @@ void World::buildArena() {
     const double yaw = std::atan2(8.0, x1 - x0) - PI * 0.5;
     addVisualBox({(x0 + x1) * 0.5, y + 4.0, kWaterZ - 0.5}, {kRiverHalf + 5.0, 4.6, 0.5}, yaw, .13f, .29f, .36f);
   }
-  for (const Road& r : roads_) {
+  for (size_t roadId = 0; roadId < roads_.size(); roadId++) {
+    const Road& r = roads_[roadId];
     for (size_t i = 1; i < r.pts.size(); i++) {
       const double a = r.pts[i - 1].x - riverX(r.pts[i - 1].y), b = r.pts[i].x - riverX(r.pts[i].y);
       if ((a < 0) == (b < 0)) continue;
@@ -844,9 +946,29 @@ void World::buildArena() {
       const double cy = std::cos(yaw), sy = std::sin(yaw);
       const double half = kBankOuter + 9.0, w = r.halfWidth + 2.0;
       const double z = p.z;
-      addBox({p.x, p.y, z - 0.6}, {half, w, 0.6}, yaw, 0, SURF_CONCRETE, .55f, .53f, .5f);
-      for (double sg : {-1.0, 1.0})
-        addBox({p.x - sy * sg * w, p.y + cy * sg * w, z + 0.55}, {half, 0.25, 0.55}, yaw, 0, SURF_CONCRETE, .48f, .46f, .43f);
+      Bridge bridge;
+      bridge.at = {p.x, p.y, z};
+      bridge.yaw = yaw;
+      bridge.halfWidth = w;
+      bridge.road = int(roadId);
+      bridge.point = i;
+      // Span by span, from pier to pier, a little into each other: what rolls over the joint must not find an edge there.
+      const double ends[5] = {-half, -kRiverHalf, 0.0, kRiverHalf, half};
+      for (int k = 0; k < 4; k++) {
+        BridgeSpan sp;
+        sp.from = ends[k];
+        sp.to = ends[k + 1];
+        const double mid = (sp.from + sp.to) * 0.5, length = (sp.to - sp.from) * 0.5 + 0.5;
+        const V3 at{p.x + cy * mid, p.y + sy * mid, z};
+        sp.boxes.push_back(u16(boxes_.size()));
+        addBox({at.x, at.y, z - 0.6}, {length, w, 0.6}, yaw, 0, SURF_CONCRETE, .55f, .53f, .5f);
+        for (double sg : {-1.0, 1.0}) {
+          sp.boxes.push_back(u16(boxes_.size()));
+          addBox({at.x - sy * sg * w, at.y + cy * sg * w, z + 0.55}, {length, 0.25, 0.55}, yaw, 0, SURF_CONCRETE, .48f, .46f, .43f);
+        }
+        bridge.spans.push_back(std::move(sp));
+      }
+      bridgeSpans_.push_back(std::move(bridge));
       for (double along : {-kRiverHalf, 0.0, kRiverHalf})
         addBox({p.x + cy * along, p.y + sy * along, (z + kBedZ) * 0.5 - 0.6}, {1.2, w - 0.5, (z - kBedZ) * 0.5}, yaw, 0, SURF_CONCRETE, .44f, .42f, .4f);
       bridges_.push_back({p.x, p.y, z});

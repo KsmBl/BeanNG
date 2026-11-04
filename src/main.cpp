@@ -973,6 +973,7 @@ struct Game {
     for (double& m : lastMod) m = 1;
     int lastTankWatched = -1;
     u16 lastBounces = 0;
+    double spansBehindSince = -1;
     std::string alert;
     double alertUntil = 0;
     u8 carHurt[Duel::kCars] = {}, carFlat[Duel::kCars] = {};
@@ -1621,6 +1622,15 @@ struct Game {
           self.fixWait = fixWait;
           self.fixAge = fixAge;
           self.fix = fix;
+          // The blasts have brought down the same spans here, unless a rounding went the other way. Then it catches up.
+          u32 spansGone = 0;
+          r.get(spansGone);
+          if (r.ok() && (spansGone & ~duel.world.bridgeMask())) {
+            if (spansBehindSince < 0) spansBehindSince = now;
+            if (now - spansBehindSince > 1.0) duel.world.applyBridgeMask(spansGone);
+          } else {
+            spansBehindSince = -1;
+          }
         } else if (kind == net::P_CAR) {
           u8 k = 0;
           r.get(k);

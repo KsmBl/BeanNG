@@ -48,9 +48,11 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Ablauf:** Sind alle da, wählt jeder seine Ausrüstung (20 Slots, 60 Sekunden): Tretmine 2 Slots, Panzermine 5, Reparaturset 10, Sturmgewehr 2, 60 Schuss Kleinmunition 1, Nebelgranate 1, Ghillie-Anzug 3, Tarnnetz 3. Du startest zu Fuß mit Pistole und Messer in deiner Basis. Eine Seite verliert, wenn von ihr niemand mehr lebt; nach 8 Sekunden geht es von vorn los. Ausrüstung und Beute gelten für ein Match.
 
-**Karte:** 2 km groß, ringsum Berge. Dazwischen Dörfer, Hügel, Wälder, Hecken, Erdwälle, Felsgruppen, alte Panzerwracks, ein Fluss mit drei Brücken zwei flache Furten und zwei 10 m hohe Sperrmauern, über die nur die Artillerie schießt.
+**Karte:** 2 km groß, ringsum Berge. Dazwischen Dörfer, Hügel, Wälder, Hecken, Erdwälle, Felsgruppen, alte Panzerwracks, ein Fluss mit drei Brücken, zwei flache Furten und zwei 10 m hohe Sperrmauern, über die nur die Artillerie schießt.
 
 ![Die Karte von oben](docs/screenshots/karte-von-oben.jpg)
+
+**Brücken sprengen:** Jede Brücke besteht aus vier Feldern zwischen ihren Pfeilern, und jedes kann einstürzen: mit einem guten Artillerietreffer, drei Lenkraketen, zwei Bombenraketen oder sechs Granaten der 105 mm an dieselbe Stelle. Was darauf steht, fällt in den Fluss, und auch die Karte zeigt die Lücke. Dann bleiben die anderen Brücken und die Furten; wer unten im Fluss landet, kommt über die Furten wieder heraus. Im nächsten Match steht alles wieder.
 
 **Fahrzeuge:** In jeder Basis stehen zwölf Panzer, alle vier Türme auf je drei Wannen (mittel, schwer gepanzert und langsamer, schnell und dünn), sowie Xantia Activa, Koenigsegg One:1 und Hummer H1. Einsteigen kannst du in jedes freie Fahrzeug, auch beim Gegner. Reparieren geht nur von außen mit einem Set.
 
@@ -169,7 +171,7 @@ In den Spiel-Einstellungen lassen sich die Empfindlichkeit des Sticks und die Vi
     ./build/beanng-test                    # alles
     ./build/beanng-test crash skidpad      # einzelne Tests
 
-Einzelne Sondertests: `split`, `torn`, `slow`, `winding`, `armour`. `BEANNG_PROFILE=1 ./run.sh` zeigt die Zeit pro Bild.
+Einzelne Sondertests: `split`, `torn`, `slow`, `winding`, `armour`, `bridge`. `BEANNG_PROFILE=1 ./run.sh` zeigt die Zeit pro Bild.
 
 Tests: `statics bounce accel brake skidpad crash rough jitter response compliance wheel powertrain rest props perf`
 

@@ -1359,6 +1359,7 @@ struct Renderer::Impl {
       for (size_t i = 0; i < segs; i++) {
         const RoadPoint& a = road.pts[i];
         const RoadPoint& b = road.pts[(i + 1) % cnt];
+        if (world->overFallenSpan(a.x, a.y) || world->overFallenSpan(b.x, b.y)) continue;  // it went down with the bridge
         // Each point has one cross direction, shared by the two pieces that meet there. With one per
         // piece the edges of neighbouring pieces do not line up, and the bends fall into segments.
         auto across = [&](size_t k, double& nx, double& ny) {
@@ -2849,12 +2850,13 @@ struct Renderer::Impl {
       for (const Road& road : world->roads())
         for (size_t i = 0; i < road.pts.size(); i += 12) {
           float sx, sy;
+          if (world->overFallenSpan(road.pts[i].x, road.pts[i].y)) continue;
           toMap(road.pts[i].x, road.pts[i].y, sx, sy);
           rrect(sx - 1 * u, sy - 1 * u, 2 * u, 2 * u, 0, road.trail ? Col{.62f, .54f, .38f, 1} : Col{.86f, .84f, .78f, 1});
         }
       for (const StaticBox& b : world->boxes()) {
         // What stands in the way of a gun: barriers, bridges and the command centres.
-        if (b.surface != SURF_CONCRETE) continue;
+        if (b.surface != SURF_CONCRETE || b.h.x <= 0) continue;
         float sx, sy;
         toMap(b.c.x, b.c.y, sx, sy);
         const float bw = std::max(float((std::fabs(b.ax[0].x) * b.h.x + std::fabs(b.ax[1].x) * b.h.y) * 2.0 / (2.0 * kMapHalf)) * ms, 2 * u), bh = std::max(float((std::fabs(b.ax[0].y) * b.h.x + std::fabs(b.ax[1].y) * b.h.y) * 2.0 / (2.0 * kMapHalf)) * ms, 2 * u);

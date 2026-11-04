@@ -658,6 +658,7 @@ int main(int argc, char** argv) {
     w.put(float(me.fixWait));
     w.put(float(me.fixAge));
     w.putV3(me.fix);
+    w.put(duel->world.bridgeMask());
     post(c, w);
   };
 

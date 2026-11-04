@@ -341,6 +341,7 @@ class Duel {
   // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
   bool bulletInCar(int k, V3 from, V3 dir, int kind);
   void placeMine(int p, int kind);
+  u32 bridgeFallsSeen = 0;
   void noteHit(int victim, int attacker, V3 from);
   double tankDamageSeen[kTanks] = {};
   void callStrike(int p, V3 at);

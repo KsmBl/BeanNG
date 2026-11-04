@@ -84,6 +84,32 @@ class World {
   }
   const std::vector<V3>& wreckSites() const { return wreckSites_; }
   const std::vector<V3>& bridges() const { return bridges_; }
+  // Each bridge is four spans between its piers, and any of them can be brought down. One gone, and the bridge is cut.
+  struct BridgeSpan {
+    double from = 0, to = 0;  // along the bridge, from its middle
+    std::vector<u16> boxes;
+    double strength = 1;
+    bool gone = false;
+  };
+  struct Bridge {
+    V3 at;
+    double yaw = 0, halfWidth = 0;
+    int road = 0;  // which road crosses it, and at which of its points
+    size_t point = 0;
+    std::vector<BridgeSpan> spans;
+    bool open() const {
+      for (const BridgeSpan& s : spans)
+        if (s.gone) return false;
+      return true;
+    }
+  };
+  const std::vector<Bridge>& bridgeSpans() const { return bridgeSpans_; }
+  // A blast: spans in reach lose strength, in proportion to the charge. Says where any have just come down.
+  std::vector<V3> hitBridges(V3 c, double impulse, double radius);
+  bool overFallenSpan(double x, double y) const;  // the road drawn there has gone with it
+  u32 bridgeMask() const;           // one bit a span, for the server to tell the players
+  void applyBridgeMask(u32 mask);   // a player's machine catching up, should it have reckoned differently
+  u32 bridgeFalls() const { return bridgeFalls_; }
   struct Scrub {
     float x = 0, y = 0, z = 0, size = 0;
     u32 seed = 0;
@@ -138,6 +164,9 @@ class World {
   bool arena_ = false;
   Base bases_[2];
   std::vector<V3> houseSites_, wreckSites_, bridges_;
+  std::vector<Bridge> bridgeSpans_;
+  u32 bridgeFalls_ = 0;
+  void bringDownSpan(Bridge& b, BridgeSpan& s);
   std::vector<House> houses_;
   std::vector<Scrub> scrub_;
   void addVisualBox(V3 c, V3 half, double yaw, float r, float g, float b);  // seen, but nothing touches it

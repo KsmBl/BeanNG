@@ -1313,6 +1313,17 @@ void Duel::placeMine(int p, int kind) {
 }
 
 void Duel::stepMines(double dt) {
+  // A mine on a span that has come down has gone with it.
+  if (world.bridgeFalls() != bridgeFallsSeen) {
+    bridgeFallsSeen = world.bridgeFalls();
+    for (int kind = 0; kind < 2; kind++)
+      for (int i = 0; i < kMinesEach; i++) {
+        Mine& m = mines[kind][i];
+        if (!m.live || world.groundUnder(m.p.x, m.p.y, m.p.z + 0.5) > m.p.z - 1.5) continue;
+        m.live = false;
+        moveMarker(sim, mineFirst[kind][i], V3{0, 0, kMarkerDepth});
+      }
+  }
   for (int kind = 0; kind < 2; kind++)
     for (int i = 0; i < kMinesEach; i++) {
       Mine& m = mines[kind][i];
