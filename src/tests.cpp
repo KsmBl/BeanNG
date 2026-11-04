@@ -1836,6 +1836,64 @@ int main(int argc, char** argv) {
     printf("Eigenwert %.2f, guard %llu, v %.0f km/h\n", e, (unsigned long long)s->clampedSteps, c0.speed * 3.6);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "gearrepair")) {
+    // Tear a wheel off and bend another, repair, drive off.
+    for (int kind = 0; kind < 4; kind++) {
+      auto* world = new World();
+      world->build();
+      world->clearBoxes();
+      world->flatten();
+      auto* sim = new Sim();
+      sim->world = world;
+      CarRig rig;
+      const V3 at{-300, 0, 0};
+      const bool isTank = kind == 3;
+      Vehicle car;
+      Tank tank;
+      if (isTank) tank = buildLeopard(*sim, at, &rig);
+      else car = kind == 0 ? buildXantia(*sim, at, 0.0, &rig) : (kind == 1 ? buildOne1(*sim, at, &rig) : buildHummer(*sim, at, &rig));
+      sim->finalize();
+      if (isTank) tank.settle(*sim, 4.0);
+      else settleVehicle(*sim, car, 3.0);
+      auto* start = new Sim(*sim);
+      const Vehicle carBuilt = car;
+      const Tank tankBuilt = tank;
+      const u32 hit = isTank ? tank.wheels[0].in : car.wheels[0].axIn;
+      const u32 bent = isTank ? tank.wheels[3].in : car.wheels[3].axIn;
+      const auto spin = [&](double sec, double gas) {
+        Controls c;
+        c.throttle = gas;
+        for (int i = 0, n = int(sec / kDt); i < n; i++) {
+          sim->forces(kDt);
+          if (isTank) tank.update(*sim, c, kDt);
+          else car.update(*sim, c, kDt);
+          sim->finish(kDt);
+        }
+      };
+      const auto offset = [&](u32 n) {
+        const V3 a = sim->pos[n] - (isTank ? tank.cog : car.cog);
+        const V3 b = start->pos[n] - (isTank ? tankBuilt.cog : carBuilt.cog);
+        const V3 f = isTank ? tank.fwd : car.fwd, l = isTank ? tank.left : car.left, u = isTank ? tank.up : car.up;
+        const V3 fs = isTank ? tankBuilt.fwd : carBuilt.fwd, ls = isTank ? tankBuilt.left : carBuilt.left, us = isTank ? tankBuilt.up : carBuilt.up;
+        return len(V3{dot(a, f) - dot(b, fs), dot(a, l) - dot(b, ls), dot(a, u) - dot(b, us)});
+      };
+      for (u32 i = 0; i < sim->beams.size(); i++) {
+        Beam& b = sim->beams[i];
+        if (b.a == hit || b.b == hit) sim->sever(i);
+        else if (b.a == bent || b.b == bent) b.L0 *= 1.12;
+      }
+      spin(2.0, 0.0);
+      const double before[2] = {offset(hit), offset(bent)};
+      if (isTank) tank.repairRunningGear(*sim, tankBuilt, *start);
+      else car.repairRunningGear(*sim, carBuilt, *start);
+      spin(2.0, 0.0);
+      const double after[2] = {offset(hit), offset(bent)};
+      const V3 from = isTank ? tank.cog : car.cog;
+      spin(4.0, 0.7);
+      printf("  %-7s torn wheel %.2f m off -> %.3f, bent one %.3f -> %.3f; then 4 s of gas: %.1f m, %.0f km/h, sane %d\n", kind == 0 ? "Xantia" : (kind == 1 ? "One:1" : (kind == 2 ? "Hummer" : "Panzer")), before[0], after[0], before[1], after[1], len((isTank ? tank.cog : car.cog) - from), (isTank ? tank.speed : car.speed) * 3.6, std::isfinite(sim->pos[hit].x) && std::fabs(sim->pos[hit].z) < 100.0);
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "carreset")) {
     // Smash the car and part of the scenery, put the car back: the scenery must stay smashed.
     Bench b({-90, 0, 0}, 0, true);

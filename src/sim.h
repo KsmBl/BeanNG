@@ -165,6 +165,11 @@ class Sim {
 
   // One step is: forces() -> vehicle systems add their forces -> finish().
   void forces(double dt);
+  // Puts these nodes back as they were built, relative to the body, with their beams as new; what tore off comes back.
+  struct BodyPose {
+    V3 cog, fwd, left, up;
+  };
+  void restoreGear(const Sim& start, u16 obj, const std::vector<u32>& nodes, BodyPose then, BodyPose now, V3 vel);
   void finish(double dt);
 
   void wake(u16 obj);

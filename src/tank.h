@@ -128,6 +128,8 @@ class Tank {
   void update(Sim& sim, const Controls& in, double dt);
   void makeWreck(Sim& sim);  // what has been lying there since some earlier battle
   void repair(Sim& sim);  // what a kit can do: everything working again, though not as new
+  // Road wheels, their arms and bars, sprockets and idlers as they were built. It does not move the tank.
+  void repairRunningGear(Sim& sim, const Tank& built, const Sim& start);
   void tickFire(Sim& sim, double dt);  // goes on burning while the wreck itself sleeps
   void shiftIndices(long nodes, long beams, long objects);
 

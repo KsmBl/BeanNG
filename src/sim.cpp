@@ -374,6 +374,48 @@ void Sim::restoreObjects(const Sim& start, u32 count) {
   carResets++;
 }
 
+void Sim::restoreGear(const Sim& start, u16 obj, const std::vector<u32>& nodes, BodyPose then, BodyPose now, V3 vel) {
+  std::vector<char> gear(pos.size(), 0);
+  for (u32 n : nodes) gear[n] = 1;
+  Obj& body = objs[obj];
+  for (u32 n : nodes) {
+    const V3 q = start.pos[n] - then.cog;
+    pos[n] = now.cog + now.fwd * dot(q, then.fwd) + now.left * dot(q, then.left) + now.up * dot(q, then.up);
+    Sim::vel[n] = vel;
+    const u16 was = nodeObj[n];
+    if (was != obj) {
+      std::vector<u32>& theirs = objs[was].nodes;
+      theirs.erase(std::remove(theirs.begin(), theirs.end(), n), theirs.end());
+      nodeObj[n] = obj;
+      body.nodes.push_back(n);
+    }
+  }
+  const auto touches = [&](u32 bi) { return gear[beams[bi].a] || gear[beams[bi].b]; };
+  // Beams may have gone off with a piece: they all come back to the body.
+  for (size_t i = 0; i < objs.size(); i++) {
+    if (i == obj || objs[i].root != body.root) continue;
+    std::vector<u32>& theirs = objs[i].beamList;
+    theirs.erase(std::remove_if(theirs.begin(), theirs.end(), touches), theirs.end());
+    if (objs[i].nodes.empty()) {
+      theirs.clear();
+      objs[i].awake = objs[i].alwaysAwake = objs[i].dirty = false;
+      active.erase(std::remove(active.begin(), active.end(), u32(i)), active.end());
+    } else {
+      computeBounds(objs[i]);
+    }
+  }
+  std::vector<char> listed(beams.size(), 0);
+  for (u32 bi : body.beamList) listed[bi] = 1;
+  for (u32 bi = body.beamStart; bi < body.beamStart + body.beamCount; bi++) {
+    if (!touches(bi)) continue;
+    beams[bi] = start.beams[bi];
+    if (!listed[bi]) body.beamList.push_back(bi);
+  }
+  triObjDirty = true;
+  computeBounds(body);
+  wake(obj);
+}
+
 static constexpr double kBlastEnd = 450.0;
 
 void Sim::explode(V3 c, double impulse, double radius, double hole) {

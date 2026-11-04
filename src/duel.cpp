@@ -1560,13 +1560,11 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
           pl.items[IT_REPAIR]--;
           if (pl.repairing < kTanks) {
             tanks[pl.repairing].repair(sim);
+            tanks[pl.repairing].repairRunningGear(sim, tanksStart[pl.repairing], simStart);
           } else {
             Vehicle& car = cars[size_t(pl.repairing - kTanks)];
             car.dmg = decltype(car.dmg){};
-            for (Wheel& w : car.wheels) {
-              w.deflate = 0;
-              w.runoutX = w.runoutZ = 0;
-            }
+            car.repairRunningGear(sim, carsStart[size_t(pl.repairing - kTanks)], simStart);
           }
         }
       }

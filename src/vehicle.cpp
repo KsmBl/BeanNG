@@ -725,6 +725,30 @@ void Vehicle::applyBlockTorque(Sim& sim, const std::vector<u32>& nodes, double t
   for (u32 n : nodes) sim.force[n] += cross(left, sim.pos[n] - c) * (torque / arm2);
 }
 
+void Vehicle::repairRunningGear(Sim& sim, const Vehicle& built, const Sim& start) {
+  // Of the car's nodes, what is not body or engine: wheels, arms, struts.
+  std::vector<char> keep(sim.pos.size(), 0);
+  for (const auto* list : {&built.structureNodes, &built.engineNodes, &built.gearboxNodes})
+    for (u32 n : *list) keep[n] = 1;
+  const Obj& o = start.objs[obj];
+  std::vector<u32> gear;
+  for (u32 n = o.nodeStart; n < o.nodeStart + o.nodeCount; n++)
+    if (!keep[n]) gear.push_back(n);
+  sim.restoreGear(start, u16(obj), gear, {built.cog, built.fwd, built.left, built.up}, {cog, fwd, left, up}, fwd * speed);
+  for (size_t i = 0; i < wheels.size(); i++) {
+    Wheel& w = wheels[i];
+    const Wheel& b = built.wheels[i];
+    w.attached = b.attached;
+    w.deflate = 0;
+    w.runoutX = w.runoutZ = 0;
+    w.ux = w.uy = 0;
+    w.stopLimit = b.stopLimit;
+    std::fill(std::begin(w.dent), std::end(w.dent), 0.f);
+    for (auto& seen : w.spokeSeen)
+      for (double& s : seen) s = 0;
+  }
+}
+
 void Vehicle::presetRolling(double v, int gearIndex) {
   gear = gearIndex;
   shiftTarget = gearIndex;

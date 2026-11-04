@@ -835,6 +835,18 @@ void Tank::repair(Sim& sim) {
   sim.event(EV_SPARK, cog + up * 1.5, up, 0.5f);
 }
 
+void Tank::repairRunningGear(Sim& sim, const Tank& built, const Sim& start) {
+  std::vector<u32> gear;
+  for (const RoadWheel& w : wheels)
+    for (u32 k = 0; k < 5; k++) gear.push_back(w.in + k);  // hub, its two arm points and the head of the bar
+  for (int side = 0; side < 2; side++)
+    for (int k = 0; k < 2; k++) {
+      gear.push_back(sprocket[side][k]);
+      gear.push_back(idler[side][k]);
+    }
+  sim.restoreGear(start, hullObj, gear, {built.cog, built.fwd, built.left, built.up}, {cog, fwd, left, up}, fwd * speed);
+}
+
 void Tank::throwTrack(Sim& sim, int side) {
   if (trackOff[side]) return;
   // It runs off the wheels and stays lying where this happened, whatever the tank then does.

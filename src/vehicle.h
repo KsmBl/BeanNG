@@ -227,6 +227,8 @@ class Vehicle {
   void settleFluid(Sim& sim);
   // Sets all rotating parts to match rolling at this speed, for test bench starts.
   void presetRolling(double v, int gearIndex);
+  // All four wheels and what holds them, as they were built. It does not move the car.
+  void repairRunningGear(Sim& sim, const Vehicle& built, const Sim& start);
   double rpm() const { return engineOmega * 60.0 / (2.0 * PI); }
 
  private:
