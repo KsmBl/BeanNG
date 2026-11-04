@@ -4042,6 +4042,18 @@ static void runGame() {
     hud.damageView = gSet.damageView && inTank;
     hud.stats = gSet.stats;
     hud.farShadows = gSet.farShadows;
+    if (scriptMode == 69) {
+      // The small guns from close by: from the side and from in front, each on its own hull.
+      static const int kSlots[3] = {1, 3, 9};
+      const int i = std::min(shotCount, 5);
+      const V3 at = G.world.base(0).slot(kSlots[i / 2]);
+      cam.eye = i % 2 == 0 ? at + V3{3.2, 6.0, 2.6} : at + V3{9.0, 2.6, 3.0};
+      cam.target = at + V3{2.6, 0, 2.3};
+      cam.up = {0, 0, 1};
+      cam.fovY = 42.0 * PI / 180.0;
+      panelKind = PANEL_NONE;
+      hud.panel.open = false;
+    }
     if (scriptMode == 43) {
       // A tour of the map, without a server: the yard, the command centre, a bridge, a barrier, and from above.
       const World::Base& b = G.world.base(0);
@@ -4155,7 +4167,7 @@ static void runGame() {
         jerkSum = jerkFrames = 0;
         fflush(stdout);
         nextShot += scriptMode == 47 ? 0.3 : (scriptMode == 45 || scriptMode == 51 ? 0.6 : (scriptMode == 53 ? 0.4 : 1.0));
-        const int enough = scriptMode == 43 ? 7 : (scriptMode == 44 ? 2 : (scriptMode == 47 ? 6 : 60));
+        const int enough = scriptMode == 69 ? 6 : scriptMode == 43 ? 7 : (scriptMode == 44 ? 2 : (scriptMode == 47 ? 6 : 60));
         if (shotCount >= enough) quit = true;
       }
     }

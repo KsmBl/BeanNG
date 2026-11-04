@@ -277,6 +277,11 @@ else:
     cyl(T, "olive2", lc, lc + [0, 0, 0.09], 0.30, 28)
     for y in (0.25, -0.25):
         cyl(T, "dark", lc + [0.6, y - 0.40, 0.0], lc + [0.65, y - 0.40, 1.8], 0.007, 6)
+if VARIANT in ("light", "missile"):
+    # The small turrets are smaller than the place the gun's trunnions are at: a neck out of the body, for the gun's
+    # mount to sit in. It stays with the turret; the gun tilts inside it.
+    neck = C + [-0.92, 0.0, 0.56]
+    lathe(T, "olive", neck + [0.95, 0, -0.22], neck + [-0.06, 0, 0], [(0.02, 0.36), (0.45, 0.31), (0.8, 0.25), (0.98, 0.21)], 28)
 T.finish("turret")
 
 # ---- Gun: L7 105 mm in its mantlet. Trunnions at 0.92 ahead of the ring centre, 0.56 above it.
