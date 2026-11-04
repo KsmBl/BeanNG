@@ -3117,7 +3117,7 @@ static void runGame() {
           int pw, ph;
           SDL_GetWindowSizeInPixels(window, &pw, &ph);
           float px, py, pwid, rowH;
-          panelLayout(pw, ph, items.size(), px, py, pwid, rowH);
+          panelLayout(pw, ph, items.size(), px, py, pwid, rowH, hud.panel.side);
           const float mxp = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.x : e.button.x;
           const float myp = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.y : e.button.y;
           const int row = int(std::floor((myp - py) / rowH));
@@ -3816,6 +3816,12 @@ static void runGame() {
       }
     }
 
+    if (scriptMode == 72 && phase == Duel::CHOOSING && netState == Game::NET_IN) {
+      // The choosing of what to take, line by line, as big as the window is.
+      panelKind = PANEL_LOADOUT;
+      panelSel = 1 + std::min(shotCount / 2, int(IT_COUNT) - 1);
+    }
+
     if (scriptMode == 68) {
       // The loading screens: connecting to nothing, then waiting alone on a server that is there.
       static double shotAt = 4.0;
@@ -4238,6 +4244,7 @@ static void runGame() {
       hud.panel.fill.clear();
       hud.panel.detail.clear();
       hud.panel.slots.clear();
+      hud.panel.side = panelKind == PANEL_LOADOUT || panelKind == PANEL_TOOLS;
       if (panelKind == PANEL_LOADOUT) {
         static const char* kAbout[IT_COUNT] = {
             "Tretmine: liegt flach am Boden und ist nach 3 Sekunden scharf. Wer drauftritt, stirbt meist. Auch ein Fahrzeug löst sie aus. Liegt im Werkzeugmenü.",
@@ -4745,7 +4752,10 @@ int main(int argc, char** argv) {
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
   SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);  // the renderer does its own MSAA
 
-  window = SDL_CreateWindow("BeanNG", 1600, 900, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+  // Other window sizes, for trying out what the layout does with them.
+  int windowW = 1600, windowH = 900;
+  if (const char* size = getenv("BEANNG_WINDOW")) sscanf(size, "%dx%d", &windowW, &windowH);
+  window = SDL_CreateWindow("BeanNG", windowW, windowH, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
   if (!window) {
     fprintf(stderr, "Fenster: %s\n", SDL_GetError());
     return 1;

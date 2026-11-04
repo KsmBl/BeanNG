@@ -154,18 +154,22 @@ struct UiPanel {
   std::vector<std::string> rows;
   std::vector<std::string> values;
   std::vector<float> fill;   // bar behind the value, 0..1, or negative for none
-  std::string detail;        // about what is selected, under the list
+  std::string detail;        // about what is selected
   std::vector<int> slots;    // a row of boxes, each the kind of thing filling that slot; -1 empty
+  bool side = false;        // whether there is a box beside the list for those two
   int sel = 0;
 };
 // Where a panel sits, shared by drawing it and clicking on it.
-inline void panelLayout(int w, int h, size_t rows, float& x, float& y, float& pw, float& rowH) {
+// With a box beside the list the two together are centred, and the box gets what is left, up to a readable measure.
+inline void panelLayout(int w, int h, size_t rows, float& x, float& y, float& pw, float& rowH, bool side = false, float* sideW = nullptr) {
   const float H = float(h), W = float(w);
   const float scale = H / 720.f < 1.f ? 1.f : float(int(H / 720.f + 0.5f));
   pw = 620 * scale;
   rowH = 31 * scale;
-  x = (W - pw) * 0.5f;
+  const float gap = 14 * scale, box = side ? std::min(W - pw - 3 * gap, 320 * scale) : 0.f;
+  x = (W - pw - (side ? box + gap : 0.f)) * 0.5f;
   y = (H - (float(rows) + 3.6f) * rowH) * 0.5f + 2.0f * rowH;
+  if (sideW) *sideW = box;
 }
 
 // The map on screen, for the artillery's target and for knowing where one is.

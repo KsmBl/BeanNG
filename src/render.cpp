@@ -3006,7 +3006,8 @@ struct Renderer::Impl {
     if (o.panel.open) {
       const UiPanel& P = o.panel;
       float x, y, pw, rowH;
-      panelLayout(w, h, P.rows.size(), x, y, pw, rowH);
+      float sideW = 0;
+      panelLayout(w, h, P.rows.size(), x, y, pw, rowH, P.side, &sideW);
       const float sc = rowH / 27.f;
       rrect(x, y - 2.0f * rowH, pw, (float(P.rows.size()) + 3.6f) * rowH, 18 * sc, {.04f, .045f, .055f, .88f});
       label(x + 22 * sc, y - 1.05f * rowH, P.title.c_str(), 25 * sc, white);
@@ -3036,9 +3037,9 @@ struct Renderer::Impl {
         }
       }
       label(x + 22 * sc, y + (float(P.rows.size()) + .75f) * rowH, P.foot.c_str(), 13 * sc, faint);
-      if (!P.slots.empty() || !P.detail.empty()) {
+      if (P.side) {
         // Beside the list: what fills the slots, and what the selected thing is good for.
-        const float bx = x + pw + 14 * sc, bw = std::min(W - bx - 14 * sc, 420 * sc);
+        const float bx = x + pw + 12 * sc, bw = sideW;
         const float bh = (float(P.rows.size()) + 3.6f) * rowH;
         rrect(bx, y - 2.0f * rowH, bw, bh, 18 * sc, {.04f, .045f, .055f, .88f});
         static const Col kKinds[6] = {{.95f, .35f, .25f, 1}, {.95f, .65f, .2f, 1}, {.35f, .85f, .95f, 1}, {.45f, .85f, .45f, 1}, {.8f, .8f, .55f, 1}, {.7f, .6f, .95f, 1}};
@@ -3055,7 +3056,8 @@ struct Renderer::Impl {
         }
         if (!P.slots.empty()) ty += cell * 2.f + rowH * .7f;
         // The words, broken at spaces to fit.
-        const float fs = 15 * sc, maxW = bw - 36 * sc;
+        // By the window's height: the list's sizes go up in whole steps, and at the step to 1080p would leave these too big.
+        const float fs = H / 54.f, maxW = bw - 36 * sc;
         std::string line, word;
         const auto flush = [&] {
           label(bx + 18 * sc, ty, line.c_str(), fs, Col{1, 1, 1, .82f});
