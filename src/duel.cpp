@@ -1395,6 +1395,10 @@ void Duel::leaveVehicle(int p) {
 }
 
 void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
+  // What a shell can run into besides the ground and the vehicles.
+  Tank::people.clear();
+  for (const Player& pl : players)
+    if (pl.present && pl.vehicle < 0 && pl.soldier.hp > 0) Tank::people.push_back({pl.soldier.p, pl.soldier.prone > 0.5});
   // Blasts reach those on foot.
   for (; blastsDone < sim.blastLog.size(); blastsDone++) {
     const Sim::BlastRecord& b = sim.blastLog[blastsDone];
@@ -1403,7 +1407,8 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       const double d = len(pl.soldier.p + V3{0, 0, 0.9} - b.c);
       const double kill = b.radius * 0.55;
       if (d < kill) {
-        const double share = (1.0 - d / kill) * std::min(b.impulse / 1000.0, 1.0);
+        // Even the small shells: what barely scratches a tank still goes off right next to a person.
+        const double share = (1.0 - d / kill) * clampd(b.impulse / 1000.0, 0.5, 1.0);
         pl.soldier.hp -= 140.0 * share;
         noteHit(int(&pl - players), -1, b.c);
         // Thrown away from it, and up.

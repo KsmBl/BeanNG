@@ -691,6 +691,17 @@ bool Tank::pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at) const {
       }
     }
   }
+  // Someone on foot stops a shell too, and it goes off right there. Otherwise only the ground beside them would.
+  const double flat2 = d.x * d.x + d.y * d.y;
+  for (const Person& p : people) {
+    const double t = flat2 > 1e-9 ? clampd(((p.feet.x - a.x) * d.x + (p.feet.y - a.y) * d.y) / flat2, 0, 1) : 0.0;
+    const V3 q = a + d * t;
+    const double reach = p.lying ? 0.9 : 0.45;
+    if (std::hypot(q.x - p.feet.x, q.y - p.feet.y) < reach && q.z > p.feet.z - 0.1 && q.z < p.feet.z + (p.lying ? 0.6 : 1.8)) {
+      at = q;
+      return true;
+    }
+  }
   return false;
 }
 

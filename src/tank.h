@@ -105,6 +105,12 @@ class Tank {
   double radiatorHeat = 0;  // grows with a holed radiator, and takes the engine's power with it
   // A bullet on its way from a to b: what it hits among the weak spots, with this much force (1 is the big rifle).
   bool bulletHit(Sim& sim, V3 a, V3 b, double force);
+  // Those on foot, for the shells: set by whoever runs the match.
+  struct Person {
+    V3 feet;
+    bool lying;
+  };
+  static inline std::vector<Person> people;
   // Where a bullet or a blast does something, as a scope would show it.
   struct WeakPoint {
     V3 at;

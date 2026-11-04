@@ -1836,6 +1836,40 @@ int main(int argc, char** argv) {
     printf("Eigenwert %.2f, guard %llu, v %.0f km/h\n", e, (unsigned long long)s->clampedSteps, c0.speed * 3.6);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "shellman")) {
+    // A shell of each gun, flying at someone standing about, and past them at a distance.
+    auto* d = new Duel();
+    d->build();
+    for (int kind = 0; kind < TK_COUNT; kind++) {
+      for (double miss : {0.0, 1.0, 1.6}) {
+        d->players[0].present = d->players[1].present = true;
+        d->restart();
+        d->sim.logBlasts = true;
+        d->phase = Duel::PLAYING;
+        Soldier& s = d->players[0].soldier;
+        s.hp = 100;
+        Tank& t = d->tanks[Duel::tankIndex(1, TurretKind(kind))];
+        d->sim.wake(t.hullObj);
+        d->sim.wake(t.turretObj);
+        const V3 to = s.p + V3{0, 0, 1.0};
+        // Aimed at the ground beside them if it is to miss: the blast alone.
+        const V3 aim = miss > 0 ? V3{s.p.x + miss, s.p.y, d->world.height(s.p.x + miss, s.p.y)} : to;
+        const V3 from = aim + V3{-5, 0, 12};  // from above: nothing in the way but what is meant
+        t.shells.push_back({from, norm(aim - from) * t.spec().shellSpeed, 0.0});
+        Duel::Intent in[Duel::kMaxPlayers] = {};
+        double lowest = s.hp;
+        const size_t blastsBefore = d->sim.blastLog.size();
+        for (int i = 0; i < 400; i++) {
+          d->step(in);
+          lowest = std::min(lowest, s.hp);
+        }
+        if (getenv("SHELLMAN_DEBUG") && !d->sim.blastLog.empty()) printf("   Blast %.1f m vom Soldaten, Kraft %.0f\n", len(d->sim.blastLog.back().c - (s.p + V3{0, 0, 0.9})), d->sim.blastLog.back().impulse);
+        if (getenv("SHELLMAN_DEBUG")) printf("   phase %d, Schuss übrig %zu, Blasts %zu, Soldat %.1f %.1f %.1f, tiefster Wert %.0f, Fahrzeug %d\n", int(d->phase), t.shells.size(), d->sim.blastLog.size() - blastsBefore, s.p.x, s.p.y, s.p.z, lowest, d->players[0].vehicle);
+        printf("  %-16s %s %.1f m: %.0f von 100 Schaden\n", t.spec().name, miss > 0 ? "Boden daneben" : "Volltreffer  ", miss, 100.0 - lowest);
+      }
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "gearrepair")) {
     // Tear a wheel off and bend another, repair, drive off.
     for (int kind = 0; kind < 4; kind++) {
