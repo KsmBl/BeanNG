@@ -625,7 +625,10 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     double Fn = 0;
     for (const RoadWheel& w : wheels)
       if ((w.left ? 0 : 1) == s) Fn += w.Fn;
-    const double Tres = (0.022 * Fn * kSprocketR + 120.0 + brakeAct * 90000.0 + in.handbrake * 90000.0);
+    // Foot off and nearly standing, the bands close by themselves: a tank does not roll away. Not while it is being
+    // steered, because a pivot turn needs its tracks free.
+    const double parked = throttleAct < 0.03 && std::fabs(steerAct) < 0.05 ? clampd((3.0 - absV) / 1.5, 0, 1) * 90000.0 : 0.0;
+    const double Tres = (0.022 * Fn * kSprocketR + 120.0 + brakeAct * 90000.0 + in.handbrake * 90000.0 + parked);
     const double dv = Tres * dt / kTrackInertia;
     om = std::fabs(om) <= dv ? 0.0 : om - std::copysign(dv, om);
     trackOmega[s] = clampd(om, -60.0, 60.0);

@@ -1457,6 +1457,17 @@ int main(int argc, char** argv) {
     printf("  0-30 km/h %.1f s, 0-50 km/h %.1f s, after 30 s %.1f km/h gear %d rpm %.0f (real: 0-60 about 20 s, top 65 km/h), y drift %.2f m\n", t0to30, t0to50, t.speed * 3.6, t.gear, t.rpm(), t.cog.y);
     run(6.0, [&](double, Controls& c) { c.brake = 1; });
     printf("  stopped from there: %.1f km/h\n", t.speed * 3.6);
+    {
+      // Foot off at walking pace, and a push when standing: it should stay where it is.
+      run(1.5, [&](double, Controls& c) { c.throttle = 0.6; });
+      const double rolling = t.speed * 3.6;
+      const V3 from = t.cog;
+      run(8.0, [&](double, Controls&) {});
+      const V3 stopped = t.cog;
+      for (u32 n : s->objs[t.hullObj].nodes) s->vel[n] += t.fwd * 1.0;
+      run(4.0, [&](double, Controls&) {});
+      printf("  coasting from %.1f km/h: rolled %.1f m; a push of 1 m/s: moved %.2f m\n", rolling, len(stopped - from), len(t.cog - stopped));
+    }
     const double h0 = std::atan2(t.fwd.y, t.fwd.x);
     run(4.0, [&](double, Controls& c) { c.steer = 1; });
     printf("  pivot turn: %.0f deg in 4 s, moved %.1f km/h\n", (std::atan2(t.fwd.y, t.fwd.x) - h0) * 57.3, t.speed * 3.6);
@@ -2841,6 +2852,34 @@ int main(int argc, char** argv) {
       int locked = 0;
       b.run(9.0, [&](double, Controls& c) { c.brake = 1; for (const Wheel& w : b.car.wheels) if (b.car.speed > 3 && std::fabs(w.omega) < 1) locked++; });
       printf("  ABS %-3s: distance %.1f m, wheel-steps locked %d\n", on ? "AN" : "AUS", len(b.car.cog - p0), locked);
+    }
+    printf("== Braking 100-0, every car ==\n");
+    for (int kind = 0; kind < 3; kind++) {
+      World world;
+      world.build();
+      world.clearBoxes();
+      world.flatten();
+      Sim sim;
+      sim.world = &world;
+      CarRig rig;
+      const V3 at{-300, 0, 0};
+      Vehicle car = kind == 0 ? buildXantia(sim, at, 0.0, &rig) : (kind == 1 ? buildOne1(sim, at, &rig) : buildHummer(sim, at, &rig));
+      sim.finalize();
+      settleVehicle(sim, car, 3.0);
+      const Obj o = sim.objs[car.obj];
+      for (u32 i = o.nodeStart; i < o.nodeStart + o.nodeCount; i++) sim.vel[i] = car.fwd * (100 / 3.6);
+      car.presetRolling(100 / 3.6, 3);
+      const V3 p0 = car.cog;
+      Controls c;
+      c.brake = 1;
+      double when = -1;
+      for (int i = 0; i < 9 * 2000 && when < 0; i++) {
+        sim.forces(kDt);
+        car.update(sim, c, kDt);
+        sim.finish(kDt);
+        if (car.speed < 0.3) when = i * kDt;
+      }
+      printf("  %-8s %.1f m in %.2f s\n", kind == 0 ? "Xantia" : (kind == 1 ? "One:1" : "Hummer"), len(car.cog - p0), when);
     }
     printf("== Banked bends: tightest stretch of the road, flat and banked ==\n");
     for (double scale : {0.0, 1.0}) {
