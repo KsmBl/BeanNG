@@ -2473,6 +2473,7 @@ static void runGame() {
     G.rig.links.push_back({f + 3, f + 4, body * 0.2f, MM_DARK, 0});
     G.rig.links.push_back({f + 5, f + 6, body * 0.2f, MM_DARK, 0});
   };
+  G.rig.rocketLinks = G.rig.links.size();
   for (int i = 0; i < Duel::kMissileTanks; i++) rocketRods(G.duel.missileFirst[i], 0.13f, MM_WHITE, MM_ACCENT);
   for (int i = 0; i < Duel::kRpgRockets; i++) rocketRods(G.duel.rocketFirst[i], 0.05f, MM_OLIVE2, MM_DARK);
   for (int i = 0; i < Duel::kStrikeRockets; i++) rocketRods(G.duel.rocketFirst[Duel::kRpgRockets + i], 0.24f, MM_METAL, MM_ACCENT);

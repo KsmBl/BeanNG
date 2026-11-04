@@ -279,6 +279,8 @@ struct CarRig {
   std::vector<VisLink> links;
   // What belongs to the vehicles parked about the place: their links come after the driven one's.
   size_t playerLinks = size_t(-1);
+  // Rockets come last. They fly too fast, and with the camera behind them, to be smeared as if the world moved past.
+  size_t rocketLinks = size_t(-1);
   std::vector<int> linkInstance;  // which of the parked ones each link belongs to, or empty
   struct NodeRange { u32 first = 0, count = 0; };
   std::vector<NodeRange> parkedNodes;

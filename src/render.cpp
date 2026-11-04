@@ -3513,6 +3513,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     bool linkSelf = false;
     for (size_t li = 0; li < D.rig->links.size(); li++) {
       const VisLink& l = D.rig->links[li];
+      if (li == D.rig->rocketLinks) D.setMat(prog, "uPrevVP", vp);
       const bool self = li < D.rig->linkInstance.size() && D.rig->linkInstance[li] == s.selfInstance;
       if (self != linkSelf) {
         D.setMat(prog, "uPrevWorld", self ? D.carPrevWorld : I);
@@ -3535,6 +3536,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
       }
       glDrawArrays(GL_TRIANGLES, l.mat * D.rodCount, D.rodCount);
     }
+    D.setMat(prog, "uPrevVP", D.prevVP);
     D.setMat(prog, "uModel", I);
     if (!D.trackVerts.empty()) {
       glBindVertexArray(D.trackVao);
