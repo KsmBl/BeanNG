@@ -359,50 +359,92 @@ void Tank::updateFrame(Sim& sim, double dt) {
   roll = std::asin(clampd(left.z, -1, 1));
 }
 
-void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
+V3 Tank::ringPoint(const Sim& sim) const {
   const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
   const V3 O0 = (sim.rest[refFL] + sim.rest[refFR] + sim.rest[refRL] + sim.rest[refRR]) * 0.25;
-  const V3 spawnApprox = O0;  // the frame's origin as built
-  const V3 vO = vCog;
   // The ring's centre relative to the frame origin, in the hull's axes.
-  const Obj& hullO = sim.objs[hullObj];
-  (void)hullO;
-  auto hullToWorld = [&](V3 q) { return O + fwd * q.x + left * q.y + up * q.z; };
-  const V3 ringLocal = sim.rest[turretNodes[0]] - turretRest[0] - spawnApprox;
+  const V3 q = sim.rest[turretNodes[0]] - turretRest[0] - O0;
+  return O + fwd * q.x + left * q.y + up * q.z;
+}
 
-  // ---- Aim: the stabiliser holds the gun on the point the gunner is looking at.
+void Tank::aimAngles(V3 ring, const Controls& in, double& wantYaw, double& wantPitch) const {
+  const TurretSpec& sp_ = spec();
   const double cy0 = std::cos(turretYaw), sy0 = std::sin(turretYaw);
   const V3 tF = fwd * cy0 + left * sy0, tL = left * cy0 - fwd * sy0;
-  const V3 ring = hullToWorld(ringLocal);
+  const V3 tp0 = ring + tF * trunnion.x + tL * trunnion.y + up * trunnion.z;
+  const V3 to = in.aimPoint - tp0;
+  // The arc that lands on the point, worked out against the true vertical: on a high lob a hull leaning by one
+  // degree would otherwise put the shell a hundred metres off. High over the top if asked for and possible.
+  const double v2 = sp_.shellSpeed * sp_.shellSpeed, range = std::max(std::hypot(to.x, to.y), 1.0), rise = to.z;
+  const double disc = v2 * v2 - 9.81 * (9.81 * range * range + 2.0 * rise * v2);
+  double solved = 45.0 * PI / 180.0;  // out of reach: as far as it will go
+  if (disc >= 0) {
+    const double high = std::atan2(v2 + std::sqrt(disc), 9.81 * range), low = std::atan2(v2 - std::sqrt(disc), 9.81 * range);
+    solved = in.indirect && high <= sp_.pitchMax * PI / 180.0 ? high : low;
+  }
+  const V3 away = V3{to.x, to.y, 0} / range;
+  const V3 lay = away * std::cos(solved) + V3{0, 0, 1} * std::sin(solved);
+  wantYaw = std::atan2(dot(lay, left), dot(lay, fwd));
+  wantPitch = clampd(std::asin(clampd(dot(lay, up), -1, 1)), sp_.pitchMin * PI / 180.0, sp_.pitchMax * PI / 180.0);
+}
+
+// A damaged ring turns slowly, and one that is gone does not turn at all.
+double Tank::yawRateNow() const { return spec().yawRate * PI / 180.0 * (mod[TM_RING] <= 0 ? 0.0 : lerpd(0.4, 1.0, mod[TM_RING])); }
+// The elevation gear shot through: the gun moves slowly, and at the end stays where it is.
+double Tank::pitchRateNow() const { return spec().pitchRate * PI / 180.0 * (mod[TM_ELEVATION] <= 0 ? 0.0 : lerpd(0.25, 1.0, mod[TM_ELEVATION])); }
+
+void Tank::showOwnAim(Sim& sim, const Controls& in, double& yawShown, double& pitchShown, double dt) {
+  const V3 ring = ringPoint(sim);
+  const double yawRate = yawRateNow(), pitchRate = pitchRateNow();
+  if (len2(in.aimPoint) > 1.0 && !missileLive && !destroyed) {
+    double wantYaw = 0, wantPitch = 0;
+    aimAngles(ring, in, wantYaw, wantPitch);
+    yawShown += clampd(std::remainder(wantYaw - yawShown, 2.0 * PI) * 6.0, -yawRate, yawRate) * dt;
+    pitchShown += clampd((wantPitch - pitchShown) * 6.0, -pitchRate, pitchRate) * dt;
+  }
+  yawShown += std::remainder(turretYaw - yawShown, 2.0 * PI) * (1.0 - std::exp(-dt * 3.0));
+  pitchShown += (gunPitch - pitchShown) * (1.0 - std::exp(-dt * 3.0));
+  // Never more ahead of the server than a long way there and back could account for.
+  const double yawAhead = clampd(std::remainder(yawShown - turretYaw, 2.0 * PI), -yawRate * 0.3, yawRate * 0.3);
+  const double pitchAhead = clampd(pitchShown - gunPitch, -pitchRate * 0.3, pitchRate * 0.3);
+  yawShown = turretYaw + yawAhead;
+  pitchShown = gunPitch + pitchAhead;
+
+  const auto turned = [](V3 v, V3 axis, double angle) {
+    const double c = std::cos(angle), s = std::sin(angle);
+    return v * c + cross(axis, v) * s + axis * (dot(axis, v) * (1.0 - c));
+  };
+  const double cy = std::cos(turretYaw), sy = std::sin(turretYaw);
+  const V3 eF = fwd * cy + left * sy, eL = left * cy - fwd * sy;
+  const V3 trun = ring + eF * trunnion.x + eL * trunnion.y + up * trunnion.z;
+  // Up is positive for the gun, which is a turn the other way about the axis to the left.
+  const auto layGun = [&](V3 p) { return ring + turned(trun + turned(p - trun, eL, -pitchAhead) - ring, up, yawAhead); };
+  for (u32 n : turretNodes) sim.pos[n] = ring + turned(sim.pos[n] - ring, up, yawAhead);
+  for (u32 n : gunNodes) sim.pos[n] = layGun(sim.pos[n]);
+  muzzle = layGun(muzzle);
+  gunDir = turned(turned(gunDir, eL, -pitchAhead), up, yawAhead);
+  sight = ring + turned(sight - ring, up, yawAhead);
+  turretYaw = yawShown;
+  gunPitch = pitchShown;
+}
+
+void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
+  const V3 vO = vCog;
+  const V3 ring = ringPoint(sim);
   ring_ = ring;
   const TurretSpec& sp_ = spec();
-  const V3 tp0 = ring + tF * trunnion.x + tL * trunnion.y + up * trunnion.z;
+  // ---- Aim: the stabiliser holds the gun on the point the gunner is looking at.
   // While a missile is in the air the same hand is flying it.
   if (len2(in.aimPoint) > 1.0 && !missileLive) {
-    const V3 to = in.aimPoint - tp0;
-    // The arc that lands on the point, worked out against the true vertical: on a high lob a hull leaning by one
-    // degree would otherwise put the shell a hundred metres off. High over the top if asked for and possible.
-    const double v2 = sp_.shellSpeed * sp_.shellSpeed, range = std::max(std::hypot(to.x, to.y), 1.0), rise = to.z;
-    const double disc = v2 * v2 - 9.81 * (9.81 * range * range + 2.0 * rise * v2);
-    double solved = 45.0 * PI / 180.0;  // out of reach: as far as it will go
-    if (disc >= 0) {
-      const double high = std::atan2(v2 + std::sqrt(disc), 9.81 * range), low = std::atan2(v2 - std::sqrt(disc), 9.81 * range);
-      solved = in.indirect && high <= sp_.pitchMax * PI / 180.0 ? high : low;
-    }
-    const V3 away = V3{to.x, to.y, 0} / range;
-    const V3 lay = away * std::cos(solved) + V3{0, 0, 1} * std::sin(solved);
-    const double wantYaw = std::atan2(dot(lay, left), dot(lay, fwd));
+    double wantYaw = 0, wantPitch = 0;
+    aimAngles(ring, in, wantYaw, wantPitch);
     double e = wantYaw - turretYaw;
     while (e > PI) e -= 2 * PI;
     while (e < -PI) e += 2 * PI;
-    // A damaged ring turns slowly, and one that is gone does not turn at all.
-    const double kYawRate = sp_.yawRate * PI / 180.0 * (mod[TM_RING] <= 0 ? 0.0 : lerpd(0.4, 1.0, mod[TM_RING]));
-    // The elevation gear shot through: the gun moves slowly, and at the end stays where it is.
-    const double kPitchRate = sp_.pitchRate * PI / 180.0 * (mod[TM_ELEVATION] <= 0 ? 0.0 : lerpd(0.25, 1.0, mod[TM_ELEVATION]));
+    const double kYawRate = yawRateNow(), kPitchRate = pitchRateNow();
     turretYaw += clampd(e * 6.0, -kYawRate, kYawRate) * dt;
     if (turretYaw > PI) turretYaw -= 2 * PI;
     if (turretYaw < -PI) turretYaw += 2 * PI;
-    const double wantPitch = clampd(std::asin(clampd(dot(lay, up), -1, 1)), sp_.pitchMin * PI / 180.0, sp_.pitchMax * PI / 180.0);
     gunPitch += clampd((wantPitch - gunPitch) * 6.0, -kPitchRate, kPitchRate) * dt;
   }
 

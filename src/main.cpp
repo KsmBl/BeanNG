@@ -874,6 +874,19 @@ struct Game {
     // has happened still counts for everything else; its report of the same shot is then not shown a second time.
     int shotsAhead = 0;
     double shotsAheadUntil = 0, ownGunReady = 0;
+    // The gun under one's own hand, ahead of the server.
+    struct OwnAim {
+      int who = -1;
+      double yaw = 0, pitch = 0;
+    } ownAim;
+    const auto aimOwnGun = [&](Tank& t, int who, const Controls& c, double dtNow) {
+      if (who != ownAim.who) {
+        ownAim.who = who;
+        ownAim.yaw = t.turretYaw;
+        ownAim.pitch = t.gunPitch;
+      }
+      t.showOwnAim(sim, c, ownAim.yaw, ownAim.pitch, dtNow);
+    };
     // What the line is like, for the display: counted over the last second.
     int lineGot = 0, lineLost = 0;
     u32 lineSeq = 0;
@@ -1611,6 +1624,9 @@ struct Game {
         Tank& t = duel.tanks[side];
         const u32 first = duel.tankFirst[side];
         const size_t count = fb.offsets.size() / 3;
+        // The driver has the gun too, as long as nobody else has taken the other seat.
+        bool aimingThis = side == vehicleNow && !replaying && state == NET_IN;
+        for (int who = 0; who < Duel::kMaxPlayers && aimingThis && seatNow == 0; who++) aimingThis = !(who != mySlot && duel.players[who].present && duel.players[who].vehicle == side && duel.players[who].seat == 1);
         if (side == vehicleNow && seatNow == 0 && q.size() >= 2 && !replaying) {
           // One's own tank is not shown late but early: where it will be by the time one's latest input has arrived.
           // That is what makes it answer at once instead of after the ping.
@@ -1642,7 +1658,7 @@ struct Game {
           if (scriptMode == 63) {
             static double nextSay = 0;
             if (now > nextSay) {
-              printf("Laufzeit %.0f ms, Rahmenalter %.0f ms, Vorlauf Kurs %.2f Grad\n", rtt * 1000.0, age * 1000.0, turn * 180.0 / PI);
+              printf("Laufzeit %.0f ms, Rahmenalter %.0f ms, Vorlauf Kurs %.2f Grad, Turm %.2f Grad\n", rtt * 1000.0, age * 1000.0, turn * 180.0 / PI, std::remainder(ownAim.yaw - double(last.state.turretYaw), 2.0 * PI) * 180.0 / PI);
               nextSay = now + 20.0;
             }
           }
@@ -1668,6 +1684,7 @@ struct Game {
           t.muzzle = cog + ahead(last.state.muzzle - last.cog);
           t.sight = cog + ahead(last.state.sight - last.cog);
           t.gunDir = ahead(last.state.gunDir);
+          if (aimingThis) aimOwnGun(t, side, in.c, dtShown);
           continue;
         }
         const V3 cog = fa.cog + (fb.cog - fa.cog) * a;
@@ -1677,6 +1694,7 @@ struct Game {
           sim.pos[first + k] = cog + (oa + (ob - oa) * a) * (1.0 / net::kNodeScale);
         }
         t.applyNetState(sim, fb.state, dt);
+        if (aimingThis) aimOwnGun(t, side, in.c, dtShown);
       }
 
       for (int k = 0; k < Duel::kCars; k++) {

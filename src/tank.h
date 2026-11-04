@@ -141,6 +141,9 @@ class Tank {
   NetState netState() const;
   // Call once the nodes hold their new positions.
   void applyNetState(Sim& sim, const NetState& n, double dt);
+  // For whoever is aiming this gun on their own machine: the turret follows the hand at once, and the server's
+  // word pulls it back if it thinks differently. Call after applyNetState.
+  void showOwnAim(Sim& sim, const Controls& in, double& yawShown, double& pitchShown, double dt);
   void settle(Sim& sim, double seconds);
   // The closed line of the track around sprocket, wheels and idler, in world space.
   void trackPath(const Sim& sim, int side, std::vector<V3>& out) const;
@@ -162,6 +165,10 @@ class Tank {
   void updateFrame(Sim& sim, double dt);
   void updateWheelLift(const Sim& sim, double dt);
   void updateTurret(Sim& sim, const Controls& in, double dt);
+  V3 ringPoint(const Sim& sim) const;
+  void aimAngles(V3 ring, const Controls& in, double& wantYaw, double& wantPitch) const;
+  double yawRateNow() const;
+  double pitchRateNow() const;
   void updateDrive(Sim& sim, const Controls& in, double dt);
   void updateTracks(Sim& sim, double dt);
   void updateShells(Sim& sim, double dt);
