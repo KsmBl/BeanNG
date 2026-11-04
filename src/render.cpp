@@ -2752,6 +2752,12 @@ struct Renderer::Impl {
     }
 
     // ---- The map.
+    if (!o.vector.empty() && !o.map.open && o.scope <= 0) {
+      // Which square one is in, always in view: that is how one says where one is.
+      const std::string text = "Vektor " + o.vector;
+      rrect(14 * u, 14 * u, textWidth(text.c_str(), 15 * u) + 20 * u, 26 * u, 8 * u, {.04f, .045f, .055f, .62f});
+      label(24 * u, 32 * u, text.c_str(), 15 * u, white);
+    }
     if (o.map.open) {
       float mx0, my0, ms;
       mapLayout(w, h, mx0, my0, ms);
@@ -2803,6 +2809,28 @@ struct Renderer::Impl {
         circle(sx, sy, r, c);
       };
       for (int side = 0; side < 2; side++) dot2(world->base(side).centre, 7 * u, {.95f, .95f, .95f, .9f});
+      // The squares, so that a place can be told to someone: lines, and each one's name in its corner.
+      {
+        const float part = ms / 8.f;
+        const Col rule{1, 1, 1, .38f}, faint{1, 1, 1, .42f};
+        for (int i = 0; i <= 8; i++) {
+          rrect(mx0 + float(i) * part - .6f * u, my0, 1.2f * u, ms, 0, rule);
+          rrect(mx0, my0 + float(i) * part - .6f * u, ms, 1.2f * u, 0, rule);
+        }
+        for (int row = 0; row < 8; row++)
+          for (int col = 0; col < 8; col++) {
+            const char name[3] = {char('A' + col), char('1' + row), 0};
+            label(mx0 + float(col) * part + 5 * u, my0 + float(row) * part + 15 * u, name, 12 * u, faint);
+          }
+        // And big along the edges, outside the map where there is room for it.
+        const Col edge{1, 1, 1, .95f};
+        for (int i = 0; i < 8; i++) {
+          const char letter[2] = {char('A' + i), 0}, number[2] = {char('1' + i), 0};
+          labelMid(mx0 + (float(i) + .5f) * part, my0 - 11 * u, letter, 17 * u, edge);
+          labelMid(mx0 - 13 * u, my0 + (float(i) + .5f) * part, number, 17 * u, edge);
+          labelMid(mx0 + ms + 13 * u, my0 + (float(i) + .5f) * part, number, 17 * u, edge);
+        }
+      }
       if (o.map.hasEnemy) {
         // Only roughly: a patch, not a point, and it gets stale.
         const float radius = float(Duel_kFixError / (2.0 * kMapHalf)) * ms;
@@ -2818,7 +2846,7 @@ struct Renderer::Impl {
       }
       if (o.map.fixWait >= 0) {
         if (o.map.fixWait > 0) snprintf(buf, sizeof buf, "Nächste Abfrage in %.0f s", o.map.fixWait);
-        else snprintf(buf, sizeof buf, "J: Standort des Gegners abfragen");
+        else snprintf(buf, sizeof buf, o.map.padCursor ? "RB: Standort des Gegners abfragen" : "Q: Standort des Gegners abfragen");
         label(mx0 + 14 * u, my0 + 22 * u, buf, 15 * u, white);
       }
       if (o.map.hasMark) {
@@ -2840,6 +2868,21 @@ struct Renderer::Impl {
         arc(sx, sy, 8 * u, 1.5f * u, 0, kPi2, {1, 1, 1, .95f});
         rrect(sx - 13 * u, sy - .75f * u, 26 * u, 1.5f * u, 0, {1, 1, 1, .95f});
         rrect(sx - .75f * u, sy - 13 * u, 1.5f * u, 26 * u, 0, {1, 1, 1, .95f});
+      }
+      {
+        // Where things are, by name.
+        char where[64], name[4];
+        vectorName(o.map.me.x, o.map.me.y, name);
+        int n = snprintf(where, sizeof where, "Du: %s", name);
+        if (o.map.hasMark) {
+          vectorName(o.map.mark.x, o.map.mark.y, name);
+          n += snprintf(where + n, sizeof where - size_t(n), "  ·  Ziel: %s", name);
+        }
+        if (o.map.padCursor || o.map.mouseKnown) {
+          vectorName(o.map.cursor.x, o.map.cursor.y, name);
+          snprintf(where + n, sizeof where - size_t(n), "  ·  Zeiger: %s", name);
+        }
+        label(mx0 + 14 * u, my0 + ms - 38 * u, where, 16 * u, {1, 1, 1, .98f});
       }
       label(mx0 + 14 * u, my0 + ms - 18 * u, o.map.padCursor ? (o.map.strike ? "Bombencode  ·  Rechter Stick: Cursor  ·  A: Ziel des Schlags  ·  B: abbrechen" : "Rechter Stick: Cursor  ·  A: Ziel markieren  ·  X: löschen  ·  B: schließen") : o.map.strike ? "Bombencode  ·  Klick: Ziel des Schlags  ·  Rechtsklick: abbrechen" : "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }

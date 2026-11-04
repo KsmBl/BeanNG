@@ -170,6 +170,7 @@ struct UiMap {
   bool open = false;
   bool hasMark = false;
   bool strike = false;  // the next click calls in a strike code
+  bool mouseKnown = false;  // where the mouse is over the map, in cursor
   bool padCursor = false;  // the controller is in hand: a cursor for it, and its buttons in the hint
   V3 cursor;
   V3 mark, me;
@@ -181,6 +182,13 @@ struct UiMap {
   double fixWait = -1;  // until the next question may be asked; negative while the computer has not been tapped
 };
 constexpr double kMapHalf = 900.0;
+// The map in eight by eight squares: A to H from west to east, 1 to 8 from north to south.
+inline void vectorName(double x, double y, char out[4]) {
+  const int col = int((x + kMapHalf) / (2.0 * kMapHalf) * 8.0), row = int((kMapHalf - y) / (2.0 * kMapHalf) * 8.0);
+  out[0] = char('A' + (col < 0 ? 0 : (col > 7 ? 7 : col)));
+  out[1] = char('1' + (row < 0 ? 0 : (row > 7 ? 7 : row)));
+  out[2] = 0;
+}
 inline void mapLayout(int w, int h, float& x, float& y, float& size) {
   size = float(std::min(w, h)) * 0.88f;
   x = (float(w) - size) * .5f;
@@ -218,6 +226,7 @@ struct HudOptions {
   bool crosshair = false;
   bool damageView = true;
   double grassDensity = 1;
+  std::string vector;  // the square one is in, in a match
   bool xray = false, debugBeams = false, mouseSteer = false, gamepad = false;
   bool motionBlur = true, stats = true, farShadows = true;
   std::string gamepadName, cameraName, gpuName;

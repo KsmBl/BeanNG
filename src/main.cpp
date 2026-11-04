@@ -2353,6 +2353,17 @@ static void runGame() {
         osk.open = true;
         osk.target = 3;
       });
+      {
+        char name[4], line[40];
+        vectorName(view.carCog.x, view.carCog.y, name);
+        snprintf(line, sizeof line, "Ich bin in Vektor %s", name);
+        const std::string said = line;
+        page(line, [&, said] {
+          std::lock_guard<std::mutex> lock(G.inputMutex);
+          G.input.chatOut = said;
+          panelKind = PANEL_NONE;
+        });
+      }
       for (const char* line : {"Hilfe!", "Gegner gesichtet", "Ich brauche Munition", "Steig ein, ich fahre", "Folge mir", "Bleib, wo du bist", "Danke", "Gut gemacht", "Entschuldigung"}) {
         page(line, [&, line] {
           std::lock_guard<std::mutex> lock(G.inputMutex);
@@ -3280,6 +3291,21 @@ static void runGame() {
       }
     }
 
+    if (scriptMode == 67 && netState == Game::NET_IN && inMatch) {
+      // The map with its squares, marked.
+      panelKind = PANEL_NONE;
+      mapOpen = true;
+      hasMark = true;
+      markPoint = V3{250, -300, 0};
+      static double shot = tNow + 3.0;
+      if (tNow > shot) {
+        wantShot = true;
+        shot = 1e30;
+      }
+    } else if (scriptMode == 67 && netState == Game::NET_IN && phase == Duel::CHOOSING) {
+      pickReady = true;
+      panelKind = PANEL_NONE;
+    }
     if (scriptMode == 66 && netState == Game::NET_IN) {
       // Out of the yard, through the meadow, and a look back at what the tank has left behind.
       if (phase == Duel::CHOOSING) {
@@ -3726,9 +3752,31 @@ static void runGame() {
     if (view.foot.noSight && rig.mode == CAM_HOOD) rig.mode = CAM_CHASE;
     hud.map.open = mapOpen && panelKind == 0;
     hud.grassDensity = gSet.grass;
+    {
+      // On the map a mouse has a place as well.
+      hud.vector.clear();
+      if (netState == Game::NET_IN && phase == Duel::PLAYING) {
+        char name[4];
+        vectorName(view.carCog.x, view.carCog.y, name);
+        hud.vector = name;
+      }
+    }
     hud.map.hasMark = hasMark;
     hud.map.padCursor = padActive;
     hud.map.cursor = mapCursor;
+    hud.map.mouseKnown = false;
+    if (mapOpen && !padActive) {
+      int pw, ph;
+      SDL_GetWindowSizeInPixels(window, &pw, &ph);
+      float mx0, my0, ms, mouseX, mouseY;
+      mapLayout(pw, ph, mx0, my0, ms);
+      SDL_GetMouseState(&mouseX, &mouseY);
+      const double wx = (double(mouseX - mx0) / ms * 2.0 - 1.0) * kMapHalf, wy = (1.0 - double(mouseY - my0) / ms * 2.0) * kMapHalf;
+      if (std::fabs(wx) < kMapHalf && std::fabs(wy) < kMapHalf) {
+        hud.map.mouseKnown = true;
+        hud.map.cursor = V3{wx, wy, 0};
+      }
+    }
     hud.osk.open = osk.open;
     if (osk.open) {
       static const char* kOskTitle[4] = {"Benutzername", "Server-Adresse", "Port", "Chat"};
