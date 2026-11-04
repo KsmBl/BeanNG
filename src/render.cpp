@@ -2806,7 +2806,7 @@ struct Renderer::Impl {
       // Which square one is in, always in view: that is how one says where one is.
       const std::string text = "Vektor " + o.vector;
       rrect(14 * u, 14 * u, textWidth(text.c_str(), 15 * u) + 20 * u, 26 * u, 8 * u, {.04f, .045f, .055f, .62f});
-      label(24 * u, 32 * u, text.c_str(), 15 * u, white);
+      label(24 * u, 27 * u, text.c_str(), 15 * u, white);
     }
     if (o.map.open) {
       float mx0, my0, ms;
@@ -3004,13 +3004,13 @@ struct Renderer::Impl {
       if (s.chatOpen) {
         const std::string line = "> " + s.chatInput + "_";
         rrect(cx0 - 6 * u, cy1 - 14 * u, std::max(textWidth(line.c_str(), 16 * u) + 16 * u, 420 * u), 28 * u, 8 * u, {.03f, .03f, .04f, .78f});
-        label(cx0 + 2 * u, cy1 + 6 * u, line.c_str(), 16 * u, white);
+        label(cx0 + 2 * u, cy1, line.c_str(), 16 * u, white);
       }
       for (size_t i = s.chat.size(); i-- > 0;) {
         cy1 -= 24 * u;
         const float tw = textWidth(s.chat[i].c_str(), 15 * u);
         rrect(cx0 - 6 * u, cy1 - 12 * u, tw + 16 * u, 23 * u, 6 * u, {.03f, .03f, .04f, .5f});
-        label(cx0 + 2 * u, cy1 + 5 * u, s.chat[i].c_str(), 15 * u, white);
+        label(cx0 + 2 * u, cy1 - .5f * u, s.chat[i].c_str(), 15 * u, white);
       }
     }
 
