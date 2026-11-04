@@ -1,6 +1,7 @@
 // The duel server. Run it on any machine both players can reach:  beanng-server [port]
 #include <chrono>
 #include <csignal>
+#include <deque>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -174,8 +175,11 @@ struct Client {
   // The same for the nodes of the vehicles, against the part they belong to.
   std::vector<i16> toldTanks, toldCars;
   u32 scanTank[Duel::kTanks] = {}, healTank[Duel::kTanks] = {}, scanCar[Duel::kCars] = {}, healCar[Duel::kCars] = {};
-  // What goes in one datagram together.
+  // What goes in one datagram together, and the datagrams waiting to go out. Sent one by one over the tick and not all at
+  // once: a small router's queue overflows from a burst, not from the amount.
   std::vector<u8> bundle;
+  std::deque<std::vector<u8>> waiting;
+  double nextOut = 0, outGap = 0;
 };
 
 }  // namespace
@@ -372,7 +376,7 @@ int main(int argc, char** argv) {
   // Everything for one player in as few datagrams as it fits: the line counts packets as well as bytes.
   const auto flush = [&](Client& c) {
     if (c.bundle.empty()) return;
-    sock.send(c.bundle.data(), c.bundle.size(), c.addr);
+    c.waiting.push_back(std::move(c.bundle));
     c.bundle.clear();
   };
   const auto post = [&](Client& c, const Writer& w) {
@@ -617,6 +621,14 @@ int main(int argc, char** argv) {
     w.put(float(me.fixAge));
     w.putV3(me.fix);
     post(c, w);
+  };
+
+  const auto letOut = [&](Client& c, double at) {
+    while (!c.waiting.empty() && at >= c.nextOut) {
+      sock.send(c.waiting.front().data(), c.waiting.front().size(), c.addr);
+      c.waiting.pop_front();
+      c.nextOut = std::max(c.nextOut + c.outGap, at - 0.002);
+    }
   };
 
   const auto sendScenery = [&](Client& c) {
@@ -937,8 +949,13 @@ int main(int argc, char** argv) {
         }
         if (tick % u32(kSendRate / 30.0) == 0) sendScenery(c);
         flush(c);
+        // Within three quarters of the tick, whatever is left of the last one first.
+        c.outGap = 0.75 / kSendRate / double(std::max<size_t>(c.waiting.size(), 1));
+        c.nextOut = std::min(c.nextOut, t);
       }
     }
+    for (Client& c : clients)
+      if (c.used) letOut(c, now());
     if (playLog) {
       logLoopGap = std::max(logLoopGap, t - logLoopAt);
       logLoopAt = t;
