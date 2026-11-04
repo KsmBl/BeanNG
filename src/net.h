@@ -13,7 +13,7 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 27;
+constexpr u16 kProtocol = 28;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1400;  // safely under any path's MTU
 constexpr int kNameBytes = 24;

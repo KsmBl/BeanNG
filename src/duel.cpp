@@ -60,7 +60,7 @@ void Duel::build() {
     for (int k = 0; k < kSoldierNodes; k++) sim.rest[soldierFirst[i] + u32(k)] = sim.pos[soldierFirst[i] + u32(k)];
     sim.endObj();
   }
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < kMissileTanks; i++) {
     sim.beginObj(OBJ_PROP, false);
     missileFirst[i] = u32(sim.pos.size());
     for (int k = 0; k < kMissileNodes; k++) sim.addNode(V3{}, 1.0, NF_FIXED);

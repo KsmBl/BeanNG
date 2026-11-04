@@ -297,7 +297,9 @@ class Duel {
   static constexpr double kWalkDt = 0.01;
   // A few fixed nodes for the one guided missile each launcher tank can have in the air, drawn as rods.
   static constexpr int kMissileNodes = 7;
-  u32 missileFirst[2] = {};
+  // One for each tank that can launch one: every side has one on every hull.
+  static constexpr int kMissileTanks = 2 * HK_COUNT;
+  u32 missileFirst[kMissileTanks] = {};
   static void poseMissile(Sim& sim, u32 first, bool live, V3 at, V3 dir, double scale = 1.0);
   // The same shape for what else flies under its own power: from a launcher on the shoulder, and from a strike code.
   static constexpr int kRpgRockets = 3, kStrikeRockets = 4;

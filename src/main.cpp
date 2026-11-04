@@ -1616,8 +1616,10 @@ struct Game {
       }
       // A guided missile is a real thing to look at, for whoever is flying it and whoever it comes for.
       for (int side = 0; side < 2; side++) {
-        const Tank& launcher = duel.tanks[Duel::tankIndex(side, TK_MISSILE)];
-        Duel::poseMissile(sim, duel.missileFirst[side], launcher.missileLive, launcher.missileP, launcher.missileV);
+        for (int hull = 0; hull < HK_COUNT; hull++) {
+          const Tank& launcher = duel.tanks[Duel::tankIndex(side, TK_MISSILE, hull)];
+          Duel::poseMissile(sim, duel.missileFirst[side * HK_COUNT + hull], launcher.missileLive, launcher.missileP, launcher.missileV);
+        }
       }
       // And rockets, carried on from where they were last heard of. A tenth of a second late, like everything.
       {
@@ -2035,7 +2037,7 @@ static void runGame() {
     G.rig.links.push_back({f + 3, f + 4, body * 0.2f, MM_DARK, 0});
     G.rig.links.push_back({f + 5, f + 6, body * 0.2f, MM_DARK, 0});
   };
-  for (int i = 0; i < 2; i++) rocketRods(G.duel.missileFirst[i], 0.13f, MM_WHITE, MM_ACCENT);
+  for (int i = 0; i < Duel::kMissileTanks; i++) rocketRods(G.duel.missileFirst[i], 0.13f, MM_WHITE, MM_ACCENT);
   for (int i = 0; i < Duel::kRpgRockets; i++) rocketRods(G.duel.rocketFirst[i], 0.05f, MM_OLIVE2, MM_DARK);
   for (int i = 0; i < Duel::kStrikeRockets; i++) rocketRods(G.duel.rocketFirst[Duel::kRpgRockets + i], 0.24f, MM_METAL, MM_ACCENT);
   printf("%zu Nodes, %zu Beams, %zu Objekte\n", G.sim.pos.size(), G.sim.beams.size(), G.sim.objs.size());
