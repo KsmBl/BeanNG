@@ -13,7 +13,7 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 31;
+constexpr u16 kProtocol = 32;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1400;  // safely under any path's MTU
 constexpr int kNameBytes = 24;
@@ -107,7 +107,7 @@ class Reader {
   bool ok_ = true;
 };
 
-// What a player does, sixty times a second.
+// What a player does, as often as the server answers.
 struct InputMsg {
   u32 token = 0;      // from the welcome; a stranger cannot steer someone else's tank by guessing the port
   u32 seq = 0;

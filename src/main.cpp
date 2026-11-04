@@ -2095,7 +2095,7 @@ struct Game {
       }
 
       if (state == NET_IN && now >= nextInput && sock) {
-        nextInput = now + 1.0 / 60.0;
+        nextInput = std::max(nextInput + 1.0 / net::kSendRate, now - 0.02);
         out.seq++;
         sentAt.push_back({out.seq, now});
         while (sentAt.size() > 240) sentAt.pop_front();
