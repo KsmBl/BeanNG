@@ -226,7 +226,7 @@ struct HudOptions {
   UiMap map;
   UiOsk osk;
   bool vehicleHud = true;
-  bool crosshair = false;
+  bool crosshair = false, gunRing = false;  // the ring shows where a tank's gun points
   bool damageView = true;
   double grassDensity = 1;
   std::string vector;  // the square one is in, in a match

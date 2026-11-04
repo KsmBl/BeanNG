@@ -2748,7 +2748,7 @@ struct Renderer::Impl {
       const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
       const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
       const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
-      if (qw > 0.1 && !s.foot.noRange) {
+      if (o.gunRing && qw > 0.1 && !s.foot.noRange) {
         const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H);
         const bool ready = s.reload <= 0;
         const float fr = ready ? 1.f : float(1.0 - s.reload / std::max(s.reloadTime, 0.1));

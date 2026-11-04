@@ -4317,6 +4317,7 @@ static void runGame() {
     }
     hud.vehicleHud = inVehicle;
     hud.crosshair = inMatch && !mapOpen && !view.missileLive && !view.foot.inCar;
+    hud.gunRing = hud.crosshair && inTank;
     // Without its optics the gunner's sight shows nothing any closer.
     if (view.foot.noSight && rig.mode == CAM_HOOD) rig.mode = CAM_CHASE;
     hud.map.open = mapOpen && panelKind == 0;
