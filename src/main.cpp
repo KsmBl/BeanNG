@@ -4553,9 +4553,9 @@ static void runGame() {
       const V3 eyes[7][2] = {
           {b.centre + V3{55, -45, 16}, b.centre + V3{5, 0, 2}},
           {b.centre + V3{-26 + 30, -18, 8}, b.centre + V3{-26, 0, 4}},
-          {b.slot(1) + V3{14, 12, 4}, b.slot(2) + V3{0, 0, 1.5}},
+          {(b.slot(0) + b.slot(3)) * 0.5 + V3{std::cos(b.facing), std::sin(b.facing), 0} * 46.0 + V3{0, 0, 13}, (b.slot(0) + b.slot(3)) * 0.5 + V3{0, 0, 1.5}},
           {bridge + V3{-70, 45, 22}, bridge},
-          {World::houseInside(G.world.houses()[0], 4.5, -14, G.world.houseSites()[0].z + 3.5), World::houseInside(G.world.houses()[0], 4.5, 3, G.world.houseSites()[0].z + 1.5)},
+          {World::houseInside(G.world.houses()[0], 4.5, -12, G.world.houseSites()[0].z + 7.0), World::houseInside(G.world.houses()[0], 4.5, 3, G.world.houseSites()[0].z + 2.0)},
           {V3{-600, -200, 420}, V3{0, 0, 10}},
           {V3{0, -950, 620}, V3{0, 0, 10}},
       };

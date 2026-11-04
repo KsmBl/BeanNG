@@ -11,7 +11,7 @@ Zwei bis sechs Spieler, eine große Karte, und alles, was sich bewegt oder kaput
 | ![Fluss mit Brücke](docs/screenshots/bruecke.jpg) | ![Ein Haus im Dorf](docs/screenshots/haus.jpg) |
 | ![Liegend hinter dem Scharfschützengewehr](docs/screenshots/liegend.jpg) | ![Durchs Zielfernrohr: Einschlagmarke und Wind](docs/screenshots/zielfernrohr.jpg) |
 | ![Eine Lenkrakete im Flug](docs/screenshots/lenkrakete.jpg) | ![Die Karte mit markiertem Ziel](docs/screenshots/karte.jpg) |
-| ![Am Hummer: E steigt ein, das Reparaturset liegt im Werkzeug-Overlay](docs/screenshots/hummer.jpg) | ![Wer stirbt, fällt](docs/screenshots/gefallen.jpg) |
+| ![Am One:1: E steigt ein, das Reparaturset liegt im Werkzeug-Overlay](docs/screenshots/am-auto.jpg) | ![Wer stirbt, fällt](docs/screenshots/gefallen.jpg) |
 
 ## Bauen und starten
 
