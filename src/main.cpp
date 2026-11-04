@@ -633,10 +633,12 @@ struct Game {
     }
     s.foot.onFoot = playing && myVehicle < 0;
     s.selfInstance = myVehicle >= 0 ? myVehicle : (playing ? Duel::kVehicles + slot : -1);
+    s.selfOnFoot = myVehicle < 0 && playing;
     s.selfTrack = myVehicle >= 0 && myVehicle < Duel::kTanks ? myVehicle : -1;
     s.foot.inCar = myVehicle >= Duel::kTanks;
     s.foot.hp = duel.players[slot].soldier.hp;
     s.foot.p = me.p;
+    s.foot.yaw = me.yaw;
     memcpy(s.foot.items, duel.players[slot].items, IT_COUNT);
     s.carCog = frame ? frame->cog : me.p;
     s.carFwd = frame ? frame->fwd : V3{1, 0, 0};
@@ -2057,6 +2059,7 @@ static void runGame() {
   bool mapOpen = false;
   bool hasMark = false;
   V3 markPoint;
+  double figureOff = 0;  // for a test: the drawn figure's bearing against the camera's, in degrees
   bool strikePending = false;  // a strike code chosen: the next click on the map says where
   // The controller's part of all that.
   bool padActive = false, padAim = false, padFire = false, padScopeHeld = false, padSprint = false;
@@ -3256,6 +3259,35 @@ static void runGame() {
       }
     }
 
+    if (scriptMode == 65 && netState == Game::NET_IN) {
+      // Turning on the spot, as with the mouse: how far the figure is off the camera, and pictures of it.
+      if (phase == Duel::CHOOSING) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      if (onFoot) {
+        panelKind = PANEL_NONE;
+        static double sumOff = 0, sumOff2 = 0, biggest = 0, nextSay = 0, nextShot = 0;
+        static int frames = 0;
+        rig.yaw += dt * 2.5;
+        const double off = figureOff;
+        sumOff += off;
+        sumOff2 += off * off;
+        biggest = std::max(biggest, std::fabs(off));
+        frames++;
+        if (tNow > nextSay && frames > 0) {
+          const double mean = sumOff / frames;
+          printf("Figur gegen Kamera: Mittel %.2f Grad, Schwankung %.2f, groesste %.2f, %d Bilder\n", mean, std::sqrt(std::max(0.0, sumOff2 / frames - mean * mean)), biggest, frames);
+          sumOff = sumOff2 = biggest = 0;
+          frames = 0;
+          nextSay = tNow + 2.0;
+        }
+        if (tNow > 6.0 && tNow > nextShot) {
+          wantShot = true;
+          nextShot = tNow + 1.3;
+        }
+      }
+    }
     if (scriptMode == 63 && inTank) {
       // Steering to and fro, and how far the picture of one's own tank jumps from one frame to the next.
       static double lastHeading = 0, biggest = 0, nextSay = 0;
@@ -3430,6 +3462,7 @@ static void runGame() {
       view.tankTracks = G.snap.tankTracks;
       view.groundMarks = G.snap.groundMarks;
       view.selfInstance = G.snap.selfInstance;
+      view.selfOnFoot = G.snap.selfOnFoot;
       view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
       view.foot = G.snap.foot;
@@ -3450,6 +3483,22 @@ static void runGame() {
       view.timeScale = G.snap.timeScale;
     }
 
+    // One's own figure turns with the camera in the same frame. The picture from the network thread is a moment old and
+    // keeps no step with the frames: seen from right behind it, that swings to and fro however it is smoothed.
+    if (onFoot && netState == Game::NET_IN && !scoped && view.foot.hp > 0 && !view.foot.droneLive && slot >= 0) {
+      const double turn = std::remainder(rig.yaw - view.foot.yaw, 2.0 * PI);
+      const double c = std::cos(turn), sn = std::sin(turn);
+      const u32 first = G.duel.soldierFirst[slot];
+      const V3 at = view.foot.p;
+      for (u32 k = 0; k < u32(Duel::kSoldierNodes) && size_t(first + k) < view.pos.size(); k++) {
+        const V3 q = view.pos[first + k] - at;
+        view.pos[first + k] = at + V3{q.x * c - q.y * sn, q.x * sn + q.y * c, q.z};
+      }
+      if (scriptMode == 65 && size_t(first) < view.pos.size()) {
+        const V3 q = view.pos[first] - at;
+        figureOff = std::remainder(std::atan2(q.y, q.x) - rig.yaw, 2.0 * PI) * 180.0 / PI;
+      }
+    }
     if (gPlayLog) {
       static double next = 0, worst = 0;
       worst = std::max(worst, dt);

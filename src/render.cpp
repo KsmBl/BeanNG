@@ -3377,9 +3377,13 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
         if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 64 ? s.parkedScorch[k] : 0.f);
         // What the camera follows moves with it. Blurred as if standing still, it would smear while the world stayed sharp.
         const bool self = int(k) == s.selfInstance;
-        if (self) D.setMat(prog, "uPrevWorld", D.carPrevWorld);
+        // Someone on foot is held in the picture by the camera itself: no motion at all, or the figure smears.
+        const bool stillInPicture = self && s.selfOnFoot;
+        if (self && !stillInPicture) D.setMat(prog, "uPrevWorld", D.carPrevWorld);
+        if (stillInPicture) D.setMat(prog, "uPrevVP", vp);
         if (count) glDrawElements(GL_TRIANGLES, GLsizei(count), GL_UNSIGNED_INT, (void*)(first * sizeof(u32)));
-        if (self) D.setMat(prog, "uPrevWorld", I);
+        if (self && !stillInPicture) D.setMat(prog, "uPrevWorld", I);
+        if (stillInPicture) D.setMat(prog, "uPrevVP", D.prevVP);
         first += count;
       }
       if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);

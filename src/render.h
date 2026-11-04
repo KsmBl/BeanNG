@@ -54,6 +54,7 @@ struct Snapshot {
   std::vector<GroundMark> groundMarks;
   // Which of the parked instances is what the camera follows: it moves with it, the world does not.
   int selfInstance = -1;
+  bool selfOnFoot = false;  // the camera hangs on one's own figure, which so stands still in the picture
   int selfTrack = -1;
   V3 trackLeft[2];
   float parkedScorch[64] = {};
@@ -76,6 +77,7 @@ struct Snapshot {
     bool tapped = false, hasFix = false;
     bool droneLive = false;
     V3 droneP;
+    double yaw = 0;  // of one's own figure, when this picture was made
     double droneBattery = 0;
     int drones = 0, medkits = 0;
     int launcher = 0;  // smoke charges of the tank one sits in
