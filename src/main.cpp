@@ -3841,7 +3841,7 @@ static void runGame() {
       pickReady = true;
       panelKind = PANEL_NONE;
     }
-    if ((scriptMode == 41 || scriptMode == 48 || scriptMode == 49 || scriptMode == 63 || scriptMode == 71) && netState == Game::NET_IN) {
+    if ((scriptMode == 41 || scriptMode == 48 || scriptMode == 49 || scriptMode == 63 || scriptMode == 71 || scriptMode == 74) && netState == Game::NET_IN) {
       if (phase == Duel::CHOOSING && tNow > 1.0 && !pickReady) {
         pickItems[IT_REPAIR] = 1;
         pickItems[IT_AR] = 2;
@@ -3868,7 +3868,7 @@ static void runGame() {
           gas = tNow - boarded < 12.0 ? 0.5 : 0.0;
           if (std::fmod(tNow, 3.0) < dt && !view.missileLive) sendC.fire = true;
           static bool leftOnce = false;
-          if (tNow - boarded > 16.0 && !leftOnce && scriptMode != 49 && scriptMode != 71) {
+          if (tNow - boarded > 16.0 && !leftOnce && scriptMode != 49 && scriptMode != 71 && scriptMode != 74) {
             leftOnce = true;
             sendC.use = true;
             printf("Aussteigen bei t=%.1f\n", tNow);
@@ -3929,6 +3929,15 @@ static void runGame() {
           nextScopeView();
           printf("Ansicht %d\n", scopeView);
         }
+      }
+    }
+    if (scriptMode == 74 && inVehicle) {
+      // A car seen from above: straight on first, then thrown into a slide, for the marks each leaves.
+      static double since = tNow;
+      gas = 1.0;
+      if (tNow - since > 3.0) {
+        steer = 1.0;
+        hb = 1.0;
       }
     }
     if (scriptMode == 72 && phase == Duel::CHOOSING && netState == Game::NET_IN) {
@@ -4647,6 +4656,12 @@ static void runGame() {
       cam.eye = cam.target + V3{std::cos(a) * 4.5, std::sin(a) * 4.5, 1.8};
       cam.up = {0, 0, 1};
       cam.fovY = 55.0 * PI / 180.0;
+    }
+    if (scriptMode == 74 && inVehicle) {
+      cam.target = view.carCog;
+      cam.eye = view.carCog + V3{-14, -10, 22};
+      cam.up = {0, 0, 1};
+      cam.fovY = 60.0 * PI / 180.0;
     }
     if (scriptMode == 48 && inVehicle) {
       // Beside a car on the move, to see its wheels go round.
