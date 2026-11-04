@@ -519,7 +519,7 @@ struct SharedInput {
 };
 
 // The connection to the server and the copy of the world it describes. Nothing is simulated here: both tanks and
-// everything else go where the server says, a tenth of a second late so that there is always a next position.
+// everything else go where the server says, a moment late so that there is always a next position.
 struct Game {
   Duel duel;
   World& world = duel.world;
@@ -2006,7 +2006,7 @@ struct Game {
         me = duel.players[mySlot].soldier;
       }
       for (int t = 0; t < Duel::kTanks; t++) Duel::poseNet(sim, duel.netFirst[t], duel.tanks[t], duel.tanks[t].netOn);
-      // Drones, a little smoothed: thirty positions a second would show.
+      // Drones, a little smoothed: what comes from the server would show on a bad line.
       for (int i = 0; i < Duel::kMaxPlayers; i++) {
         DroneSeen& ds = droneShown[i];
         if (ds.live) {

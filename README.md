@@ -79,6 +79,24 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill`, `/kick`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt beiden von Anfang an alle Waffen, zum Ausprobieren.
 
+### Netz
+
+Der Server rechnet die Physik mit 2 kHz und schickt seinen Stand **120-mal pro Sekunde**, die Spieler ihre Eingaben genauso oft.
+
+- **Das Eigene antwortet sofort:** Laufen, Fahren, Turm und Mündungsfeuer werden auf dem eigenen Rechner vorausgerechnet. Was der Server anders sieht, wird weich ausgeglichen, Treffer und Schaden entscheidet nur er.
+- **Die anderen laufen flüssig:** Fahrzeuge, Soldaten und Effekte erscheinen auf derselben Zeitachse, nur so spät wie die Leitung es verlangt (etwa 55 ms auf einer guten). Bleibt ein Paket aus, bewegt sich alles kurz weiter. Treffer beurteilt der Server genau zu dem Moment, den der Schütze gesehen hat.
+- **Wenig Datenmenge:** Ein Fahrzeug geht als Lage plus den Knoten, die sich bewegt haben. Was weit weg ist, kommt seltener (ab 150 m 60-mal, ab 400 m 30-mal pro Sekunde). Bei zwei Spielern sind das etwa 55 kB/s je Spieler, der Server sendet insgesamt rund 85 kB/s, zu viert rund 270 kB/s.
+
+Ping, Verlust, Puffer und Datenrate stehen oben rechts, wenn die Statistik eingeschaltet ist.
+
+Eine schlechte Leitung lässt sich auf einem Rechner ausprobieren, jeder Wert gilt für eine Richtung:
+
+```
+BEANNG_FAKE_LAG=40 BEANNG_FAKE_JITTER=20 BEANNG_FAKE_LOSS=2 ./run.sh --connect 127.0.0.1:27015
+```
+
+Mit `--log` schreiben Client und Server jede Sekunde ihre Messwerte nach `/tmp/beanng-*.log`.
+
 ## Steuerung
 
 Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom Verbinden bis zum Replay. Die Hinweise auf dem Bildschirm zeigen die Tasten des Geräts, das du zuletzt benutzt hast. Die Tastennamen sind die eines Xbox-Controllers; auf anderen zählt die Position.
@@ -117,7 +135,7 @@ In den Spiel-Einstellungen lassen sich die Empfindlichkeit des Sticks und die Vi
 ## Aufbau
 
 - `src/duel.*`: ein Match ohne Grafik: Karte, Fahrzeuge, Spieler, Waffen, Minen, Loot, Ragdolls
-- `src/server.cpp`: der Server mit Konsole; `src/net.*`, `src/duelnet.h`: die Pakete über UDP
+- `src/server.cpp`: der Server mit Konsole; `src/net.*`, `src/duelnet.h`, `src/shape.h`: die Pakete über UDP
 - `src/main.cpp`, `src/render.*`, `src/audio.*`: der Spieler-Client: Netz, Eingabe, Kamera, Grafik und Ton
 - `src/sim.*`: Node-Beam-Solver mit 2 kHz, elastoplastische Beams, Kollisionen, Schlafzustand
 - `src/tank.*`: Panzer, Türme, Module und Schwachstellen; `src/vehicle.*` mit `xantia`, `one1`, `hummer`: die Autos

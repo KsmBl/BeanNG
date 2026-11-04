@@ -835,7 +835,7 @@ int main(int argc, char** argv) {
         in[i].fireHeld = c.in.fireHeld;
         in[i].aiming = c.in.aiming;
         in[i].weapon = c.in.weapon;
-        // How far behind this player's screen is: their picture is a tenth of a second late and half a ping old.
+        // How far behind this player's screen is: the moment they were looking at when this input went out.
         in[i].lag = std::clamp((double(simStep) - double(c.in.viewTick)) / kStepRate, 0.0, 0.3);
         in[i].repair = c.repair;
         in[i].seq = c.in.seq;
