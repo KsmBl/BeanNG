@@ -1,3 +1,4 @@
+#include <unistd.h>
 // BeanNG: game loop, input, cameras and the physics thread.
 #include <SDL3/SDL.h>
 #include <epoxy/gl.h>
@@ -37,6 +38,8 @@ static GameSettings gSet;
 static std::atomic<bool> gPadHints{false};
 // A controller made up for the test scripts: everything behind it is the real input path.
 static SDL_Joystick* gTestPad = nullptr;
+// --log: once a second what the line and the picture are doing, for finding out why a game went bad.
+static FILE* gPlayLog = nullptr;
 static constexpr const char* kSettingsFile = "settings.cfg";
 
 static void loadSettings() {
@@ -830,6 +833,10 @@ struct Game {
     u8 seenHurt = 0, seenFlat = 0;
     int carWatched = -1;
     u32 ackedInput = 0;
+    double serverStats[3] = {0, 1, 0};  // load, speed against real time, objects awake
+    double logWalkErr = 0, logMetaAt = 0, logMetaGap = 0, logLoopGap = 0, logLoopAt = 0, logNext = 0;
+    int logMetas = 0, logPackets = 0;
+    size_t logBytes = 0;
     V3 serverP;
     bool freshAnswer = false;
     u32 wins[2] = {};
@@ -1012,6 +1019,8 @@ struct Game {
           break;
         }
         if (!(from == server)) continue;
+        logPackets++;
+        logBytes += size_t(n);
         net::Reader r(buf, size_t(n));
         u8 kind = 0;
         if (!r.header(kind)) continue;
@@ -1189,6 +1198,14 @@ struct Game {
             u8 medkitsHeld = 0;
             r.get(medkitsHeld);
             duel.players[mySlot].medkits = medkitsHeld;
+            u8 serverLoad = 0, serverReal = 100;
+            u16 serverAwake = 0;
+            r.get(serverLoad);
+            r.get(serverReal);
+            r.get(serverAwake);
+            serverStats[0] = serverLoad / 100.0;
+            serverStats[1] = serverReal / 100.0;
+            serverStats[2] = serverAwake;
             u8 tap = 0;
             float tapClock = 0, fixWait = 0, fixAge = 0;
             r.get(tap);
@@ -1218,6 +1235,9 @@ struct Game {
           hereNow = 0;
           for (int i = 0; i < Duel::kMaxPlayers; i++) hereNow += (mask >> i) & 1;
           ackedInput = ack;
+          logMetas++;
+          logMetaGap = std::max(logMetaGap, now - logMetaAt);
+          logMetaAt = now;
           while (!sentAt.empty() && int32_t(sentAt.front().first - ack) < 0) sentAt.pop_front();
           if (!sentAt.empty() && sentAt.front().first == ack) rtt += (now - sentAt.front().second - rtt) * 0.1;
           serverP = shownSoldier[mySlot].p;
@@ -1540,6 +1560,7 @@ struct Game {
           while (past.size() > 1 && int32_t(past.front().seq - ackedInput) < 0) past.pop_front();
           const V3 was = past.empty() ? me.p : past.front().p;
           const V3 err = serverP - was;
+          logWalkErr = std::max(logWalkErr, len(err));
           if (len(err) > 4.0) {
             me.p = serverP;
             past.clear();
@@ -1650,6 +1671,26 @@ struct Game {
         out.fireHeld = in.fireHeld;
         out.aiming = in.aiming;
         out.weapon = u8(in.weapon);
+        if (gPlayLog) {
+          logLoopGap = std::max(logLoopGap, now - logLoopAt);
+          logLoopAt = now;
+          if (now > logNext) {
+            double nearest = 1e9;
+            const V3 mine = vehicleNow >= 0 ? duel.frames[vehicleNow].cog : me.p;
+            for (int k = 0; k < Duel::kMaxPlayers; k++) {
+              if (k == mySlot || !duel.players[k].present) continue;
+              const V3 them = duel.players[k].vehicle >= 0 ? duel.frames[duel.players[k].vehicle].cog : shownSoldier[k].p;
+              nearest = std::min(nearest, len(them - mine));
+            }
+            const int awake = int(duel.sim.active.size());
+            fprintf(gPlayLog, "t %.0f netz slot %d phase %d fz %d pos %.0f %.0f gegner %.0f m rtt %.0f ms metas %d luecke %.0f ms eingabepause %.0f ms laufkorrektur %.2f m pakete %d kB %.0f aktiv %d\n", now, mySlot, phaseNow, vehicleNow, mine.x, mine.y, nearest, rtt * 1000.0, logMetas, logMetaGap * 1000.0, logLoopGap * 1000.0, logWalkErr, logPackets, double(logBytes) / 1024.0, awake);
+            fflush(gPlayLog);
+            logWalkErr = logMetaGap = logLoopGap = 0;
+            logMetas = logPackets = 0;
+            logBytes = 0;
+            logNext = now + 1.0;
+          }
+        }
         if (vehicleNow < 0) past.push_back({out.seq, me.p});
         while (past.size() > 200) past.pop_front();
         out.ready = in.ready ? 1 : 0;
@@ -1779,6 +1820,12 @@ struct Game {
         hasReplay = !lastTape.empty();
       }
       fillSnapshot(msg);
+      if (state == NET_IN) {
+        // The figures of the server: this machine only mirrors the world and has no physics of its own.
+        snap.physLoad = serverStats[0];
+        snap.realtime = serverStats[1];
+        snap.awake = int(serverStats[2]);
+      }
       {
         std::unique_lock<std::mutex> lock(frameMutex);
         frameAnswered = servedFrame;
@@ -3403,6 +3450,15 @@ static void runGame() {
       view.timeScale = G.snap.timeScale;
     }
 
+    if (gPlayLog) {
+      static double next = 0, worst = 0;
+      worst = std::max(worst, dt);
+      if (tNow > next) {
+        fprintf(gPlayLog, "t %.0f bild fps %.0f schlechtestes %.0f ms\n", tNow, hud.fps, worst * 1000.0);
+        worst = 0;
+        next = tNow + 1.0;
+      }
+    }
     hud.panel.open = panelKind != 0;
     if (hud.panel.open) {
       static const char* titles[8] = {"", "Spiel-Einstellungen", "BeanNG", "Steuerung", "Online spielen", "Ausrüstung", "Werkzeug", "Chat"};
@@ -3819,6 +3875,12 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--shots") && i + 1 < argc) shotDir = argv[++i];
     if (!strcmp(argv[i], "--script") && i + 1 < argc) scriptMode = atoi(argv[++i]);
+    if (!strcmp(argv[i], "--log")) {
+      char path[64];
+      snprintf(path, sizeof path, "/tmp/beanng-client-%d.log", int(getpid()));
+      gPlayLog = fopen(path, "w");
+      printf("Log: %s\n", path);
+    }
     if (!strcmp(argv[i], "--wav") && i + 1 < argc) wavPath = argv[++i];
     if (!strcmp(argv[i], "--turret") && i + 1 < argc) gPickTurret = std::clamp(atoi(argv[++i]), 0, World::kBaseSlots - 1);
     if (!strcmp(argv[i], "--connect") && i + 1 < argc) {

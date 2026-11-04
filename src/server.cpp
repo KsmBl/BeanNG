@@ -174,17 +174,25 @@ struct Client {
 
 }  // namespace
 
+// --log: once a second what the server is doing.
+static FILE* playLog = nullptr;
+
 int main(int argc, char** argv) {
   int port = kDefaultPort;
   bool giveAll = false;
   int wanted = 2;
   for (int i = 1; i < argc; i++) {
-    if (!strcmp(argv[i], "--give-all")) giveAll = true;  // every weapon from the start, for trying things out
+    if (!strcmp(argv[i], "--log")) {
+      char path[64];
+      snprintf(path, sizeof path, "/tmp/beanng-server-%d.log", int(getpid()));
+      playLog = fopen(path, "w");
+      printf("Log: %s\n", path);
+    } else if (!strcmp(argv[i], "--give-all")) giveAll = true;  // every weapon from the start, for trying things out
     else if (!strcmp(argv[i], "--players") && i + 1 < argc) wanted = std::clamp(atoi(argv[++i]) / 2 * 2, 2, int(Duel::kMaxPlayers));  // 2, 4 or 6, half to a side
     else port = atoi(argv[i]);
   }
   if (port <= 0 || port > 65535) {
-    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all] [--players 2|4|6]\n");
+    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all] [--players 2|4|6] [--log]\n");
     return 1;
   }
   std::signal(SIGINT, onSignal);
@@ -345,6 +353,7 @@ int main(int argc, char** argv) {
 
   u32 tick = 0;
   u32 seenMatch = duel->matchId;
+  double statLoad = 0, statReal = 1;
   std::vector<SimEvent> events;
   std::vector<SimEvent> pending;
   u32 tracerCount = 0;
@@ -476,6 +485,10 @@ int main(int argc, char** argv) {
       w.put(i16(me.strikeCodes));
       w.put(u8(me.drones));
       w.put(u8(me.medkits));
+      // How the server is doing: the player's own machine has no physics to tell by.
+      w.put(u8(std::min(statLoad * 100.0, 255.0)));
+      w.put(u8(std::min(statReal * 100.0, 255.0)));
+      w.put(u16(duel->sim.active.size()));
       w.put(u8((me.tapped ? 1 : 0) | (me.hasFix ? 2 : 0)));
       w.put(float(me.tapClock));
       w.put(float(me.fixWait));
@@ -670,6 +683,10 @@ int main(int argc, char** argv) {
   double simTime = 0;
   double nextSend = 0;
   double busy = 0, lastReport = now();
+  double logBusy = 0, logLoopGap = 0, logLoopAt = now(), logNext = 0;
+  u64 logSteps = 0, logPackets = 0, logBytes = 0;
+  double hasteBusy = 0, hasteNext = 0;
+  u64 hasteSteps = 0;
   double wall0 = now();
   while (!gStop) {
     receive();
@@ -739,6 +756,21 @@ int main(int argc, char** argv) {
       done++;
     }
     busy += std::chrono::duration<double>(Clock::now() - q0).count();
+    logBusy += std::chrono::duration<double>(Clock::now() - q0).count();
+    // Falling behind slows the whole world down for everyone, which is worse than anything lying still a little early.
+    hasteBusy += std::chrono::duration<double>(Clock::now() - q0).count();
+    hasteSteps += u64(done);
+    if (t > hasteNext) {
+      const double share = hasteBusy / 0.5;
+      statLoad = share;
+      statReal = double(hasteSteps) * Duel::kDt / 0.5;
+      hasteSteps = 0;
+      if (share > 0.6) duel->sim.sleepHaste = std::min(duel->sim.sleepHaste * 2.0, 8.0);
+      else if (share < 0.3) duel->sim.sleepHaste = std::max(duel->sim.sleepHaste * 0.5, 1.0);
+      hasteBusy = 0;
+      hasteNext = t + 0.5;
+    }
+    logSteps += u64(done);
     if (duel->matchId != seenMatch) {
       seenMatch = duel->matchId;
       say("Match %u: Stand %u : %u", duel->matchId, duel->wins[0], duel->wins[1]);
@@ -812,6 +844,32 @@ int main(int argc, char** argv) {
           if (duel->sim.objs[v.obj].awake || int((tick + 7) % 60) == k) sendCar(c.addr, k);
         }
         sendScenery(c);
+      }
+    }
+    if (playLog) {
+      logLoopGap = std::max(logLoopGap, t - logLoopAt);
+      logLoopAt = t;
+      if (t > logNext) {
+        int awakeVehicles = 0;
+        for (int k = 0; k < Duel::kVehicles; k++) {
+          const u16 hull = k < Duel::kTanks ? duel->tanks[k].hullObj : duel->cars[size_t(k - Duel::kTanks)].obj;
+          if (duel->sim.objs[hull].awake) awakeVehicles++;
+        }
+        double nearest = 1e9;
+        for (int a = 0; a < Duel::kMaxPlayers; a++)
+          for (int b = a + 1; b < Duel::kMaxPlayers; b++) {
+            if (!clients[a].used || !clients[b].used) continue;
+            const auto where = [&](int k) { return duel->players[k].vehicle >= 0 ? duel->frames[duel->players[k].vehicle].cog : duel->players[k].soldier.p; };
+            nearest = std::min(nearest, len(where(a) - where(b)));
+          }
+        fprintf(playLog, "t %.0f phase %d spieler-abstand %.0f m schritte %llu arbeit %.0f ms schleifenpause %.1f ms aktiv %zu eile %.0f fahrzeuge-wach %d gesendet %llu pakete %.0f kB abgelehnt %llu\n", t, duel->phase, nearest, (unsigned long long)logSteps, logBusy * 1000.0, logLoopGap * 1000.0, duel->sim.active.size(), duel->sim.sleepHaste, awakeVehicles, (unsigned long long)(sock.sentPackets - logPackets), double(sock.sentBytes - logBytes) / 1024.0, (unsigned long long)sock.sendFailed);
+        fflush(playLog);
+        logSteps = 0;
+        logBusy = 0;
+        logLoopGap = 0;
+        logPackets = sock.sentPackets;
+        logBytes = sock.sentBytes;
+        logNext = t + 1.0;
       }
     }
     if (t - lastReport > 30.0) {

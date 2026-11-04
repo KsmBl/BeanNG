@@ -13,7 +13,7 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 26;
+constexpr u16 kProtocol = 27;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1400;  // safely under any path's MTU
 constexpr int kNameBytes = 24;
@@ -39,6 +39,8 @@ class Socket {
   bool open(u16 port);  // 0 for any free port; the socket never blocks
   int recv(void* buf, size_t cap, Addr& from);  // bytes, or -1 when nothing is waiting
   void send(const void* buf, size_t n, const Addr& to);
+  // How much went out, and how much the system refused.
+  u64 sentBytes = 0, sentPackets = 0, sendFailed = 0;
 
  private:
   int fd_ = -1;

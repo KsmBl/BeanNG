@@ -64,7 +64,12 @@ void Socket::send(const void* buf, size_t n, const Addr& to) {
   a.sin_family = AF_INET;
   a.sin_addr.s_addr = htonl(to.ip);
   a.sin_port = htons(to.port);
-  sendto(fd_, buf, n, 0, reinterpret_cast<const sockaddr*>(&a), sizeof a);
+  if (sendto(fd_, buf, n, 0, reinterpret_cast<const sockaddr*>(&a), sizeof a) < 0) {
+    sendFailed++;
+  } else {
+    sentPackets++;
+    sentBytes += n;
+  }
 }
 
 void write(Writer& w, const InputMsg& m) {
