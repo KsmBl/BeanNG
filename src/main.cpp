@@ -858,6 +858,13 @@ struct Game {
       const double span = double(q[ib].tick) - double(q[ia].tick);
       a = span > 0 ? clampd((at - double(q[ia].tick)) / span, 0, 1) : 1.0;
     };
+    // Between two frames along a curve that knows how fast the thing was going at both, so that it does not change its
+    // speed at every frame. And past the last one for a moment, as it was going, when the next is late or lost.
+    const auto curveBetween = [](V3 pa, V3 va, V3 pb, V3 vb, double a, double seconds) {
+      const double a2 = a * a, a3 = a2 * a;
+      return pa * (2.0 * a3 - 3.0 * a2 + 1.0) + va * ((a3 - 2.0 * a2 + a) * seconds) + pb * (3.0 * a2 - 2.0 * a3) + vb * ((a3 - a2) * seconds);
+    };
+    constexpr double kCoastAtMost = 0.12;
     // For trying things out on one machine: behaves like a bad line, both ways. Each figure holds for one direction:
     // BEANNG_FAKE_LAG and BEANNG_FAKE_JITTER in milliseconds, BEANNG_FAKE_LOSS in percent.
     const auto fakeSetting = [](const char* name) { return getenv(name) ? atof(getenv(name)) : 0.0; };
@@ -1784,7 +1791,10 @@ struct Game {
           if (aimingThis) aimOwnGun(t, side, in.c, dtShown);
           continue;
         }
-        const V3 cog = fa.cog + (fb.cog - fa.cog) * a;
+        const double spanSeconds = span / net::kStepRate;
+        const double late = (viewTime - double(fb.tick)) / net::kStepRate;
+        V3 cog = spanSeconds > 0 && spanSeconds < 0.25 ? curveBetween(fa.cog, fa.state.vel, fb.cog, fb.state.vel, a, spanSeconds) : fa.cog + (fb.cog - fa.cog) * a;
+        if (late > 0) cog = fb.cog + fb.state.vel * std::min(late, kCoastAtMost);
         for (size_t k = 0; k < count; k++) {
           const V3 oa{double(fa.offsets[k * 3]), double(fa.offsets[k * 3 + 1]), double(fa.offsets[k * 3 + 2])};
           const V3 ob{double(fb.offsets[k * 3]), double(fb.offsets[k * 3 + 1]), double(fb.offsets[k * 3 + 2])};
@@ -1803,7 +1813,17 @@ struct Game {
         const CarFrame& fa = b > 0 ? q[b - 1] : fb;
         const double span = double(fb.tick) - double(fa.tick);
         const double a = span > 0 ? clampd((viewTime - double(fa.tick)) / span, 0, 1) : 1.0;
-        V3 cog = fa.cog + (fb.cog - fa.cog) * a;
+        // How fast it was going at a frame, from those on either side of it.
+        const auto carVel = [&](size_t i) {
+          const CarFrame& x = q[i > 0 ? i - 1 : i];
+          const CarFrame& y = q[i + 1 < q.size() ? i + 1 : i];
+          const double seconds = (double(y.tick) - double(x.tick)) / net::kStepRate;
+          return seconds > 0 && seconds < 0.4 ? (y.cog - x.cog) / seconds : V3{};
+        };
+        const double spanSeconds = span / net::kStepRate;
+        const double late = (viewTime - double(fb.tick)) / net::kStepRate;
+        V3 cog = spanSeconds > 0 && spanSeconds < 0.25 ? curveBetween(fa.cog, carVel(b - 1), fb.cog, carVel(b), a, spanSeconds) : fa.cog + (fb.cog - fa.cog) * a;
+        if (late > 0) cog = fb.cog + carVel(b) * std::min(late, kCoastAtMost);
         const u32 first = duel.carFirst[k];
         const size_t count = fb.offsets.size() / 3;
         double ownTurn = 0;
@@ -1900,8 +1920,11 @@ struct Game {
         Soldier s = fb.s;
         // Someone who has just got out of a vehicle or come back to life has not gone there on foot.
         if (fa.vehicle == fb.vehicle && len(fb.s.p - fa.s.p) < 5.0) {
-          s.p = fa.s.p + (fb.s.p - fa.s.p) * a;
+          const double seconds = span / net::kStepRate;
+          s.p = seconds > 0 && seconds < 0.25 ? curveBetween(fa.s.p, fa.s.v, fb.s.p, fb.s.v, a, seconds) : fa.s.p + (fb.s.p - fa.s.p) * a;
           s.v = fa.s.v + (fb.s.v - fa.s.v) * a;
+          const double late = (viewTime - double(fb.tick)) / net::kStepRate;
+          if (late > 0 && fb.s.hp > 0) s.p = fb.s.p + fb.s.v * std::min(late, kCoastAtMost);
           s.yaw = fa.s.yaw + std::remainder(fb.s.yaw - fa.s.yaw, 2.0 * PI) * a;
           s.pitch = lerpd(fa.s.pitch, fb.s.pitch, a);
           s.stride = lerpd(fa.s.stride, fb.s.stride, a);
