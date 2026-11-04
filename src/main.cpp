@@ -765,6 +765,7 @@ struct Game {
     std::deque<NetFrame> frames[Duel::kTanks];
     u32 match = 0, metaTick = 0, blastsDone = 0;
     int phaseNow = Duel::WAITING, winner = -1, mySlot = 0, vehicleNow = -1;
+    double vehicleWarm[Duel::kVehicles] = {};
     // A car comes in several packets to the tick. Put together again, it is shown a little late just like a tank, so
     // that there is always a next position to move towards.
     struct CarFrame {
@@ -2266,15 +2267,20 @@ struct Game {
         snap.foot.has = 0;
         for (int k = 0; k < WP_COUNT; k++) snap.foot.has |= who.hasWeapon[k] ? 1 << k : 0;
         snap.foot.has |= (who.thermalSight ? kHasThermal : 0) | (who.weakSight ? kHasWeak : 0);
-        // A soldier is warm, and so is a vehicle with someone in it, or one still burning.
+        // A soldier is warm. A vehicle gets warm from being driven and keeps it for a while, and one on fire is hot anyway.
         std::fill(std::begin(snap.parkedHeat), std::end(snap.parkedHeat), 0.f);
+        bool occupied[Duel::kVehicles] = {};
         for (int k = 0; k < Duel::kMaxPlayers; k++) {
           if (Duel::kVehicles + k < 64) snap.parkedHeat[Duel::kVehicles + k] = duel.players[k].present ? 1.f : 0.f;
           const int inside = k == mySlot ? duel.players[k].vehicle : drawnVehicle[k];
-          if (duel.players[k].present && inside >= 0 && inside < Duel::kVehicles && inside < 64) snap.parkedHeat[inside] = 0.8f;
+          if (duel.players[k].present && inside >= 0 && inside < Duel::kVehicles) occupied[inside] = true;
         }
-        for (int k = 0; k < Duel::kTanks && k < 64; k++)
-          if (duel.tanks[k].destroyed && duel.tanks[k].burnTime < 60.0) snap.parkedHeat[k] = 0.6f;
+        for (int k = 0; k < Duel::kVehicles; k++) {
+          // A new match starts with everything cold.
+          vehicleWarm[k] = phaseNow == Duel::PLAYING ? warmthStep(vehicleWarm[k], occupied[k], std::fabs(duel.frames[k].speed) > 1.0, dt) : 0.0;
+          const bool burning = k < Duel::kTanks && duel.tanks[k].destroyed && duel.tanks[k].burnTime < 60.0;
+          if (k < 64) snap.parkedHeat[k] = float(burning ? std::max(vehicleWarm[k], 0.6) : vehicleWarm[k]);
+        }
         // Where to hit, only for those looking for it, and not through what stands in between.
         snap.weakSpots.clear();
         if (in.scoped && in.scopeView == SV_WEAK && mySlot >= 0) {
@@ -3912,7 +3918,7 @@ static void runGame() {
         }
         // And rather a vehicle with someone in it.
         for (int k = 0; k < Duel::kTanks; k++)
-          if (view.parkedHeat[k] > 0.5f && G.duel.tankFirst[k] < view.pos.size()) aimAt = view.pos[G.duel.tankFirst[k]] + V3{0, 0, 1.0};
+          if (view.parkedHeat[k] > 0.05f && G.duel.tankFirst[k] < view.pos.size()) aimAt = view.pos[G.duel.tankFirst[k]] + V3{0, 0, 1.0};
         const V3 to = aimAt - Duel::eyeOf(Soldier{view.foot.p});
         rig.yaw = std::atan2(-to.y, -to.x);
         rig.pitch = -std::atan2(to.z, std::hypot(to.x, to.y));
@@ -3923,6 +3929,11 @@ static void runGame() {
         }
         if (view.foot.prone > 0.99) scoped = true;
         scopeZoom = 6.0;
+        {
+          float warmest = 0;
+          for (int k = 0; k < Duel::kVehicles && k < 64; k++) warmest = std::max(warmest, view.parkedHeat[k]);
+          if (std::fmod(tNow, 5.0) < dt) printf("Wärme t=%.0f %.2f\n", tNow, warmest);
+        }
         static double switched = tNow;
         if (scoped && tNow - switched > 3.0) {
           switched = tNow;
@@ -4656,6 +4667,16 @@ static void runGame() {
       cam.eye = cam.target + V3{std::cos(a) * 4.5, std::sin(a) * 4.5, 1.8};
       cam.up = {0, 0, 1};
       cam.fovY = 55.0 * PI / 180.0;
+    }
+    if (scriptMode == 73 && inMatch) {
+      // Close to whichever tank has been driven, wherever it went: a bush must not hide how warm it is.
+      for (int k = 0; k < Duel::kTanks; k++) {
+        if (view.parkedHeat[k] <= 0.05f || G.duel.tankFirst[k] >= view.pos.size()) continue;
+        cam.target = view.pos[G.duel.tankFirst[k]] + V3{0, 0, 1.0};
+        cam.eye = cam.target + V3{-14, -14, 7};
+        cam.up = {0, 0, 1};
+        cam.fovY = 40.0 * PI / 180.0;
+      }
     }
     if (scriptMode == 74 && inVehicle) {
       cam.target = view.carCog;

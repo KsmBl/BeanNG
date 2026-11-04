@@ -50,6 +50,14 @@ struct WalkInput {
 };
 
 // Where a vehicle is, as far as those on foot are concerned. The same on the server and on a player's machine.
+// How warm a vehicle is through a thermal sight, 0..1. Driving warms it up within a quarter of a minute. Everything else
+// takes minutes to cool: left alone down to nothing, with someone sitting in it down to what an idling engine gives.
+inline double warmthStep(double warm, bool occupied, bool moving, double dt) {
+  const double want = occupied ? (moving ? 0.85 : 0.2) : 0.0;
+  const double rate = want > warm ? 1.0 / 5.0 : 1.0 / 90.0;
+  return warm + (want - warm) * std::min(dt * rate, 1.0);
+}
+
 struct VehicleFrame {
   V3 cog, fwd{1, 0, 0}, left{0, 1, 0}, up{0, 0, 1};
   double speed = 0;

@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "duel.h"
 #include "props.h"
 #include "tank.h"
 #include "vehicle.h"
@@ -1466,6 +1467,16 @@ int main(int argc, char** argv) {
       const V3 stopped = t.cog;
       for (u32 n : s->objs[t.hullObj].nodes) s->vel[n] += t.fwd * 1.0;
       run(4.0, [&](double, Controls&) {});
+      double warm = 0;
+      for (int i = 0; i < 20; i++) warm = warmthStep(warm, true, true, 1.0);
+      printf("  warmth: driven 20 s %.2f", warm);
+      for (int i = 0; i < 60; i++) warm = warmthStep(warm, true, false, 1.0);
+      printf(", standing with a driver 1 min %.2f", warm);
+      warm = 0.85;
+      for (int i = 0; i < 60; i++) warm = warmthStep(warm, false, false, 1.0);
+      printf(", from driving, left alone 1 min %.2f", warm);
+      for (int i = 0; i < 240; i++) warm = warmthStep(warm, false, false, 1.0);
+      printf(", 5 min %.2f\n", warm);
       printf("  coasting from %.1f km/h: rolled %.1f m; a push of 1 m/s: moved %.2f m\n", rolling, len(stopped - from), len(t.cog - stopped));
     }
     const double h0 = std::atan2(t.fwd.y, t.fwd.x);
