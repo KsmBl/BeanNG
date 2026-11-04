@@ -105,6 +105,14 @@ class Tank {
   double radiatorHeat = 0;  // grows with a holed radiator, and takes the engine's power with it
   // A bullet on its way from a to b: what it hits among the weak spots, with this much force (1 is the big rifle).
   bool bulletHit(Sim& sim, V3 a, V3 b, double force);
+  // Where a bullet or a blast does something, as a scope would show it.
+  struct WeakPoint {
+    V3 at;
+    double radius;
+    int level;  // 0 ends the tank, 1 cripples it, 2 is a nuisance
+    const char* name;
+  };
+  void weakPoints(const Sim& sim, std::vector<WeakPoint>& out) const;
 
   // A guided missile is flown by hand towards aimPoint, one at a time. Firing again sets it off early.
   int smokeCharges = 3;  // the launcher on the turret
@@ -166,6 +174,13 @@ class Tank {
   void updateWheelLift(const Sim& sim, double dt);
   void updateTurret(Sim& sim, const Controls& in, double dt);
   V3 ringPoint(const Sim& sim) const;
+  struct BulletSpot {
+    int module;
+    V3 at;
+    double radius, toughness;
+  };
+  static constexpr int kBulletSpots = 21;
+  void bulletSpots(const Sim& sim, V3 ring, BulletSpot out[kBulletSpots]) const;
   void aimAngles(V3 ring, const Controls& in, double& wantYaw, double& wantPitch) const;
   double yawRateNow() const;
   double pitchRateNow() const;

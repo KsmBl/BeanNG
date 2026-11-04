@@ -731,20 +731,14 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   }
 }
 
-bool Tank::bulletHit(Sim& sim, V3 a, V3 b, double force) {
-  if (destroyed) return false;
+void Tank::bulletSpots(const Sim& sim, V3 ring, BulletSpot out[kBulletSpots]) const {
   const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
   const double cy = std::cos(turretYaw), sy = std::sin(turretYaw);
   const V3 eF = fwd * cy + left * sy, eL = left * cy - fwd * sy;
   // On the turret, and on the hull. Ahead is towards the nose; the reference point lies about 3 m back from it.
-  const auto onTurret = [&](double f, double l, double z) { return ring_ + eF * f + eL * l + up * z; };
+  const auto onTurret = [&](double f, double l, double z) { return ring + eF * f + eL * l + up * z; };
   const auto onHull = [&](double x, double l, double z) { return O + fwd * (3.0 - x) + left * l + up * z; };
-  struct Spot {
-    int module;
-    V3 at;
-    double radius, toughness;
-  };
-  const Spot spots[] = {
+  const BulletSpot spots[kBulletSpots] = {
       {TM_SIGHT, onTurret(0.32, -0.46, 0.92), 0.2, 1.0},       // the gunner's sight head, on the turret roof
       {TM_RANGE, onTurret(-0.05, 1.44, 0.54), 0.14, 1.0},      // the rangefinder's ends, sticking out of both sides
       {TM_RANGE, onTurret(-0.05, -1.44, 0.54), 0.14, 1.0},
@@ -767,9 +761,35 @@ bool Tank::bulletHit(Sim& sim, V3 a, V3 b, double force) {
       {TM_TRACK_R, onHull(3.5, -1.35, -0.75), 0.24, 3.0},
       {TM_TRACK_R, onHull(5.6, -1.35, -0.75), 0.24, 3.0},
   };
+  std::copy(spots, spots + kBulletSpots, out);
+}
+
+void Tank::weakPoints(const Sim& sim, std::vector<WeakPoint>& out) const {
+  if (destroyed) return;
+  const V3 ring = ringPoint(sim);
+  const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
+  // Inside, for what comes through the armour: the ammunition ends the tank, as in damageModules.
+  if (mod[TM_AMMO] > 0) out.push_back({ring - up * 0.35, 0.6, 0, "Munition"});
+  if (mod[TM_ENGINE] > 0) out.push_back({O - fwd * 2.6 - up * 0.25, 0.8, 1, "Motor"});
+  BulletSpot spots[kBulletSpots];
+  bulletSpots(sim, ring, spots);
+  bool named[TM_COUNT] = {};
+  for (const BulletSpot& s : spots) {
+    if (mod[s.module] <= 0) continue;
+    const bool crippling = s.module == TM_TRACK_L || s.module == TM_TRACK_R || s.module == TM_RING || s.module == TM_FUEL || s.module == TM_RADIATOR;
+    static constexpr const char* kNames[TM_COUNT] = {"", "Turmring", "", "", "Kette", "Kette", "Optik", "Entfernungsmesser", "Winkelspiegel", "Kühler", "Treibstoff", "Höhenrichtwerk", "Antenne"};
+    out.push_back({s.at, s.radius, crippling ? 1 : 2, named[s.module] ? "" : kNames[s.module]});
+    named[s.module] = true;
+  }
+}
+
+bool Tank::bulletHit(Sim& sim, V3 a, V3 b, double force) {
+  if (destroyed) return false;
+  BulletSpot spots[kBulletSpots];
+  bulletSpots(sim, ring_, spots);
   const V3 d = b - a;
   const double dl2 = std::max(len2(d), 1e-9);
-  for (const Spot& s : spots) {
+  for (const BulletSpot& s : spots) {
     const double t = clampd(dot(s.at - a, d) / dl2, 0, 1);
     if (len2(a + d * t - s.at) > s.radius * s.radius) continue;
     mod[s.module] = std::max(0.0, mod[s.module] - force / s.toughness);

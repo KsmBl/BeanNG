@@ -129,6 +129,7 @@ uniform vec3 uSun;
 uniform sampler2DShadow uShadow;
 uniform sampler2DShadow uShadowFar;
 uniform mat4 uShadowFarVP;
+uniform float uHeat;
 uniform float uAlpha;
 uniform sampler2DArray uScratchTex;
 uniform sampler2D uDetailTex;
@@ -138,7 +139,7 @@ uniform int uCraterCount;
 uniform vec3 uCraters[24];   // x, y, radius
 uniform float uRoadCut;
 layout(location=0) out vec4 frag;
-layout(location=1) out vec2 velOut;
+layout(location=1) out vec4 velOut;  // motion on screen, and how warm this is
 vec3 sky(vec3 d){
   float t = clamp(d.z*0.5+0.5,0.0,1.0);
   vec3 c = mix(vec3(0.62,0.60,0.56), vec3(0.32,0.52,0.82), pow(t,0.7));
@@ -256,7 +257,7 @@ void main(){
   c = c/(c*0.22+0.85);
   frag = vec4(pow(c,vec3(1.0/1.6)), uAlpha);
   // How far this point moves across the screen during the shutter time, for the motion blur.
-  velOut = vPrevClip.w > 0.05 ? (vClip.xy/vClip.w - vPrevClip.xy/vPrevClip.w)*0.5 : vec2(0.0);
+  velOut = vec4(vPrevClip.w > 0.05 ? (vClip.xy/vClip.w - vPrevClip.xy/vPrevClip.w)*0.5 : vec2(0.0), uHeat, 0.0);
 })";
 
 // Motion blur: smears every pixel along its own motion on screen. A blurred background must not pick
@@ -274,7 +275,7 @@ void main(){
 const char* kPostFS = R"(#version 330 core
 in vec2 vUv; flat in mat4 vSkyReproject;
 uniform sampler2D uColor; uniform sampler2D uVel; uniform sampler2D uDepth;
-uniform vec2 uRes; uniform float uBlur; uniform float uNear; uniform float uFar; uniform float uVignette; uniform float uFlash;
+uniform vec2 uRes; uniform float uBlur; uniform float uNear; uniform float uFar; uniform float uVignette; uniform float uFlash; uniform float uThermal;
 out vec4 frag;
 float linZ(float d){ float z=d*2.0-1.0; return 2.0*uNear*uFar/(uFar+uNear-z*(uFar-uNear)); }
 vec2 motionAt(vec2 uv, float depth){
@@ -311,6 +312,16 @@ void main(){
       total += 1.0;
     }
     c = sum/total;
+  }
+  if(uThermal > 0.5){
+    // White is warm. The rest of the world is a dim grey, where only its shapes can be told apart: smoke does not stop
+    // this, because smoke draws no heat over what is behind it.
+    float heat = texture(uVel, vUv).b;
+    float shade = d0 >= 0.99999 ? 0.05 : 0.09 + 0.20*dot(base, vec3(0.3, 0.59, 0.11));
+    float grain = fract(52.9829189*fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))))*0.025;
+    c = vec3(mix(shade, 1.0, clamp(heat, 0.0, 1.0)) + grain);
+    // The weak-spot sight has the same grey, a little lighter to aim by, and nothing warm: its spots go over it in red.
+    if(uThermal > 1.5) c = vec3(shade*1.5 + grain);
   }
   // At speed the edges of the view fall away a little, as they do in the eye.
   vec2 e = vUv*2.0-1.0;
@@ -663,7 +674,7 @@ struct Renderer::Impl {
     glBindRenderbuffer(GL_RENDERBUFFER, sceneColor);
     glRenderbufferStorageMultisample(GL_RENDERBUFFER, kSamples, GL_RGBA8, w, h);
     glBindRenderbuffer(GL_RENDERBUFFER, sceneVel);
-    glRenderbufferStorageMultisample(GL_RENDERBUFFER, kSamples, GL_RG16F, w, h);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, kSamples, GL_RGBA16F, w, h);
     glBindRenderbuffer(GL_RENDERBUFFER, sceneDepth);
     glRenderbufferStorageMultisample(GL_RENDERBUFFER, kSamples, GL_DEPTH_COMPONENT24, w, h);
     glBindFramebuffer(GL_FRAMEBUFFER, sceneFbo);
@@ -681,7 +692,7 @@ struct Renderer::Impl {
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     };
     tex(resolveColor, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
-    tex(resolveVel, GL_RG16F, GL_RG, GL_FLOAT);
+    tex(resolveVel, GL_RGBA16F, GL_RGBA, GL_FLOAT);
     tex(resolveDepth, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_FLOAT);
     glBindFramebuffer(GL_FRAMEBUFFER, resolveFbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, resolveColor, 0);
@@ -2697,7 +2708,42 @@ struct Renderer::Impl {
     // ---- The scope: the world through a round hole, with its marks and the wind written beside them.
     if (o.scope > 0) {
       const float cx = W * .5f, cy = H * .5f, r = H * .46f;
-      const Col black{0, 0, 0, 1}, fine{0, 0, 0, .9f};
+      const Col black{0, 0, 0, 1}, fine = o.scopeView != SV_PLAIN ? Col{1, .75f, .2f, .85f} : Col{0, 0, 0, .9f};
+      // Under the edge of the scope, where to hit, glowing out of the grey: red ends it, orange cripples it, yellow is a
+      // nuisance. The worst go on top, and only what matters gets its name once one is close enough to read it.
+      if (o.scopeView == SV_WEAK) {
+        static const Col kLevels[3] = {{1, .08f, .05f, 1}, {1, .5f, .05f, 1}, {.95f, .85f, .2f, 1}};
+        const Mat4& m = camVP;
+        // How much a metre is on the screen at a distance: the lens's part of the matrix, whichever way one looks.
+        const double lens = std::sqrt(m.m[1] * m.m[1] + m.m[5] * m.m[5] + m.m[9] * m.m[9]);
+        for (int level = 2; level >= 0; level--) {
+          for (const Snapshot::WeakSpot& spot : s.weakSpots) {
+            if (spot.level != level) continue;
+            const V3 p = spot.p;
+            const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
+            const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
+            const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
+            if (qw < 0.1) continue;
+            const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H);
+            const float pixels = std::clamp(float(spot.radius * lens / qw * .5 * H), 3.f * u, 90.f * u);
+            Col glow = kLevels[level], core = glow;
+            glow.a = .38f;
+            core.a = .85f;
+            circle(sx, sy, pixels * 1.25f, glow);
+            circle(sx, sy, pixels * .85f, core);
+          }
+        }
+        for (const Snapshot::WeakSpot& spot : s.weakSpots) {
+          if (spot.level > 1 || !spot.name[0]) continue;
+          const V3 p = spot.p;
+          const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
+          const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
+          const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
+          if (qw < 0.1) continue;
+          const float pixels = float(spot.radius * lens / qw * .5 * H);
+          if (pixels > 6 * u) labelMid(float((qx / qw * .5 + .5) * W), float((.5 - qy / qw * .5) * H) + 4 * u, spot.name, 13 * u, white);
+        }
+      }
       rrect(0, 0, cx - r, H, 0, black);
       rrect(cx + r, 0, W - cx - r, H, 0, black);
       // The edge of the round view, closed with slices of black towards the corners.
@@ -2734,6 +2780,7 @@ struct Renderer::Impl {
       const double across = dot(s.foot.wind, sideways), along = dot(s.foot.wind, V3{f.x, f.y, 0});
       snprintf(buf, sizeof buf, "Wind %.1f m/s  ·  quer %+.1f  ·  längs %+.1f", speed, -across, along);
       labelMid(cx, cy + r * .82f, buf, 15 * u, white);
+      if (!o.scopeHint.empty()) labelMid(cx, cy - r * .84f, o.scopeHint.c_str(), 15 * u, white);
     } else if (o.crosshair) {
       // The crosshair is where the gunner looks. The ring is where the gun really points just now.
       const float cx = W * .5f, cy = H * .5f;
@@ -3486,12 +3533,14 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     D.setMat(prog, "uPrevWorld", I);
     const GLint uScorchLoc = glGetUniformLocation(prog, "uScorch");
     if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
+    const GLint uHeatLoc = glGetUniformLocation(prog, "uHeat");
     // What stands about stands still in the world, and did not burn along with the driven car.
     {
       size_t first = 0;
       for (size_t k = 0; k < D.parkedLists.size(); k++) {
         const size_t count = D.parkedLists[k][0].size();
         if (uScorchLoc >= 0) glUniform1f(uScorchLoc, k < 64 ? s.parkedScorch[k] : 0.f);
+        if (uHeatLoc >= 0) glUniform1f(uHeatLoc, k < 64 ? s.parkedHeat[k] : 0.f);
         // What the camera follows moves with it. Blurred as if standing still, it would smear while the world stayed sharp.
         const bool self = int(k) == s.selfInstance;
         // Someone on foot is held in the picture by the camera itself: no motion at all, or the figure smears.
@@ -3504,6 +3553,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
         first += count;
       }
       if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
+      if (uHeatLoc >= 0) glUniform1f(uHeatLoc, 0.f);
     }
     glBindVertexArray(D.propVao);
     glDrawArrays(GL_TRIANGLES, 0, GLsizei(D.propVerts.size()));
@@ -3773,6 +3823,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glUniform1f(glGetUniformLocation(D.progPost, "uVignette"), hud.motionBlur ? float(0.28 * clampd((std::fabs(s.speedKmh) - 60.0) / 170.0, 0, 1)) : 0.f);
   D.flash *= float(std::exp(-dt * 9.0));
   glUniform1f(glGetUniformLocation(D.progPost, "uFlash"), D.flash * 0.75f);
+  glUniform1f(glGetUniformLocation(D.progPost, "uThermal"), hud.scopeView == SV_THERMAL ? 1.f : (hud.scopeView == SV_WEAK ? 2.f : 0.f));
   D.setMat(D.progPost, "uSkyVP", D.skyVP);
   D.setMat(D.progPost, "uSkyPrevVP", D.skyPrevVP);
   glBindVertexArray(D.hudVao);

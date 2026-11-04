@@ -29,6 +29,9 @@ struct PartState {
 };
 
 // Copied out of the physics thread once per rendered frame.
+// What the sniper's scope shows: the plain picture, what is warm, or where to hit.
+enum ScopeView { SV_PLAIN, SV_THERMAL, SV_WEAK };
+
 struct Snapshot {
   std::vector<V3> pos;
   std::vector<float> beamForce;  // 0 means broken, for the debug overlay
@@ -64,6 +67,14 @@ struct Snapshot {
   int selfTrack = -1;
   V3 trackLeft[2];
   float parkedScorch[64] = {};
+  float parkedHeat[64] = {};  // how warm each is through a thermal sight, 0..1
+  struct WeakSpot {
+    V3 p;
+    float radius = 0;
+    u8 level = 0;  // 0 ends it, 1 cripples it, 2 is a nuisance
+    const char* name = "";
+  };
+  std::vector<WeakSpot> weakSpots;  // only while someone looks for them
   std::vector<std::string> chat;  // the last lines, oldest first
   std::string chatInput;
   bool chatOpen = false;
@@ -214,6 +225,8 @@ struct HudOptions {
   // Looking through the big rifle's scope, at this magnification; 0 when not.
   double scope = 0;
   int scopeZero = 100;
+  int scopeView = SV_PLAIN;
+  std::string scopeHint;  // which view the scope shows, and how to change it
   float hurt = 0;  // being hit: how red the picture goes
   float hitMark = 0;   // a hit landed
   // Something heard: which way, how loud, and how long ago it faded.

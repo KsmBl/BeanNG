@@ -107,11 +107,11 @@ void main(){
 const char* kFS = R"(#version 330 core
 in vec3 vCol; in vec4 vClip; in vec4 vPrevClip;
 layout(location=0) out vec4 frag;
-layout(location=1) out vec2 velOut;
+layout(location=1) out vec4 velOut;
 void main(){
   vec3 c = vCol/(vCol*0.22+0.85);
   frag = vec4(pow(c,vec3(1.0/1.6)),1.0);
-  velOut = vPrevClip.w > 0.05 ? (vClip.xy/vClip.w - vPrevClip.xy/vPrevClip.w)*0.5 : vec2(0.0);
+  velOut = vec4(vPrevClip.w > 0.05 ? (vClip.xy/vClip.w - vPrevClip.xy/vPrevClip.w)*0.5 : vec2(0.0), 0.0, 0.0);
 })";
 
 const char* kShadowVS = R"(#version 330 core

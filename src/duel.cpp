@@ -777,6 +777,7 @@ void Duel::rollLoot() {
       {"kleinmunition", 26, 60}, {"granaten", 13, 4}, {"lenkraketen", 7, 2}, {"raketen", 8, 2}, {"raketenwerfer", 7, 1},
       {"scharfschuetzengewehr", 6, 1}, {"scharfschuetzenmunition", 8, 5}, {"reparaturset", 8, 1}, {"tretmine", 6, 2},
       {"panzermine", 4, 1}, {"bombencode", 4, 1}, {"medikit", 6, 1}, {"nebelgranate", 7, 2}, {"ghillie", 4, 1}, {"tarnnetz", 4, 1}, {"drohne", 5, 1},
+      {"thermalvisier", 3, 1}, {"schwachstellenvisier", 3, 1},
   };
   int total = 0;
   for (const Roll& r : kTable) total += r.weight;
@@ -819,14 +820,14 @@ int Duel::nearCrate(V3 p) const {
 }
 
 const char* Duel::crateLabel(const Crate& c, char* buf, size_t n) {
-  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Medikit", "Nebelgranaten", "Ghillie-Anzug", "Tarnnetz", "Drohne"};
+  static const char* kLabels[kGiveKinds] = {"Tretmine", "Panzermine", "Reparaturset", "Sturmgewehr", "Kleinmunition", "Scharfschützengewehr", "Scharfschützenmunition", "Raketenwerfer", "Raketen", "Panzergranaten", "Lenkraketen", "Bombencode", "Medikit", "Nebelgranaten", "Ghillie-Anzug", "Tarnnetz", "Drohne", "Thermalvisier", "Schwachstellenvisier"};
   snprintf(buf, n, c.count > 1 ? "%s  x%d" : "%s", kLabels[c.what], c.count);
   return buf;
 }
 
 const char* const Duel::kGiveNames[kGiveKinds] = {
     "tretmine", "panzermine", "reparaturset", "sturmgewehr", "kleinmunition", "scharfschuetzengewehr", "scharfschuetzenmunition",
-    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "medikit", "nebelgranate", "ghillie", "tarnnetz", "drohne",
+    "raketenwerfer", "raketen", "granaten", "lenkraketen", "bombencode", "medikit", "nebelgranate", "ghillie", "tarnnetz", "drohne", "thermalvisier", "schwachstellenvisier",
 };
 
 bool Duel::give(int player, const char* name, int count) {
@@ -855,6 +856,8 @@ bool Duel::give(int player, const char* name, int count) {
   else if (n == "lenkraketen") p.tankMissiles += count;
   else if (n == "bombencode") p.strikeCodes += count;
   else if (n == "medikit") p.medkits += count;
+  else if (n == "thermalvisier") p.thermalSight = true;
+  else if (n == "schwachstellenvisier") p.weakSight = true;
   else return false;
   return true;
 }
@@ -1652,6 +1655,7 @@ void Duel::placePlayers() {
     p.sniperAmmo = p.rpgAmmo = 0;
     p.tankShells = p.tankMissiles = p.strikeCodes = 0;
     p.medkits = 0;
+    p.thermalSight = p.weakSight = false;
     p.shotClock = 0;
     p.wantProne = false;
     for (int k = 0; k < WP_COUNT; k++) p.hasWeapon[k] = k <= WP_PISTOL;
@@ -1659,6 +1663,7 @@ void Duel::placePlayers() {
       for (bool& h : p.hasWeapon) h = true;
       p.sniperAmmo = 20;
       p.rpgAmmo = 6;
+      p.thermalSight = p.weakSight = true;
     }
     p.walkDebt = 0;
     const World::Base& base = world.base(teamOf(i));

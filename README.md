@@ -53,6 +53,8 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Scharfschützengewehr:** drei Sekunden Aufbau im Liegen, Zoom 6x bis 24x, Geschossabfall, Wind und Flugzeit. Auf 1000 m sind das gut eine Sekunde und 5,5 m Abfall. Im Auto trifft es, was im Weg liegt: Tank, Ölwanne, Motor, Kühler, Getriebe, Reifen oder den Fahrer.
 
+**Visiere:** In Kisten liegen zwei Visiere fürs Scharfschützengewehr, im Zielfernrohr wird umgeschaltet. Das **Thermalvisier** zeigt die Welt grau und alles Warme weiß: Soldaten, auch im Ghillie-Anzug und im Nebel, und Fahrzeuge mit jemandem darin. Das **Schwachstellenvisier** zeigt beim Fahrzeug unter dem Fadenkreuz, wo es sich lohnt: rot beendet es, orange legt es lahm, gelb stört nur. Bei Gegnern zu Fuß leuchtet der Kopf, der doppelt zählt. Durch Wände sehen beide nicht; das Schwachstellenvisier prüft die Sichtlinie, das Thermalbild zeigt nur, was ohnehin im Blick ist.
+
 **Finden:** In Häusern und bei Wracks stehen Kisten mit Munition, Scharfschützengewehr, Raketenwerfer, Reparatursets, Minen, Medikits, Nebelgranaten, Ghillie-Anzügen, Tarnnetzen, Drohnen und Bombencodes. Ein Code holt vier ungenaue Raketen auf einen Kartenpunkt, ein Medikit gibt 50 Leben zurück.
 
 **Werkzeug-Overlay:** **Q** (Controller: **RB**) listet alles, was du dabeihast: Minen, Medikit, Reparaturset, Nebel, Tarnnetz, Drohne, Bombencode und die Standortabfrage. Einzelne Tasten dafür gibt es nicht. Was gerade nicht geht, steht mit Grund dabei. Ein Bombencode öffnet die Karte, dort wählst du das Ziel.
@@ -119,6 +121,7 @@ Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom V
 | Scharfschützengewehr aufbauen | X | B zu Fuß |
 | Zielfernrohr, Zoom 6x bis 24x | rechte Maustaste, Mausrad | LT, Steuerkreuz links, rechts |
 | Visier auf Entfernung einstellen | Pfeil hoch, runter | Steuerkreuz hoch, runter |
+| Zielfernrohr: normal, thermal, Schwachstellen | T | Y |
 | Kamera, Abstand | C, Mausrad | Y, Steuerkreuz hoch, runter |
 | Chat | Enter | Back: Schnellnachrichten oder Bildschirmtastatur |
 | Menü | ESC | Start |

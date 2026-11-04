@@ -57,6 +57,8 @@ struct VehicleFrame {
 };
 
 enum WeaponKind : u8 { WP_KNIFE, WP_PISTOL, WP_AR, WP_SNIPER, WP_RPG, WP_COUNT };
+// The found sights travel with the weapons one has, in the same byte.
+inline constexpr int kHasThermal = 1 << 6, kHasWeak = 1 << 7;
 struct WeaponInfo {
   const char* name;
   double interval;  // seconds between shots
@@ -117,6 +119,7 @@ class Duel {
     bool hasWeapon[WP_COUNT] = {true, true, false, false, false};
     int smallAmmo = 24;  // pistol and assault rifle: what one starts with, and what the loadout adds
     int sniperAmmo = 0, rpgAmmo = 0;
+    bool thermalSight = false, weakSight = false;  // found: extra views through the rifle's scope
     int tankShells = 0, tankMissiles = 0;  // carried, and loaded when getting into a tank that takes them
     int strikeCodes = 0;                   // each calls down four rockets on a point of the map
     bool wantProne = false;
@@ -240,7 +243,7 @@ class Duel {
   u32 mineFirst[2][kMinesEach] = {};
   bool giveAll = false;  // for trying things out: every weapon from the start
   // What can be handed out by name: from the server's shell, and what loot is made of.
-  static constexpr int kGiveKinds = 17;
+  static constexpr int kGiveKinds = 19;
   static constexpr double kDroneBattery = 50.0, kDroneSpeed = 24.0, kDroneMarkRange = 300.0;
   static constexpr int kDroneNodes = 6;
   u32 droneFirst[kMaxPlayers] = {};

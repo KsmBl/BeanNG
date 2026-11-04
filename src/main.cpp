@@ -521,6 +521,7 @@ struct SharedInput {
   bool fireHeld = false;
   bool aiming = false;
   bool scoped = false;
+  int scopeView = SV_PLAIN;
   int weapon = WP_PISTOL;
   double yaw = 0, pitch = 0;
   std::string chatOut;  // the next line to say; cleared here once it is on its way
@@ -1572,6 +1573,8 @@ struct Game {
           duel.players[mySlot].sniperAmmo = sniper;
           duel.players[mySlot].rpgAmmo = rpg;
           for (int k = 0; k < WP_COUNT; k++) duel.players[mySlot].hasWeapon[k] = has & (1 << k);
+          duel.players[mySlot].thermalSight = has & kHasThermal;
+          duel.players[mySlot].weakSight = has & kHasWeak;
           duel.players[mySlot].hurtFrom = r.getV3();
           duel.wind = r.getV3();
           i16 shells = 0, missiles = 0, codes = 0;
@@ -2262,6 +2265,60 @@ struct Game {
         snap.foot.codes = who.strikeCodes;
         snap.foot.has = 0;
         for (int k = 0; k < WP_COUNT; k++) snap.foot.has |= who.hasWeapon[k] ? 1 << k : 0;
+        snap.foot.has |= (who.thermalSight ? kHasThermal : 0) | (who.weakSight ? kHasWeak : 0);
+        // A soldier is warm, and so is a vehicle with someone in it, or one still burning.
+        std::fill(std::begin(snap.parkedHeat), std::end(snap.parkedHeat), 0.f);
+        for (int k = 0; k < Duel::kMaxPlayers; k++) {
+          if (Duel::kVehicles + k < 64) snap.parkedHeat[Duel::kVehicles + k] = duel.players[k].present ? 1.f : 0.f;
+          const int inside = k == mySlot ? duel.players[k].vehicle : drawnVehicle[k];
+          if (duel.players[k].present && inside >= 0 && inside < Duel::kVehicles && inside < 64) snap.parkedHeat[inside] = 0.8f;
+        }
+        for (int k = 0; k < Duel::kTanks && k < 64; k++)
+          if (duel.tanks[k].destroyed && duel.tanks[k].burnTime < 60.0) snap.parkedHeat[k] = 0.6f;
+        // Where to hit, only for those looking for it, and not through what stands in between.
+        snap.weakSpots.clear();
+        if (in.scoped && in.scopeView == SV_WEAK && mySlot >= 0) {
+          const V3 eye = Duel::eyeOf(me);
+          const V3 ahead{-std::cos(in.yaw) * std::cos(in.pitch), -std::sin(in.yaw) * std::cos(in.pitch), -std::sin(in.pitch)};
+          const auto inSight = [&](V3 p) {
+            const V3 to = p - eye;
+            const double d = len(to);
+            if (d < 1.0 || d > 1700.0 || dot(to, ahead) < d * 0.97) return false;
+            const V3 end = Duel::aimEnd(world, sim.pos, sim.blocks, nullptr, 0, -1, {}, eye, to / d, 0.5);
+            return len(end - eye) > d - 4.0;
+          };
+          // Of the vehicles only the one under the crosshair, nearest first when one stands behind another: the spots of
+          // a whole yard of tanks in one picture can no longer be told apart.
+          int aimed = -1;
+          double aimedBy = 1e30;
+          for (int k = 0; k < Duel::kVehicles; k++) {
+            if (k < Duel::kTanks && duel.tanks[k].destroyed) continue;
+            const VehicleFrame& f = duel.frames[k];
+            const V3 to = f.cog - eye;
+            const double along = dot(to, ahead), off = len(to - ahead * along);
+            // How far from the line one looks along, against the size of the thing, and then how far away.
+            const double score = std::max(off - f.halfLength, 0.0) * 1000.0 + along;
+            if (along > 1.0 && off < f.halfLength + 25.0 && score < aimedBy && inSight(f.cog + f.up * 1.2)) {
+              aimedBy = score;
+              aimed = k;
+            }
+          }
+          if (aimed >= 0 && aimed < Duel::kTanks) {
+            std::vector<Tank::WeakPoint> points;
+            duel.tanks[aimed].weakPoints(sim, points);
+            for (const Tank::WeakPoint& w : points) snap.weakSpots.push_back({w.at, float(w.radius), u8(w.level), w.name});
+          } else if (aimed >= 0) {
+            const VehicleFrame& f = duel.frames[aimed];
+            snap.weakSpots.push_back({f.cog + f.fwd * 1.3 + f.up * 0.2, 0.45f, 1, "Motor"});
+          }
+          for (int k = 0; k < Duel::kMaxPlayers; k++) {
+            const Soldier& sd = drawnSoldier[k];
+            if (k == mySlot || !duel.players[k].present || (Duel::teamOf(k) == Duel::teamOf(mySlot) && scriptMode != 73) || drawnVehicle[k] >= 0 || sd.hp <= 0) continue;
+            const V3 head = Duel::eyeOf(sd) + V3{0, 0, 0.1};
+            if (!inSight(head)) continue;
+            snap.weakSpots.push_back({head, 0.15f, 0, "Kopf: doppelt"});
+          }
+        }
         netState = state;
         netError = error;
         phase = phaseNow;
@@ -2322,6 +2379,7 @@ static void runGame() {
       "Tipp: Sag deinem Team mit „Vektor C5“, wo du bist. Dein aktuelles Feld steht oben links.",
       "Tipp: Reparieren geht nur von außen und nur, wenn das Fahrzeug stillsteht.",
       "Tipp: Die Artillerie schießt über die Sperrmauern, das Ziel markierst du auf der Karte.",
+      "Tipp: In Kisten liegen Thermal- und Schwachstellenvisier fürs Scharfschützengewehr. Im Zielfernrohr schaltest du sie mit T um.",
       "Tipp: Das Scharfschützengewehr kennt Geschossabfall, Wind und Flugzeit. Stell das Visier auf die Entfernung ein.",
   };
   const auto tipNow = [] {
@@ -2566,6 +2624,7 @@ static void runGame() {
   // The big rifle's scope: right mouse button once it is set up.
   bool scoped = false;
   double scopeZoom = 6.0;
+  int scopeView = SV_PLAIN;
   int scopeZero = 100;  // the range the sight is set for, in metres
   // The map, and the point on it the artillery lays on.
   bool mapOpen = false;
@@ -2662,6 +2721,14 @@ static void runGame() {
     rig.pitch = clampd(rig.pitch, pitchUp, pitchDown);
     // Nothing to do on foot before or after the match itself: one waits where one stands.
     if (!onFoot || weaponPick != WP_SNIPER || view.foot.prone < 0.99) scoped = false;
+    // Through the scope: plain, or with whichever of the found sights one has.
+    const bool hasThermal = view.foot.has & kHasThermal, hasWeak = view.foot.has & kHasWeak;
+    if ((scopeView == SV_THERMAL && !hasThermal) || (scopeView == SV_WEAK && !hasWeak)) scopeView = SV_PLAIN;
+    const auto nextScopeView = [&] {
+      if (scopeView == SV_PLAIN) scopeView = hasThermal ? SV_THERMAL : (hasWeak ? SV_WEAK : SV_PLAIN);
+      else if (scopeView == SV_THERMAL) scopeView = hasWeak ? SV_WEAK : SV_PLAIN;
+      else scopeView = SV_PLAIN;
+    };
     // The choosing comes up by itself; afterwards it is gone by itself.
     if (phase != lastPhase) {
       if (phase == Duel::CHOOSING && netState == Game::NET_IN) {
@@ -2841,6 +2908,7 @@ static void runGame() {
       key("Scharfschützengewehr aufbauen", "X", "B");
       key("Zielfernrohr, Zoom", "Rechte Maustaste, Mausrad", "LT, Steuerkreuz links, rechts");
       key("Visier auf Entfernung einstellen", "Pfeil hoch, runter", "Steuerkreuz hoch, runter");
+      key("Zielfernrohr: normal, thermal, Schwachstellen", "T", "Y");
       key("Kamera, Abstand", "C, Mausrad", "Y, Steuerkreuz hoch, runter");
       key("Chat", "Enter", "Back");
       key("Menü", "ESC", "Start");
@@ -3154,7 +3222,14 @@ static void runGame() {
           break;
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
           switch (e.gbutton.button) {
-            case SDL_GAMEPAD_BUTTON_NORTH: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.pitch = 0.22; break;
+            case SDL_GAMEPAD_BUTTON_NORTH:
+              if (scoped) {
+                nextScopeView();
+                break;
+              }
+              rig.mode = CamMode((rig.mode + 1) % CAM_COUNT);
+              rig.pitch = 0.22;
+              break;
             case SDL_GAMEPAD_BUTTON_START: case SDL_GAMEPAD_BUTTON_GUIDE: openMenu(); break;
             case SDL_GAMEPAD_BUTTON_WEST:
               if (replayOn) replayNext();
@@ -3230,6 +3305,7 @@ static void runGame() {
               if (netState == Game::NET_IN) chatting = true;
               break;
             case SDLK_F: edges.fire = true; break;
+            case SDLK_T: if (scoped) nextScopeView(); break;
             case SDLK_E: edges.use = true; break;
             case SDLK_X: edges.setup = true; break;
             case SDLK_UP: if (scoped) scopeZero = std::min(scopeZero + 50, 2000); break;
@@ -3816,6 +3892,44 @@ static void runGame() {
       }
     }
 
+    if (scriptMode == 73 && netState == Game::NET_IN) {
+      // Lying behind the big rifle, the found sights in turn, on a tank someone is walking to.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      if (inMatch) {
+        panelKind = PANEL_NONE;
+        weaponPick = WP_SNIPER;
+        // The one walking, for as long as there is someone walking; a figure in a vehicle is kept out of sight below.
+        V3 aimAt = G.world.base(Duel::teamOf(slot)).slot(1) + V3{0, 0, 1.2};
+        for (int k = 0; k < Duel::kMaxPlayers; k++) {
+          const size_t node = G.duel.soldierFirst[k] + size_t(Duel::kPartNodes);
+          if (k == slot || node >= view.pos.size()) continue;
+          const double away = len(view.pos[node] - view.foot.p);
+          if (away > 10.0 && away < 150.0) aimAt = view.pos[node] + V3{0, 0, 0.5};
+        }
+        // And rather a vehicle with someone in it.
+        for (int k = 0; k < Duel::kTanks; k++)
+          if (view.parkedHeat[k] > 0.5f && G.duel.tankFirst[k] < view.pos.size()) aimAt = view.pos[G.duel.tankFirst[k]] + V3{0, 0, 1.0};
+        const V3 to = aimAt - Duel::eyeOf(Soldier{view.foot.p});
+        rig.yaw = std::atan2(-to.y, -to.x);
+        rig.pitch = -std::atan2(to.z, std::hypot(to.x, to.y));
+        static bool down = false;
+        if (tNow > 1.0 && !down) {
+          down = true;
+          sendC.setup = true;
+        }
+        if (view.foot.prone > 0.99) scoped = true;
+        scopeZoom = 6.0;
+        static double switched = tNow;
+        if (scoped && tNow - switched > 3.0) {
+          switched = tNow;
+          nextScopeView();
+          printf("Ansicht %d\n", scopeView);
+        }
+      }
+    }
     if (scriptMode == 72 && phase == Duel::CHOOSING && netState == Game::NET_IN) {
       // The choosing of what to take, line by line, as big as the window is.
       panelKind = PANEL_LOADOUT;
@@ -4047,6 +4161,7 @@ static void runGame() {
       G.input.sprint = sprint;
       G.input.weapon = weaponPick;
       G.input.scoped = scoped;
+      G.input.scopeView = scopeView;
       G.input.aiming = aimBlend > 0.5;
       G.input.fireHeld = padFire || (panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK));
       if (sendC.requestGear != 99) c.requestGear = sendC.requestGear;
@@ -4185,6 +4300,8 @@ static void runGame() {
       view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
       view.foot = G.snap.foot;
+      memcpy(view.parkedHeat, G.snap.parkedHeat, sizeof view.parkedHeat);
+      view.weakSpots = G.snap.weakSpots;
       view.missileLive = G.snap.missileLive;
       view.missileP = G.snap.missileP;
       view.missileV = G.snap.missileV;
@@ -4476,6 +4593,12 @@ static void runGame() {
       }
     }
     hud.scope = scoped ? scopeZoom : 0.0;
+    hud.scopeView = scoped ? scopeView : SV_PLAIN;
+    hud.scopeHint.clear();
+    if (scoped && (hasThermal || hasWeak)) {
+      const char* const name = scopeView == SV_THERMAL ? "Thermal" : (scopeView == SV_WEAK ? "Schwachstellen" : "Normal");
+      hud.scopeHint = std::string(name) + (gPadHints ? "  ·  Y wechselt" : "  ·  T wechselt");
+    }
     hud.scopeZero = scopeZero;
     if (scoped) {
       const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};

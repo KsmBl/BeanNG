@@ -603,6 +603,7 @@ int main(int argc, char** argv) {
     w.put(i16(me.rpgAmmo));
     u8 has = 0;
     for (int k = 0; k < WP_COUNT; k++) has |= u8(me.hasWeapon[k] ? 1 << k : 0);
+    has |= u8((me.thermalSight ? kHasThermal : 0) | (me.weakSight ? kHasWeak : 0));
     w.put(has);
     w.putV3(me.hurtFrom);
     w.putV3(duel->wind);
