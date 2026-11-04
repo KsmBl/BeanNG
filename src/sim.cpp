@@ -1056,8 +1056,9 @@ void Sim::splitObjects() {
 void Sim::sleepWake() {
   splitObjects();
 
-  constexpr double kSleepSpeed2 = 0.20 * 0.20;
-  constexpr double kPeriod = 64.0 / 2000.0;
+  // Under load whatever has more or less come to rest counts as resting, and sooner.
+  const double kSleepSpeed2 = 0.20 * 0.20 * sleepHaste * sleepHaste;
+  const double kPeriod = 64.0 / 2000.0 * sleepHaste;
 
   // Wake sleepers touched by anything that is actually moving. A resting prop next to another
   // resting prop must not keep waking its neighbour, or everything ends up awake forever.
@@ -1102,7 +1103,8 @@ void Sim::sleepWake() {
   // Put settled props to sleep (done separately because wake() above may grow the active list).
   for (size_t ai = 0; ai < active.size();) {
     Obj& o = objs[active[ai]];
-    if (!o.alwaysAwake && o.sleepTimer > 1.0f) {
+    const bool partnerReady = o.partner < 0 || !objs[size_t(o.partner)].awake || objs[size_t(o.partner)].sleepTimer > 1.0f;
+    if (!o.alwaysAwake && o.sleepTimer > 1.0f && partnerReady) {
       for (u32 i : o.nodes) vel[i] = {};
       o.awake = false;
       active[ai] = active.back();

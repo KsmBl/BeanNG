@@ -191,6 +191,11 @@ void Duel::build() {
   updateFrames();
   updateFrames();
   placePlayers();
+  // A tank's two bodies rest together, or each would keep waking the other.
+  for (const Tank& t : tanks) {
+    sim.objs[t.hullObj].partner = t.turretObj;
+    sim.objs[t.turretObj].partner = t.hullObj;
+  }
   simStart = sim;
   blastSeen = sim.blastCount;
 }

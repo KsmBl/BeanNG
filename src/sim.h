@@ -86,6 +86,7 @@ struct Obj {
   bool scrap = false;     // a burnt-out wreck: whatever still jiggles in it is quickly damped away
   bool armoured = false;  // a blast pushes it, but does not simply tear it apart
   float sleepTimer = 0;
+  int partner = -1;  // falls asleep only together with this one: a tank's hull and turret would keep waking each other
   V3 bbMin, bbMax;
 };
 
@@ -124,6 +125,7 @@ class Sim {
   std::vector<Block> blocks;
   std::vector<Obj> objs;
   std::vector<u32> active;  // indices of awake objects
+  double sleepHaste = 1;    // above 1: the server is short of time, and what has come to rest may stop sooner
   std::vector<SimEvent> events;
   std::vector<Scrape> scrapes;
 
