@@ -1003,6 +1003,7 @@ Tank::NetState Tank::netState() const {
   n.sight = sight;
   n.turretYaw = float(turretYaw);
   n.gunPitch = float(gunPitch);
+  n.recoil = float(recoil);
   n.reload = float(reload);
   n.reloadTime = float(reloadTime);
   n.damage = float(damage);
@@ -1044,6 +1045,7 @@ void Tank::applyNetState(Sim& sim, const NetState& n, double dt) {
   sight = n.sight;
   turretYaw = n.turretYaw;
   gunPitch = n.gunPitch;
+  recoil = n.recoil;
   reload = n.reload;
   reloadTime = n.reloadTime;
   damage = n.damage;

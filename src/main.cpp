@@ -22,6 +22,7 @@
 #include "audio.h"
 #include "duel.h"
 #include "duelnet.h"
+#include "shape.h"
 #include "props.h"
 #include "render.h"
 #include "tank.h"
@@ -734,12 +735,13 @@ struct Game {
     double arrived = 0;  // on this machine's clock
     V3 cog;
     Tank::NetState state;
-    std::vector<i16> offsets;
+    std::vector<float> offsets;  // of each node against the middle, in metres
   };
 
   void netLoop() {
     using Clock = std::chrono::steady_clock;
     constexpr double kViewDelay = 0.10;
+    constexpr size_t kFramesKept = size_t(net::kSendRate * 0.6);  // enough for the longest way back to be shown
     const auto start = Clock::now();
     const auto clock = [&] { return std::chrono::duration<double>(Clock::now() - start).count(); };
     std::unique_ptr<net::Socket> sock;
@@ -761,13 +763,18 @@ struct Game {
       u8 hurt = 0, flat = 0;
       int gear = 1;
       bool exploded = false;
-      std::vector<i16> offsets;
+      std::vector<float> offsets;
     };
     struct CarShown {
-      CarFrame building;
-      u32 got = 0;
       std::deque<CarFrame> frames;
+      float fuel = 0, coolant = 0;
     } shown[Duel::kCars];
+    // What the server has told of each vehicle's nodes, against the part they belong to.
+    net::VehicleShapes shapes;
+    std::vector<i16> toldTanks, toldCars;
+    Tank::NetState tankSaid[Duel::kTanks];
+    // A datagram holds several packets; each is taken as it would be alone.
+    std::deque<std::vector<u8>> bundled;
     // Walking answers at once, and is checked against the server's answer afterwards.
     Soldier shownSoldier[Duel::kMaxPlayers];
     // The others on foot, a little late like the vehicles: between two things the server has said, not the last of them.
@@ -973,6 +980,7 @@ struct Game {
       for (int i = 0; i < Duel::kTanks; i++) {
         duel.tanks[i] = duel.tanksStart[i];
         frames[i].clear();
+        tankSaid[i] = duel.tanksStart[i].netState();
       }
       duel.cars = duel.carsStart;
       for (Ragdoll& body : bodies) body = Ragdoll{};
@@ -980,6 +988,11 @@ struct Game {
       duel.placePlayers();
       duel.updateFrames();
       for (CarShown& c : shown) c = CarShown{};
+      if (shapes.ready) {
+        toldTanks = shapes.restTanks;
+        toldCars = shapes.restCars;
+      }
+      bundled.clear();
       me = duel.players[mySlot].soldier;
       walkTrue = me;
       walkOffset = V3{};
@@ -1164,7 +1177,13 @@ struct Game {
         }
       }
       for (;;) {
-        if (replaying) {
+        const bool inBundle = !bundled.empty();
+        if (inBundle) {
+          n = int(std::min(bundled.front().size(), sizeof buf));
+          memcpy(buf, bundled.front().data(), size_t(n));
+          bundled.pop_front();
+          from = server;
+        } else if (replaying) {
           if (replayAt >= lastTape.size() || lastTape[replayAt].at > replayNow) break;
           const std::vector<u8>& b = lastTape[replayAt++].bytes;
           n = int(std::min(b.size(), sizeof buf));
@@ -1180,12 +1199,26 @@ struct Game {
           break;
         }
         if (!(from == server)) continue;
-        logPackets++;
-        logBytes += size_t(n);
-        lineBytes += size_t(n);
+        if (!inBundle) {
+          logPackets++;
+          logBytes += size_t(n);
+          lineBytes += size_t(n);
+        }
         net::Reader r(buf, size_t(n));
         u8 kind = 0;
         if (!r.header(kind)) continue;
+        if (kind == net::P_BUNDLE) {
+          for (;;) {
+            u16 length = 0;
+            r.get(length);
+            if (!r.ok() || length == 0 || length > net::kMaxPacket) break;
+            std::vector<u8> one(length);
+            for (u8& b : one) r.get(b);
+            if (!r.ok()) break;
+            bundled.push_back(std::move(one));
+          }
+          continue;
+        }
         if (kind == net::P_FULL) {
           u8 why = 0;
           r.get(why);
@@ -1244,22 +1277,46 @@ struct Game {
         if (kind == net::P_TANK) {
           u8 idx = 0;
           r.get(idx);
+          if (idx >= Duel::kTanks) continue;
+          if (!shapes.ready) {
+            shapes.build(duel);
+            toldTanks = shapes.restTanks;
+            toldCars = shapes.restCars;
+          }
           NetFrame f;
           f.tick = tick;
           f.cog = r.getV3();
-          net::readState(r, f.state);
-          u16 count = 0;
-          r.get(count);
-          // Comes back around every now and then whether anything has happened or not.
-          if (!r.ok() || idx >= Duel::kTanks || count != duel.tankNodes) continue;
-          f.offsets.resize(size_t(count) * 3);
-          for (i16& v : f.offsets) r.get(v);
+          net::VehiclePose pose;
+          pose.cog = f.cog;
+          for (i16& v : pose.q) r.get(v);
+          f.state = tankSaid[idx];
+          net::readState(r, f.state, f.cog);
+          pose.yaw = f.state.turretYaw;
+          pose.pitch = f.state.gunPitch;
+          pose.recoil = f.state.recoil;
           if (!r.ok()) continue;
           auto& q = frames[idx];
+          // Comes back around every now and then whether anything has happened or not.
           if (!q.empty() && q.back().tick >= tick) continue;
+          tankSaid[idx] = f.state;
+          i16* told = toldTanks.data() + shapes.tankAt(int(idx));
+          u16 count = 0;
+          r.get(count);
+          for (int i = 0; i < count; i++) {
+            u16 node = 0;
+            i16 l[3] = {};
+            r.get(node);
+            r.get(l[0]);
+            r.get(l[1]);
+            r.get(l[2]);
+            if (!r.ok() || node >= duel.tankNodes) break;
+            memcpy(told + size_t(node) * 3, l, sizeof l);
+          }
+          f.offsets.resize(size_t(duel.tankNodes) * 3);
+          shapes.tankOffsets(int(idx), pose, told, f.offsets.data());
           f.arrived = now;
           q.push_back(std::move(f));
-          while (q.size() > 16) q.pop_front();
+          while (q.size() > kFramesKept) q.pop_front();
           // Where this machine's clock stands against the server's, without the jitter of any one packet.
           const double seen = now - double(tick) / net::kStepRate;
           if (!replaying) {
@@ -1278,15 +1335,14 @@ struct Game {
           float pc = 0;
           r.get(ph);
           r.get(win);
-          r.get(wins[0]);
-          r.get(wins[1]);
           r.get(pc);
           r.get(mask);
           i8 vehicles[Duel::kMaxPlayers];
           u8 seats[Duel::kMaxPlayers] = {};
-          u8 readyMask = 0, wantedMask = 0;
+          u8 readyMask = 0, wantedMask = 0, toldMask = 0;
           r.get(readyMask);
           r.get(wantedMask);
+          r.get(toldMask);
           wantedNow = wantedMask;
           for (int i = 0; i < Duel::kMaxPlayers; i++) {
             vehicles[i] = -1;
@@ -1294,26 +1350,28 @@ struct Game {
             if (!(mask & (1 << i))) continue;
             r.get(vehicles[i]);
             r.get(seats[i]);
+          }
+          for (int i = 0; i < Duel::kMaxPlayers; i++) {
+            if (!(toldMask & (1 << i))) continue;
             Soldier& sd = shownSoldier[i];
             sd.p = r.getV3();
-            sd.v = r.getV3();
-            float yaw = 0, pitch = 0, hp = 0, stride = 0, prone = 0;
-            u8 weapon = 0;
+            sd.v = net::getCmV3(r);
+            i16 yaw = 0, pitch = 0, hp = 0;
+            float stride = 0;
+            u8 prone = 0, weapon = 0, flags = 0;
             r.get(yaw);
             r.get(pitch);
             r.get(hp);
             r.get(stride);
             r.get(prone);
             r.get(weapon);
-            sd.prone = prone;
+            r.get(flags);
+            sd.prone = prone / 255.0;
             weaponShown[i] = std::min<int>(weapon, WP_COUNT - 1);
-            blowShown[i] = r.getV3();
-            u8 wearing = 0;
-            r.get(wearing);
-            ghillieShown[i] = wearing != 0;
-            u8 flying = 0;
-            r.get(flying);
-            droneShown[i].live = flying != 0;
+            ghillieShown[i] = flags & 1;
+            if (flags & 4) blowShown[i] = net::getCmV3(r);
+            const bool flying = flags & 2;
+            droneShown[i].live = flying;
             if (flying) {
               droneShown[i].p = r.getV3();
               droneShown[i].v = r.getV3();
@@ -1322,9 +1380,9 @@ struct Game {
               droneShown[i].battery = battery;
               droneShown[i].heardAt = now;
             }
-            sd.yaw = yaw;
-            sd.pitch = pitch;
-            sd.hp = hp;
+            sd.yaw = yaw / 32767.0 * PI;
+            sd.pitch = pitch / 32767.0 * PI;
+            sd.hp = hp / 10.0;
             sd.stride = stride;
           }
           u32 ack = 0;
@@ -1332,65 +1390,8 @@ struct Game {
           u8 stepsSinceAck = 0, onGround = 1;
           r.get(stepsSinceAck);
           r.get(onGround);
-          for (int i = 0; i < IT_COUNT; i++) {
-            u8 count = 0;
-            r.get(count);
-            carrying[i] = count;
-          }
-          float rc = 0;
-          r.get(rc);
-          repairNow = rc;
-          {
-            i16 small = 0, sniper = 0, rpg = 0;
-            u8 has = 0;
-            r.get(small);
-            r.get(sniper);
-            r.get(rpg);
-            r.get(has);
-            duel.players[mySlot].smallAmmo = small;
-            duel.players[mySlot].sniperAmmo = sniper;
-            duel.players[mySlot].rpgAmmo = rpg;
-            for (int k = 0; k < WP_COUNT; k++) duel.players[mySlot].hasWeapon[k] = has & (1 << k);
-            r.get(duel.players[mySlot].hitsLanded);
-            r.get(duel.players[mySlot].hitsTaken);
-            duel.players[mySlot].hurtFrom = r.getV3();
-            duel.wind = r.getV3();
-            i16 shells = 0, missiles = 0, codes = 0;
-            r.get(shells);
-            r.get(missiles);
-            r.get(codes);
-            duel.players[mySlot].tankShells = shells;
-            duel.players[mySlot].tankMissiles = missiles;
-            duel.players[mySlot].strikeCodes = codes;
-            u8 dronesHeld = 0;
-            r.get(dronesHeld);
-            duel.players[mySlot].drones = dronesHeld;
-            u8 medkitsHeld = 0;
-            r.get(medkitsHeld);
-            duel.players[mySlot].medkits = medkitsHeld;
-            u8 serverLoad = 0, serverReal = 100;
-            u16 serverAwake = 0;
-            r.get(serverLoad);
-            r.get(serverReal);
-            r.get(serverAwake);
-            serverStats[0] = serverLoad / 100.0;
-            serverStats[1] = serverReal / 100.0;
-            serverStats[2] = serverAwake;
-            u8 tap = 0;
-            float tapClock = 0, fixWait = 0, fixAge = 0;
-            r.get(tap);
-            r.get(tapClock);
-            r.get(fixWait);
-            r.get(fixAge);
-            const V3 fix = r.getV3();
-            Duel::Player& self = duel.players[mySlot];
-            self.tapped = tap & 1;
-            self.hasFix = tap & 2;
-            self.tapClock = tapClock;
-            self.fixWait = fixWait;
-            self.fixAge = fixAge;
-            self.fix = fix;
-          }
+          r.get(duel.players[mySlot].hitsLanded);
+          r.get(duel.players[mySlot].hitsTaken);
           u32 first = 0;
           u8 count = 0;
           r.get(first);
@@ -1398,7 +1399,7 @@ struct Game {
           if (!r.ok()) continue;
           metaTick = tick;
           for (int i = 0; i < Duel::kMaxPlayers; i++) {
-            if (!(mask & (1 << i))) continue;
+            if (!(toldMask & (1 << i))) continue;
             soldierPast[i].push_back({tick, shownSoldier[i], vehicles[i]});
             while (soldierPast[i].size() > 96) soldierPast[i].pop_front();
           }
@@ -1524,52 +1525,134 @@ struct Game {
             name[net::kNameBytes - 1] = 0;
             if (r.ok()) names[i] = name;
           }
+        } else if (kind == net::P_SELF) {
+          r.get(wins[0]);
+          r.get(wins[1]);
+          for (int i = 0; i < IT_COUNT; i++) {
+            u8 count = 0;
+            r.get(count);
+            carrying[i] = count;
+          }
+          float rc = 0;
+          r.get(rc);
+          repairNow = rc;
+          i16 small = 0, sniper = 0, rpg = 0;
+          u8 has = 0;
+          r.get(small);
+          r.get(sniper);
+          r.get(rpg);
+          r.get(has);
+          duel.players[mySlot].smallAmmo = small;
+          duel.players[mySlot].sniperAmmo = sniper;
+          duel.players[mySlot].rpgAmmo = rpg;
+          for (int k = 0; k < WP_COUNT; k++) duel.players[mySlot].hasWeapon[k] = has & (1 << k);
+          duel.players[mySlot].hurtFrom = r.getV3();
+          duel.wind = r.getV3();
+          i16 shells = 0, missiles = 0, codes = 0;
+          r.get(shells);
+          r.get(missiles);
+          r.get(codes);
+          duel.players[mySlot].tankShells = shells;
+          duel.players[mySlot].tankMissiles = missiles;
+          duel.players[mySlot].strikeCodes = codes;
+          u8 dronesHeld = 0, medkitsHeld = 0;
+          r.get(dronesHeld);
+          duel.players[mySlot].drones = dronesHeld;
+          r.get(medkitsHeld);
+          duel.players[mySlot].medkits = medkitsHeld;
+          u8 serverLoad = 0, serverReal = 100;
+          u16 serverAwake = 0;
+          r.get(serverLoad);
+          r.get(serverReal);
+          r.get(serverAwake);
+          serverStats[0] = serverLoad / 100.0;
+          serverStats[1] = serverReal / 100.0;
+          serverStats[2] = serverAwake;
+          u8 tap = 0;
+          float tapClock = 0, fixWait = 0, fixAge = 0;
+          r.get(tap);
+          r.get(tapClock);
+          r.get(fixWait);
+          r.get(fixAge);
+          const V3 fix = r.getV3();
+          Duel::Player& self = duel.players[mySlot];
+          self.tapped = tap & 1;
+          self.hasFix = tap & 2;
+          self.tapClock = tapClock;
+          self.fixWait = fixWait;
+          self.fixAge = fixAge;
+          self.fix = fix;
         } else if (kind == net::P_CAR) {
           u8 k = 0;
           r.get(k);
-          CarFrame head;
-          head.tick = tick;
-          head.cog = r.getV3();
-          head.fwd = r.getV3();
-          head.left = r.getV3();
-          head.up = r.getV3();
-          i8 gear = 0;
-          u8 exploded = 0;
-          for (float* v : {&head.speed, &head.rpm, &head.throttle, &head.brake, &head.steer, &head.fuel, &head.coolant, &head.lat, &head.lon, &head.theta[0], &head.theta[1], &head.theta[2], &head.theta[3]}) r.get(*v);
+          if (k >= Duel::kCars) continue;
+          if (!shapes.ready) {
+            shapes.build(duel);
+            toldTanks = shapes.restTanks;
+            toldCars = shapes.restCars;
+          }
+          CarFrame f;
+          f.tick = tick;
+          f.cog = r.getV3();
+          net::VehiclePose pose;
+          pose.cog = f.cog;
+          for (i16& v : pose.q) r.get(v);
+          net::unpackAxes(pose.q, f.fwd, f.left, f.up);
+          i16 speed = 0, rpm = 0, wheelAngle = 0;
+          u8 gas = 0, brake = 0, flags = 0, slow = 0;
+          i8 steer = 0, lat = 0, lon = 0, gear = 0;
+          r.get(speed);
+          r.get(rpm);
+          r.get(gas);
+          r.get(brake);
+          r.get(steer);
+          r.get(lat);
+          r.get(lon);
+          for (float& th : f.theta) {
+            r.get(wheelAngle);
+            th = float(wheelAngle / 32767.0 * PI);
+          }
           r.get(gear);
-          r.get(exploded);
-          r.get(head.hurt);
-          r.get(head.flat);
-          head.gear = gear;
-          head.exploded = exploded != 0;
-          u32 at = 0;
-          u16 count = 0;
-          r.get(at);
-          r.get(count);
-          if (!r.ok() || k >= Duel::kCars) continue;
-          const u32 first = duel.carFirst[k];
-          const u32 total = (k + 1 < Duel::kCars ? duel.carFirst[k + 1] : duel.carsEnd) - first;
-          if (u64(at) + count > total) continue;
+          r.get(flags);
+          r.get(f.flat);
+          r.get(slow);
           CarShown& c = shown[k];
-          if (c.building.tick != tick || c.building.offsets.empty()) {
-            // A new tick begins. Should a piece of the last one have got lost, that one is simply never shown.
-            std::vector<i16> keep = std::move(c.building.offsets);
-            c.building = head;
-            c.building.offsets = std::move(keep);
-            c.building.offsets.resize(size_t(total) * 3);
-            c.got = 0;
+          if (slow) {
+            r.get(c.fuel);
+            r.get(c.coolant);
           }
-          for (size_t i = size_t(at) * 3; i < (size_t(at) + count) * 3; i++) r.get(c.building.offsets[i]);
           if (!r.ok()) continue;
-          c.got += count;
-          if (c.got >= total) {
-            if (c.frames.empty() || c.frames.back().tick < tick) {
-              c.building.arrived = now;
-              c.frames.push_back(c.building);
-            }
-            while (c.frames.size() > 16) c.frames.pop_front();
-            c.got = 0;
+          f.speed = speed / 100.0f;
+          f.rpm = rpm;
+          f.throttle = gas / 255.0f;
+          f.brake = brake / 255.0f;
+          f.steer = steer / 127.0f;
+          f.lat = lat / 3.0f;
+          f.lon = lon / 3.0f;
+          f.gear = gear;
+          f.exploded = flags & 1;
+          f.hurt = flags >> 1;
+          f.fuel = c.fuel;
+          f.coolant = c.coolant;
+          if (!c.frames.empty() && c.frames.back().tick >= tick) continue;
+          i16* told = toldCars.data() + shapes.carAt(int(k));
+          u16 count = 0;
+          r.get(count);
+          for (int i = 0; i < count; i++) {
+            u16 node = 0;
+            i16 l[3] = {};
+            r.get(node);
+            r.get(l[0]);
+            r.get(l[1]);
+            r.get(l[2]);
+            if (!r.ok() || node >= shapes.carCount(int(k))) break;
+            memcpy(told + size_t(node) * 3, l, sizeof l);
           }
+          f.offsets.resize(size_t(shapes.carCount(int(k))) * 3);
+          shapes.carOffsets(int(k), pose, told, f.offsets.data());
+          f.arrived = now;
+          c.frames.push_back(std::move(f));
+          while (c.frames.size() > kFramesKept) c.frames.pop_front();
         } else if (kind == net::P_SCENERY) {
           u8 count = 0;
           r.get(count);
@@ -1675,7 +1758,7 @@ struct Game {
           for (size_t k = 0; k < n3; k++) {
             const V3 oa{double(sa.offsets[k * 3]), double(sa.offsets[k * 3 + 1]), double(sa.offsets[k * 3 + 2])};
             const V3 ob{double(sb.offsets[k * 3]), double(sb.offsets[k * 3 + 1]), double(sb.offsets[k * 3 + 2])};
-            const V3 o = (oa + (ob - oa) * blend) * (1.0 / net::kNodeScale);
+            const V3 o = oa + (ob - oa) * blend;
             sim.pos[first + k] = cog + V3{o.x * cs - o.y * ss, o.x * ss + o.y * cs, o.z};
           }
           t.applyNetState(sim, last.state, dt);
@@ -1691,7 +1774,7 @@ struct Game {
         for (size_t k = 0; k < count; k++) {
           const V3 oa{double(fa.offsets[k * 3]), double(fa.offsets[k * 3 + 1]), double(fa.offsets[k * 3 + 2])};
           const V3 ob{double(fb.offsets[k * 3]), double(fb.offsets[k * 3 + 1]), double(fb.offsets[k * 3 + 2])};
-          sim.pos[first + k] = cog + (oa + (ob - oa) * a) * (1.0 / net::kNodeScale);
+          sim.pos[first + k] = cog + oa + (ob - oa) * a;
         }
         t.applyNetState(sim, fb.state, dt);
         if (aimingThis) aimOwnGun(t, side, in.c, dtShown);
@@ -1734,14 +1817,14 @@ struct Game {
           for (size_t i = 0; i < sb.offsets.size() / 3; i++) {
             const V3 oa{double(sa.offsets[i * 3]), double(sa.offsets[i * 3 + 1]), double(sa.offsets[i * 3 + 2])};
             const V3 ob{double(sb.offsets[i * 3]), double(sb.offsets[i * 3 + 1]), double(sb.offsets[i * 3 + 2])};
-            const V3 o = (oa + (ob - oa) * blend) * (1.0 / net::kNodeScale);
+            const V3 o = oa + (ob - oa) * blend;
             sim.pos[first + i] = cog + V3{o.x * c2 - o.y * s2, o.x * s2 + o.y * c2, o.z};
           }
         } else {
           for (size_t i = 0; i < count; i++) {
             const V3 oa{double(fa.offsets[i * 3]), double(fa.offsets[i * 3 + 1]), double(fa.offsets[i * 3 + 2])};
             const V3 ob{double(fb.offsets[i * 3]), double(fb.offsets[i * 3 + 1]), double(fb.offsets[i * 3 + 2])};
-            sim.pos[first + i] = cog + (oa + (ob - oa) * a) * (1.0 / net::kNodeScale);
+            sim.pos[first + i] = cog + oa + (ob - oa) * a;
           }
         }
         Vehicle& v = duel.cars[size_t(k)];

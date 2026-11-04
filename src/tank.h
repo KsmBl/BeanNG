@@ -126,7 +126,7 @@ class Tank {
   // A player's machine runs no physics. This is what it needs to show a tank and fill in the instruments.
   struct NetState {
     V3 vel, muzzle, gunDir, sight;
-    float turretYaw = 0, gunPitch = 0, reload = 0, reloadTime = 4, damage = 0, burnTime = 0;
+    float recoil = 0, turretYaw = 0, gunPitch = 0, reload = 0, reloadTime = 4, damage = 0, burnTime = 0;
     float trackPhase[2] = {}, trackOmega[2] = {};
     float engineOmega = 0, throttle = 0, brake = 0, steer = 0, speed = 0, latAcc = 0, lonAcc = 0, fuel = 0, load = 0;
     int gear = 1, ammo = -1;

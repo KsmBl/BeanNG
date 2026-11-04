@@ -13,6 +13,7 @@
 #include <vector>
 #include "duel.h"
 #include "duelnet.h"
+#include "shape.h"
 
 using namespace net;
 
@@ -170,6 +171,11 @@ struct Client {
   // Scenery that has moved, as far as this player has been told, and where the slow sweep has got to.
   std::vector<float> told;
   u32 sweep = 0;
+  // The same for the nodes of the vehicles, against the part they belong to.
+  std::vector<i16> toldTanks, toldCars;
+  u32 scanTank[Duel::kTanks] = {}, healTank[Duel::kTanks] = {}, scanCar[Duel::kCars] = {}, healCar[Duel::kCars] = {};
+  // What goes in one datagram together.
+  std::vector<u8> bundle;
 };
 
 }  // namespace
@@ -209,6 +215,8 @@ int main(int argc, char** argv) {
     return 1;
   }
   printf("%zu Knoten, %zu Balken.\n", duel->sim.pos.size(), duel->sim.beams.size());
+  auto* shapes = new VehicleShapes();
+  shapes->build(*duel);
   printf("Der Server wartet auf UDP-Port %d. /help zeigt die Befehle, TAB ergaenzt sie.\n", port);
   fflush(stdout);
   Shell shell;
@@ -282,6 +290,8 @@ int main(int argc, char** argv) {
           if (!clients[slot].name[0]) snprintf(clients[slot].name, kNameBytes, "Spieler %d", slot + 1);
           clients[slot].addr = from;
           clients[slot].token = u32(entropy());
+          clients[slot].toldTanks = shapes->restTanks;
+          clients[slot].toldCars = shapes->restCars;
           clients[slot].told.assign(duel->sim.pos.size() * 3, 0.f);
           for (size_t i = 0; i < duel->sim.pos.size(); i++) {
             clients[slot].told[i * 3] = float(duel->simStart.pos[i].x);
@@ -359,82 +369,129 @@ int main(int argc, char** argv) {
   std::vector<SimEvent> pending;
   u32 tracerCount = 0;
 
-  const auto sendTank = [&](const Addr& to, int i) {
+  // Everything for one player in as few datagrams as it fits: the line counts packets as well as bytes.
+  const auto flush = [&](Client& c) {
+    if (c.bundle.empty()) return;
+    sock.send(c.bundle.data(), c.bundle.size(), c.addr);
+    c.bundle.clear();
+  };
+  const auto post = [&](Client& c, const Writer& w) {
+    if (!c.bundle.empty() && c.bundle.size() + w.size() + 2 > size_t(kBundleBytes)) flush(c);
+    if (c.bundle.empty()) {
+      Writer head(P_BUNDLE);
+      c.bundle.assign(head.data(), head.data() + head.size());
+    }
+    const u16 length = u16(w.size());
+    const size_t at = c.bundle.size();
+    c.bundle.resize(at + 2 + w.size());
+    memcpy(c.bundle.data() + at, &length, 2);
+    memcpy(c.bundle.data() + at + 2, w.data(), w.size());
+  };
+
+  // What has moved against what this player was last told, and a few nodes in any case.
+  std::vector<u32> nodeList;
+  const auto writeNodes = [&](Writer& w, const i16* now, i16* told, u32 count, u32& scan, u32& heal) {
+    nodeList.clear();
+    for (u32 n = 0; n < count && nodeList.size() < size_t(kMaxNodesPerPacket); n++) {
+      const u32 k = (scan + n) % count;
+      if (std::abs(now[k * 3] - told[k * 3]) >= kNodeChange || std::abs(now[k * 3 + 1] - told[k * 3 + 1]) >= kNodeChange || std::abs(now[k * 3 + 2] - told[k * 3 + 2]) >= kNodeChange) nodeList.push_back(k);
+    }
+    // Whatever did not fit comes first next time.
+    if (nodeList.size() == size_t(kMaxNodesPerPacket)) scan = (nodeList.back() + 1) % count;
+    for (int n = 0; n < kNodeHeal; n++) {
+      nodeList.push_back(heal);
+      heal = (heal + 1) % count;
+    }
+    w.put(u16(nodeList.size()));
+    for (u32 k : nodeList) {
+      w.put(u16(k));
+      for (int a = 0; a < 3; a++) {
+        w.put(now[k * 3 + u32(a)]);
+        told[k * 3 + u32(a)] = now[k * 3 + u32(a)];
+      }
+    }
+  };
+
+  // Worked out once a tick, for however many players want it.
+  struct PoseNow {
+    u32 tick = 0xffffffffu;
+    VehiclePose pose;
+    std::vector<i16> locals;
+  };
+  PoseNow tankNow[Duel::kTanks], carNow[Duel::kCars];
+
+  const auto sendTank = [&](Client& c, int i) {
+    const Tank& t = duel->tanks[i];
+    PoseNow& pn = tankNow[i];
+    if (pn.tick != tick) {
+      pn.tick = tick;
+      pn.pose = VehicleShapes::tankPose(t);
+      pn.locals.resize(size_t(duel->tankNodes) * 3);
+      shapes->tankLocals(i, pn.pose, duel->sim.pos.data() + duel->tankFirst[i], pn.locals.data());
+    }
     Writer w(P_TANK);
     w.put(simStep);
     w.put(duel->matchId);
     w.put(u8(i));
-    const Tank& t = duel->tanks[i];
-    w.putV3(t.cog);
-    writeState(w, t.netState());
-    w.put(u16(duel->tankNodes));
-    for (u32 k = 0; k < duel->tankNodes; k++) {
-      const V3 d = duel->sim.pos[duel->tankFirst[i] + k] - t.cog;
-      w.put(packOffset(d.x));
-      w.put(packOffset(d.y));
-      w.put(packOffset(d.z));
-    }
-    sock.send(w.data(), w.size(), to);
+    w.putV3(pn.pose.cog);
+    for (i16 v : pn.pose.q) w.put(v);
+    writeState(w, t.netState(), pn.pose.cog, (tick + u32(i)) % kSlowEvery == 0);
+    writeNodes(w, pn.locals.data(), c.toldTanks.data() + shapes->tankAt(i), duel->tankNodes, c.scanTank[i], c.healTank[i]);
+    post(c, w);
   };
 
-  const auto sendCar = [&](const Addr& to, int k) {
-    const u32 first = duel->carFirst[k];
-    const u32 end = k + 1 < Duel::kCars ? duel->carFirst[k + 1] : duel->carsEnd;
+  const auto sendCar = [&](Client& c, int k) {
     const VehicleFrame& f = duel->frames[Duel::kTanks + k];
     const Vehicle& v = duel->cars[size_t(k)];
-    constexpr u32 kPerPacket = 160;
-    for (u32 at = first; at < end; at += kPerPacket) {
-      const u32 count = std::min(end - at, kPerPacket);
-      Writer w(P_CAR);
-      w.put(simStep);
-      w.put(duel->matchId);
-      w.put(u8(k));
-      w.putV3(f.cog);
-      w.putV3(f.fwd);
-      w.putV3(f.left);
-      w.putV3(f.up);
-      w.put(float(f.speed));
-      w.put(float(v.rpm()));
-      w.put(float(v.throttleAct));
-      w.put(float(v.brakeAct));
-      w.put(float(v.steerAct));
+    const u32 count = shapes->carCount(k);
+    PoseNow& pn = carNow[k];
+    if (pn.tick != tick) {
+      pn.tick = tick;
+      pn.pose.cog = f.cog;
+      packAxes(f.fwd, f.left, f.up, pn.pose.q);
+      pn.locals.resize(size_t(count) * 3);
+      shapes->carLocals(k, pn.pose, duel->sim.pos.data() + duel->carFirst[k], pn.locals.data());
+    }
+    Writer w(P_CAR);
+    w.put(simStep);
+    w.put(duel->matchId);
+    w.put(u8(k));
+    w.putV3(pn.pose.cog);
+    for (i16 q : pn.pose.q) w.put(q);
+    w.put(packCm(f.speed));
+    w.put(i16(std::clamp(std::lround(v.rpm()), -32767L, 32767L)));
+    w.put(packShare(v.throttleAct));
+    w.put(packShare(v.brakeAct));
+    w.put(i8(std::clamp(std::lround(v.steerAct * 127.0), -127L, 127L)));
+    w.put(i8(std::clamp(std::lround(v.latAcc * 3.0), -127L, 127L)));
+    w.put(i8(std::clamp(std::lround(v.lonAcc * 3.0), -127L, 127L)));
+    for (size_t t = 0; t < 4; t++) w.put(packAngle(t < v.wheels.size() ? v.wheels[t].theta : 0.0));
+    w.put(i8(v.gear));
+    u8 flat = 0;
+    for (size_t t = 0; t < v.wheels.size() && t < 8; t++) flat |= u8(v.wheels[t].deflate > 0 ? 1 << t : 0);
+    w.put(u8((v.exploded ? 1 : 0) | (v.dmg.seized ? 2 : 0) | (v.dmg.oilLeak ? 4 : 0) | (v.dmg.radiator ? 8 : 0) | (v.dmg.tank ? 16 : 0) | (v.dmg.gearbox ? 32 : 0)));
+    w.put(flat);
+    const bool slow = (tick + u32(k)) % kSlowEvery == 0;
+    w.put(u8(slow ? 1 : 0));
+    if (slow) {
       w.put(float(v.fuelLitres));
       w.put(float(v.dmg.coolantTemp));
-      w.put(float(v.latAcc));
-      w.put(float(v.lonAcc));
-      for (size_t t = 0; t < 4; t++) w.put(float(t < v.wheels.size() ? v.wheels[t].theta : 0.0));
-      w.put(i8(v.gear));
-      w.put(u8(v.exploded ? 1 : 0));
-      w.put(u8((v.dmg.seized ? 1 : 0) | (v.dmg.oilLeak ? 2 : 0) | (v.dmg.radiator ? 4 : 0) | (v.dmg.tank ? 8 : 0) | (v.dmg.gearbox ? 16 : 0)));
-      {
-        u8 flat = 0;
-        for (size_t t = 0; t < v.wheels.size() && t < 8; t++) flat |= u8(v.wheels[t].deflate > 0 ? 1 << t : 0);
-        w.put(flat);
-      }
-      w.put(at - first);
-      w.put(u16(count));
-      for (u32 n = at; n < at + count; n++) {
-        const V3 d = duel->sim.pos[n] - f.cog;
-        w.put(packOffset(d.x));
-        w.put(packOffset(d.y));
-        w.put(packOffset(d.z));
-      }
-      sock.send(w.data(), w.size(), to);
     }
+    writeNodes(w, pn.locals.data(), c.toldCars.data() + shapes->carAt(k), count, c.scanCar[k], c.healCar[k]);
+    post(c, w);
   };
 
-  const auto sendMeta = [&](const Client& c, int slot) {
+  const auto sendMeta = [&](Client& c, int slot) {
     Writer w(P_META);
     w.put(simStep);
     w.put(duel->matchId);
     w.put(tick);
     w.put(u8(duel->phase));
     w.put(i8(duel->winner));
-    w.put(duel->wins[0]);
-    w.put(duel->wins[1]);
     w.put(float(duel->phaseClock));
+    u8 here = 0;
     {
-      u8 here = 0, ready = 0;
+      u8 ready = 0;
       for (int k = 0; k < Duel::kMaxPlayers; k++) {
         if (clients[k].used) here |= u8(1 << k);
         if (duel->players[k].ready) ready |= u8(1 << k);
@@ -443,23 +500,28 @@ int main(int argc, char** argv) {
       w.put(ready);
       w.put(u8(duel->playersWanted));
     }
+    const u8 told = here;
+    w.put(told);
     for (int k = 0; k < Duel::kMaxPlayers; k++) {
-      // Only who is here: with six that is still half a packet.
       if (!clients[k].used) continue;
+      w.put(i8(duel->players[k].vehicle));
+      w.put(u8(duel->players[k].seat));
+    }
+    for (int k = 0; k < Duel::kMaxPlayers; k++) {
+      if (!(told & (1 << k))) continue;
       const Duel::Player& pl = duel->players[k];
-      w.put(i8(pl.vehicle));
-      w.put(u8(pl.seat));
       w.putV3(pl.soldier.p);
-      w.putV3(pl.soldier.v);
-      w.put(float(pl.soldier.yaw));
-      w.put(float(pl.soldier.pitch));
-      w.put(float(pl.soldier.hp));
+      putCmV3(w, pl.soldier.v);
+      w.put(packAngle(pl.soldier.yaw));
+      w.put(packAngle(pl.soldier.pitch));
+      // Rounded up: only who has really nothing left counts as dead.
+      w.put(i16(std::clamp(std::ceil(pl.soldier.hp * 10.0), -32000.0, 32000.0)));
       w.put(float(pl.soldier.stride));
-      w.put(float(pl.soldier.prone));
+      w.put(packShare(pl.soldier.prone));
       w.put(u8(pl.weapon));
-      w.putV3(pl.lastBlow);
-      w.put(u8(pl.items[IT_GHILLIE] > 0 ? 1 : 0));
-      w.put(u8(pl.droneLive ? 1 : 0));
+      const bool dead = pl.soldier.hp <= 0;
+      w.put(u8((pl.items[IT_GHILLIE] > 0 ? 1 : 0) | (pl.droneLive ? 2 : 0) | (dead ? 4 : 0)));
+      if (dead) putCmV3(w, pl.lastBlow);
       if (pl.droneLive) {
         w.putV3(pl.droneP);
         w.putV3(pl.droneV);
@@ -469,36 +531,8 @@ int main(int argc, char** argv) {
     w.put(duel->players[slot].lastInput);
     w.put(duel->players[slot].walkedSinceInput);
     w.put(u8(duel->players[slot].soldier.grounded ? 1 : 0));
-    // What this player carries, as it stands now.
-    for (int k = 0; k < IT_COUNT; k++) w.put(duel->players[slot].items[k]);
-    w.put(float(duel->players[slot].repairClock));
-    {
-      const Duel::Player& me = duel->players[slot];
-      w.put(i16(me.smallAmmo));
-      w.put(i16(me.sniperAmmo));
-      w.put(i16(me.rpgAmmo));
-      u8 has = 0;
-      for (int k = 0; k < WP_COUNT; k++) has |= u8(me.hasWeapon[k] ? 1 << k : 0);
-      w.put(has);
-      w.put(me.hitsLanded);
-      w.put(me.hitsTaken);
-      w.putV3(me.hurtFrom);
-      w.putV3(duel->wind);
-      w.put(i16(me.tankShells));
-      w.put(i16(me.tankMissiles));
-      w.put(i16(me.strikeCodes));
-      w.put(u8(me.drones));
-      w.put(u8(me.medkits));
-      // How the server is doing: the player's own machine has no physics to tell by.
-      w.put(u8(std::min(statLoad * 100.0, 255.0)));
-      w.put(u8(std::min(statReal * 100.0, 255.0)));
-      w.put(u16(duel->sim.active.size()));
-      w.put(u8((me.tapped ? 1 : 0) | (me.hasFix ? 2 : 0)));
-      w.put(float(me.tapClock));
-      w.put(float(me.fixWait));
-      w.put(float(me.fixAge));
-      w.putV3(me.fix);
-    }
+    w.put(duel->players[slot].hitsLanded);
+    w.put(duel->players[slot].hitsTaken);
     // Blasts stay in the packet until the player says they have gone off there.
     const auto& log = duel->sim.blastLog;
     const u32 ack = c.in.ackMatch == duel->matchId ? c.in.ackBlasts : 0;
@@ -535,7 +569,42 @@ int main(int argc, char** argv) {
       w.put(events[i].strength);
       w.put(u8(events[i].kind));
     }
-    sock.send(w.data(), w.size(), c.addr);
+    post(c, w);
+  };
+
+  // What this player has and how things stand: it need not come with every tick.
+  const auto sendSelf = [&](Client& c, int slot) {
+    Writer w(P_SELF);
+    w.put(simStep);
+    w.put(duel->matchId);
+    w.put(duel->wins[0]);
+    w.put(duel->wins[1]);
+    const Duel::Player& me = duel->players[slot];
+    for (int k = 0; k < IT_COUNT; k++) w.put(me.items[k]);
+    w.put(float(me.repairClock));
+    w.put(i16(me.smallAmmo));
+    w.put(i16(me.sniperAmmo));
+    w.put(i16(me.rpgAmmo));
+    u8 has = 0;
+    for (int k = 0; k < WP_COUNT; k++) has |= u8(me.hasWeapon[k] ? 1 << k : 0);
+    w.put(has);
+    w.putV3(me.hurtFrom);
+    w.putV3(duel->wind);
+    w.put(i16(me.tankShells));
+    w.put(i16(me.tankMissiles));
+    w.put(i16(me.strikeCodes));
+    w.put(u8(me.drones));
+    w.put(u8(me.medkits));
+    // How the server is doing: the player's own machine has no physics to tell by.
+    w.put(u8(std::min(statLoad * 100.0, 255.0)));
+    w.put(u8(std::min(statReal * 100.0, 255.0)));
+    w.put(u16(duel->sim.active.size()));
+    w.put(u8((me.tapped ? 1 : 0) | (me.hasFix ? 2 : 0)));
+    w.put(float(me.tapClock));
+    w.put(float(me.fixWait));
+    w.put(float(me.fixAge));
+    w.putV3(me.fix);
+    post(c, w);
   };
 
   const auto sendScenery = [&](Client& c) {
@@ -576,7 +645,7 @@ int main(int argc, char** argv) {
         c.told[k * 3 + 1] = float(s.pos[k].y);
         c.told[k * 3 + 2] = float(s.pos[k].z);
       }
-      sock.send(w.data(), w.size(), c.addr);
+      post(c, w);
     }
   };
 
@@ -782,6 +851,8 @@ int main(int argc, char** argv) {
       pending.clear();
       for (Client& c : clients)
         if (c.used) {
+          c.toldTanks = shapes->restTanks;
+          c.toldCars = shapes->restCars;
           for (size_t i = 0; i < duel->sim.pos.size(); i++) {
             c.told[i * 3] = float(duel->simStart.pos[i].x);
             c.told[i * 3 + 1] = float(duel->simStart.pos[i].y);
@@ -813,7 +884,8 @@ int main(int argc, char** argv) {
         Client& c = clients[i];
         if (!c.used) continue;
         sendMeta(c, i);
-        if (tick % 6 == 0 && (!chat.empty() || c.chatSeq)) {
+        if (tick % kSlowEvery == 0) sendSelf(c, i);
+        if (tick % u32(kSendRate / 5.0) == 0 && (!chat.empty() || c.chatSeq)) {
           // The last few lines, again and again: whatever one missed comes round in the next one.
           Writer w(P_CHATLOG);
           w.put(simStep);
@@ -828,27 +900,28 @@ int main(int argc, char** argv) {
             w.put(u8(chat[k].text.size()));
             for (char ch : chat[k].text) w.put(ch);
           }
-          sock.send(w.data(), w.size(), c.addr);
+          post(c, w);
         }
-        if (tick % 15 == 0) {
+        if (tick % u32(kSendRate / 2.0) == 0) {
           Writer w(P_NAMES);
           w.put(simStep);
           w.put(duel->matchId);
           for (const Client& who : clients)
             for (int k = 0; k < kNameBytes; k++) w.put(who.used ? who.name[k] : char(0));
-          sock.send(w.data(), w.size(), c.addr);
+          post(c, w);
         }
         // The tanks in play every time, and now and then the others, should a packet have gone astray.
         for (int k = 0; k < Duel::kTanks; k++) {
           const Tank& t = duel->tanks[k];
-          if (duel->occupied(k) || duel->sim.objs[t.hullObj].awake || duel->sim.objs[t.turretObj].awake || int(tick % u32(Duel::kTanks)) == k) sendTank(c.addr, k);
+          if (duel->occupied(k) || duel->sim.objs[t.hullObj].awake || duel->sim.objs[t.turretObj].awake || tick % u32(kSendRate) == u32(k) * u32(kSendRate) / u32(Duel::kTanks)) sendTank(c, k);
         }
-        // Cars, in as many pieces as it takes, while they move and now and then otherwise.
+        // Cars while they move and now and then otherwise.
         for (int k = 0; k < Duel::kCars; k++) {
           const Vehicle& v = duel->cars[size_t(k)];
-          if (duel->sim.objs[v.obj].awake || int((tick + 7) % 60) == k) sendCar(c.addr, k);
+          if (duel->sim.objs[v.obj].awake || (tick + 7) % u32(2.0 * kSendRate) == u32(k)) sendCar(c, k);
         }
-        sendScenery(c);
+        if (tick % u32(kSendRate / 30.0) == 0) sendScenery(c);
+        flush(c);
       }
     }
     if (playLog) {
@@ -886,6 +959,7 @@ int main(int argc, char** argv) {
   }
   shell.stop();
   printf("Server beendet\n");
+  delete shapes;
   delete duel;
   return 0;
 }
