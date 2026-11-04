@@ -982,7 +982,7 @@ void Duel::fireWeapon(int p, const Intent& in) {
   b.kind = w;
   b.lag = in.lag;
   bullets.push_back(b);
-  sim.event(EV_MUZZLE, b.p, dir, w == WP_RPG ? 0.5f : (w == WP_SNIPER ? 1.0f : (w == WP_AR ? 0.14f : 0.1f)));
+  sim.event(EV_MUZZLE, b.p, dir, muzzleSize(w));
   if (w == WP_SNIPER) {
     // The blast from the muzzle brake raises the dust around it.
     for (int k = 0; k < 6; k++) sim.event(EV_DUST, eye + dir * 1.0 + V3{chance() * 1.2, chance() * 1.2, -0.3}, V3{chance() * 3.0, chance() * 3.0, 1.0}, 1.f);

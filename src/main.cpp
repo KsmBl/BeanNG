@@ -840,6 +840,10 @@ struct Game {
       while (place != queue.begin() && std::prev(place)->at > when) --place;
       queue.insert(place, Held{when, std::vector<u8>(bytes, bytes + size), from});
     };
+    // One's own shot goes off at once, flash and bang, as long as the server can be expected to agree. What it says
+    // has happened still counts for everything else; its report of the same shot is then not shown a second time.
+    int shotsAhead = 0;
+    double shotsAheadUntil = 0, ownGunReady = 0;
     // What the line is like, for the display: counted over the last second.
     int lineGot = 0, lineLost = 0;
     u32 lineSeq = 0;
@@ -1030,6 +1034,33 @@ struct Game {
         for (char ch : saying) w.put(ch);
         sock->send(w.data(), w.size(), server);
       }
+      if (state == NET_IN && phaseNow == Duel::PLAYING && !droneShown[mySlot].live) {
+        if (vehicleNow >= 0 && vehicleNow < Duel::kTanks) {
+          const Tank& t = duel.tanks[vehicleNow];
+          bool otherGunner = false;
+          for (int k = 0; k < Duel::kMaxPlayers; k++) otherGunner |= k != mySlot && duel.players[k].present && duel.players[k].vehicle == vehicleNow && duel.players[k].seat == 1;
+          if (in.c.fire && !otherGunner && now >= ownGunReady && !t.destroyed && !t.missileLive && t.reload <= 0 && t.ammo != 0 && t.mod[TM_GUN] > 0) {
+            ownGunReady = now + std::max(t.reloadTime * 0.5, 0.3);
+            sim.event(EV_MUZZLE, t.muzzle, t.gunDir, 1.f);
+            shotsAhead++;
+            shotsAheadUntil = now + 1.0;
+          }
+        } else if (vehicleNow < 0 && shownSoldier[mySlot].hp > 0) {
+          const int w = in.weapon;
+          const Duel::Player& pl = duel.players[mySlot];
+          const int ammoLeft = w == WP_SNIPER ? pl.sniperAmmo : (w == WP_RPG ? pl.rpgAmmo : pl.smallAmmo);
+          const bool pulled = in.c.fire || (in.fireHeld && kWeapons[w].automatic);
+          if (w != WP_KNIFE && pulled && pl.hasWeapon[w] && now >= ownGunReady && ammoLeft > 0 && !(w == WP_SNIPER && me.prone < 0.99)) {
+            ownGunReady = now + kWeapons[w].interval;
+            const V3 eye = Duel::eyeOf(me);
+            const V3 dir = norm(in.c.aimPoint - eye);
+            sim.event(EV_MUZZLE, eye + dir * 0.7, dir, muzzleSize(w));
+            shotsAhead++;
+            shotsAheadUntil = now + 1.0;
+          }
+        }
+      }
+      if (now > shotsAheadUntil) shotsAhead = 0;
       if (in.c.fire) out.fireCount++;
       if (in.c.launch) out.launchCount++;
       if (in.c.repair) out.repairCount++;
@@ -1372,6 +1403,14 @@ struct Game {
             r.get(strength);
             r.get(evKind);
             if (!r.ok() || evKind > EV_SMOKE) break;
+            if (evKind == EV_MUZZLE && shotsAhead > 0 && !replaying) {
+              const V3 mine = vehicleNow >= 0 ? duel.frames[vehicleNow].cog : me.p;
+              if (len(p - mine) < 15.0) {
+                shotsAhead--;
+                if (gPlayLog) fprintf(gPlayLog, "t %.1f eigener Schuss bestaetigt nach %.0f ms\n", now, (now - (shotsAheadUntil - 1.0)) * 1000.0);
+                continue;
+              }
+            }
             Later ev;
             ev.tick = tick;
             ev.kind = evKind;

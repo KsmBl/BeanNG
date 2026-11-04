@@ -71,6 +71,9 @@ inline constexpr WeaponInfo kWeapons[WP_COUNT] = {
     {"Raketenwerfer", 4.0, false, 130, 0, 0.012},  // loose at long range: it wanders as it flies
 };
 
+// How big a shot looks and sounds.
+inline float muzzleSize(int weapon) { return weapon == WP_RPG ? 0.5f : (weapon == WP_SNIPER ? 1.0f : (weapon == WP_AR ? 0.14f : 0.1f)); }
+
 class Duel {
  public:
   static constexpr double kDt = 1.0 / 2000.0;
