@@ -1577,9 +1577,12 @@ struct Game {
           // One's own tank is not shown late but early: where it will be by the time one's latest input has arrived.
           // That is what makes it answer at once instead of after the ping.
           const NetFrame& last = q.back();
-          const NetFrame& before = q[q.size() - 2];
+          // Two frames in a row say more about the suspension than about where the thing is going.
+          size_t older = q.size() - 2;
+          while (older > 0 && double(last.tick) - double(q[older].tick) < 0.08 * net::kStepRate) older--;
+          const NetFrame& before = q[older];
           const double ticks = std::max(1.0, double(last.tick) - double(before.tick));
-          const V3 vel = (last.cog - before.cog) * (net::kStepRate / ticks);
+          const V3 vel = last.state.vel;
           const auto heading = [&](const NetFrame& fr) {
             const auto node = [&](u32 id) {
               const size_t k = size_t(id - first);
@@ -1592,8 +1595,9 @@ struct Game {
           const double seen = std::remainder(h1 - heading(before), 2.0 * PI) * (net::kStepRate / ticks);
           const double absV = len(vel);
           const double want = double(in.c.steer) * (absV < 5.0 ? 1.1 : clampd(7.5 / absV, 0.32, 1.1));
-          // Measured on this machine's own clock from when the frame came in, so nothing can pile up over a long game.
-          const double age = clampd(now - last.arrived, 0.0, 0.1);
+          // How old the frame is against the server's steady clock, not when this one happened to come in: a packet held
+          // up on the way must not move the tank, and the whole world around the camera with it.
+          const double age = clampd(now - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
           const double turn = ownTurnFor(side, seen, want, age, dt);
           const double c = std::cos(turn), sn = std::sin(turn);
           const V3 cog = last.cog + vel * (age + ownLookAhead());
@@ -1637,12 +1641,14 @@ struct Game {
         if (vehicleNow == Duel::kTanks + k && q.size() >= 2 && !replaying) {
           // One's own car, like one's own tank: shown ahead, not behind.
           const CarFrame& last = q.back();
-          const CarFrame& before = q[q.size() - 2];
+          size_t older = q.size() - 2;
+          while (older > 0 && double(last.tick) - double(q[older].tick) < 0.08 * net::kStepRate) older--;
+          const CarFrame& before = q[older];
           const double ticks = std::max(1.0, double(last.tick) - double(before.tick));
           const V3 vel = (last.cog - before.cog) * (net::kStepRate / ticks);
           const double seen = std::remainder(std::atan2(last.fwd.y, last.fwd.x) - std::atan2(before.fwd.y, before.fwd.x), 2.0 * PI) * (net::kStepRate / ticks);
           const double want = double(in.c.steer) * 0.45 * last.speed / 2.7;  // the bicycle model, with the lock it has
-          const double age = clampd(now - last.arrived, 0.0, 0.1);
+          const double age = clampd(now - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);
           cog = last.cog + vel * (age + ownLookAhead());
           ownTurn = ownTurnFor(Duel::kTanks + k, seen, want, age, dt);
           const double c2 = std::cos(ownTurn), s2 = std::sin(ownTurn);
