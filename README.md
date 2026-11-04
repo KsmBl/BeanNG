@@ -65,6 +65,10 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Mehr Spieler:** `beanng-server --players 4` oder `6` macht daraus 2v2 oder 3v3, ein Team pro Basis. Im Panzer gibt es zwei Plätze: Wer zuerst einsteigt, fährt, der zweite ist Richtschütze und führt Turm und Kanone. Eine Seite verliert, wenn von ihr niemand mehr lebt.
 
+**Vegetation:** Wiesen aus Gras in drei Höhen und Büsche, die im Wind wogen. Was darüberfährt, drückt sie platt, eine Explosion brennt sie weg. Beides sind Instanzen mit je einem Drawcall, das Gras wird nur um die Kamera herum erzeugt und dünnt mit der Entfernung weich aus. Die **Grasdichte** lässt sich in den Spiel-Einstellungen wählen.
+
+![Die Wiese, mit der Spur eines Panzers](docs/screenshots/wiese.jpg)
+
 **Wenn es ruckelt:** Die Leistungsanzeige oben rechts zeigt im Spiel die Werte des Servers: Physiklast, Echtzeit und wache Objekte. Sinkt die Echtzeit unter 100 %, kommt der Server nicht hinterher. `--log` schreibt bei Client und Server einmal pro Sekunde alles Wichtige nach `/tmp/beanng-*.log`.
 
 **Replay:** Nach dem Verlassen eines Matches zeigt das Hauptmenü **Letztes Match ansehen**, aus der Sicht jedes Spielers oder frei fliegend.
@@ -114,6 +118,7 @@ In den Spiel-Einstellungen lassen sich die Empfindlichkeit des Sticks und die Vi
 - `src/sim.*`: Node-Beam-Solver mit 2 kHz, elastoplastische Beams, Kollisionen, Schlafzustand
 - `src/tank.*`: Panzer, Türme, Module und Schwachstellen; `src/vehicle.*` mit `xantia`, `one1`, `hummer`: die Autos
 - `src/props.*`: Häuser, Bäume und anderes Zerstörbare; `src/world.*`: Karte, Gelände, Straßen, Fluss, Mauern
+- `src/vegetation.*`: Gras und Büsche, instanziert, mit einer Karte für das, was platt gefahren oder verbrannt ist
 - `src/carmesh.*`: bindet die Modelle an die Physik-Nodes; `tools/gen_*.py` erzeugt sie (`./run.sh` macht das von selbst)
 - `src/tests.cpp`: Prüfstand ohne Grafik, auf der alten Teststrecke
 

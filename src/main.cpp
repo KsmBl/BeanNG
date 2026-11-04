@@ -31,6 +31,7 @@ struct GameSettings {
   bool fullscreen = false, vsync = true, farShadows = true;
   double volume = 0.8, fov = 0, mouse = 1;
   double padSens = 1;
+  double grass = 1;
   bool rumble = true;
 };
 static GameSettings gSet;
@@ -62,6 +63,7 @@ static void loadSettings() {
     else if (k == "mouse") gSet.mouse = clampd(v, 0.2, 3);
     else if (k == "pad_sensitivity") gSet.padSens = clampd(v, 0.3, 2.5);
     else if (k == "rumble") gSet.rumble = v != 0;
+    else if (k == "grass") gSet.grass = clampd(v, 0, 1);
   }
   fclose(f);
 }
@@ -71,7 +73,7 @@ static void saveSettings() {
   if (!f) return;
   fprintf(f, "motion_blur %d\ncamera_shake %d\ndamage_view %d\nstats %d\nmuted %d\nfullscreen %d\nvsync %d\nfar_shadows %d\nvolume %.2f\nfov %.0f\nmouse %.2f\n",
           gSet.motionBlur, gSet.shake, gSet.damageView, gSet.stats, gSet.muted, gSet.fullscreen, gSet.vsync, gSet.farShadows, gSet.volume, gSet.fov, gSet.mouse);
-  fprintf(f, "pad_sensitivity %g\nrumble %d\n", gSet.padSens, gSet.rumble);
+  fprintf(f, "pad_sensitivity %g\nrumble %d\ngrass %g\n", gSet.padSens, gSet.rumble, gSet.grass);
   fclose(f);
 }
 
@@ -619,6 +621,13 @@ struct Game {
     const Tank& tank = duel.tanks[myVehicle >= 0 && myVehicle < Duel::kTanks ? myVehicle : Duel::tankIndex(slot, TK_STANDARD)];
     const VehicleFrame* frame = myVehicle >= 0 ? &duel.frames[myVehicle] : nullptr;
     // Tracks and tyres, for the marks they leave.
+    s.groundBoxes.clear();
+    for (int i = 0; i < Duel::kVehicles; i++) {
+      const VehicleFrame& f = duel.frames[i];
+      // Rolling, and on the ground: what flies over it leaves it standing.
+      if (std::fabs(f.speed) < 0.3 || f.cog.z - world.height(f.cog.x, f.cog.y) > (i < Duel::kTanks ? 3.0 : 1.8)) continue;
+      s.groundBoxes.push_back({f.cog, f.fwd, f.left, float(f.halfLength), float(f.halfWidth)});
+    }
     s.groundMarks.clear();
     for (int i = 0; i < Duel::kTanks; i++) {
       const VehicleFrame& f = duel.frames[i];
@@ -2301,6 +2310,7 @@ static void runGame() {
       toggle("Bewegungsunschärfe", gSet.motionBlur, [&] { gSet.motionBlur = !gSet.motionBlur; });
       toggle("Kamera-Wackeln", gSet.shake, [&] { gSet.shake = !gSet.shake; });
       toggle("Ferne Schatten", gSet.farShadows, [&] { gSet.farShadows = !gSet.farShadows; });
+      percent("Grasdichte", gSet.grass, 0.0, 1.0, 0.1);
       {
         char b[32];
         snprintf(b, sizeof b, "%+.0f°", gSet.fov);
@@ -3270,6 +3280,104 @@ static void runGame() {
       }
     }
 
+    if (scriptMode == 66 && netState == Game::NET_IN) {
+      // Out of the yard, through the meadow, and a look back at what the tank has left behind.
+      if (phase == Duel::CHOOSING) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      static double started = -1, nextSay = 0;
+      static V3 bush;
+      if (inMatch) {
+        panelKind = PANEL_NONE;
+        if (onFoot && started > 0) {
+          // Out of the tank: over to what it drove across, and then to a bush that nothing has touched.
+          static V3 other;
+          static int stage = 0;
+          static double arrived = 0;
+          if (stage == 0) {
+            other = bush;
+            stage = 1;
+          }
+          const V3 to{other.x - view.foot.p.x, other.y - view.foot.p.y, 0};
+          rig.yaw = std::atan2(-to.y, -to.x);
+          rig.pitch = 0.22;
+          const bool walking = stage == 1 || stage == 3;
+          gas = walking ? 1.0 : 0.0;
+          if (walking && len(to) < 5.5) {
+            stage++;
+            arrived = tNow;
+          }
+          if ((stage == 2 || stage == 4) && tNow - arrived > 0.8) {
+            wantShot = true;
+            if (stage == 2) other = renderer.nearestBush(view.foot.p, 14.0);
+            stage++;
+          }
+        } else if (onFoot) {
+          const V3 to = G.world.base(Duel::teamOf(slot)).slot(gPickTurret) - view.foot.p;
+          rig.yaw = std::atan2(-to.y, -to.x);
+          rig.pitch = 0.2;
+          gas = 1.0;
+          static double lastUse = 0;
+          if (len(V3{to.x, to.y, 0}) < 4.5 && tNow - lastUse > 1.0) {
+            sendC.use = true;
+            lastUse = tNow;
+          }
+        } else if (inTank) {
+          if (started < 0) started = tNow;
+          const double at = tNow - started;
+          // At a bush some way off: right over it, and a look back at what is left of it.
+          static bool haveBush = false;
+          if (!haveBush) {
+            bush = renderer.nearestBush(view.carCog + V3{std::cos(G.world.base(Duel::teamOf(slot)).facing), std::sin(G.world.base(Duel::teamOf(slot)).facing), 0} * 110.0, 25.0);
+            haveBush = true;
+            printf("Busch bei %.0f %.0f\n", bush.x, bush.y);
+          }
+          static double passedAt = -1;
+          const V3 toBush{bush.x - view.carCog.x, bush.y - view.carCog.y, 0};
+          const double err = std::remainder(std::atan2(toBush.y, toBush.x) - std::atan2(view.carFwd.y, view.carFwd.x), 2.0 * PI);
+          if (passedAt < 0 && len(toBush) < 2.0) passedAt = at;
+          // Whatever stands in the way, the look back still comes.
+          if (passedAt < 0 && at > 30.0) passedAt = at;
+          const bool driving = passedAt < 0 ? at < 40.0 : at < passedAt + 2.0;
+          steer = passedAt < 0 ? clampd(err * 2.0, -1.0, 1.0) : 0.0;
+          gas = driving ? 1.0 : 0.0;
+          brake = driving ? 0.0 : 1.0;
+          static bool closeShot = false;
+          static double sayAt = 0;
+          if (tNow > sayAt) {
+            printf("Fahrt zum Busch: noch %.0f m, %.0f km/h, t=%.1f\n", len(toBush), view.speedKmh, at);
+            sayAt = tNow + 4.0;
+          }
+          if (!closeShot && passedAt < 0 && len(toBush) < 14.0) {
+            closeShot = true;
+            wantShot = true;
+          }
+          const double along = std::atan2(view.carFwd.y, view.carFwd.x);
+          rig.yaw = passedAt < 0 ? along + PI : along;
+          rig.pitch = 0.3;
+          if (passedAt > 0 && at > passedAt + 5.0) {
+            static bool backShot = false;
+            if (!backShot) {
+              backShot = true;
+              wantShot = true;
+              printf("Zurueckgeschaut bei t=%.1f\n", at);
+            } else if (at > passedAt + 6.0) {
+              static bool left = false;
+              if (!left) sendC.use = true;
+              left = true;
+            }
+          }
+        }
+        if (tNow > nextSay) {
+          int grass, bushes, tris, statics;
+          double ms;
+          renderer.vegetationStats(grass, bushes, tris, statics, ms);
+          printf("Pflanzen: %.0f fps, Gras %d, Buesche %d, Dreiecke %d, statisch %d, Neuaufbau %.2f ms, %.0f km/h, Pos %.0f %.0f\n", hud.fps, grass, bushes, tris, statics, ms, view.speedKmh, view.carCog.x, view.carCog.y);
+          nextSay = tNow + 3.0;
+        }
+      }
+    }
     if (scriptMode == 65 && netState == Game::NET_IN) {
       // Turning on the spot, as with the mouse: how far the figure is off the camera, and pictures of it.
       if (phase == Duel::CHOOSING) {
@@ -3468,6 +3576,7 @@ static void runGame() {
       view.carResets = G.snap.carResets;
       view.tankTracks = G.snap.tankTracks;
       view.groundMarks = G.snap.groundMarks;
+      view.groundBoxes = G.snap.groundBoxes;
       view.selfInstance = G.snap.selfInstance;
       aimFrames = G.sightFrames;
       aimFoes = G.sightFoes;
@@ -3616,6 +3725,7 @@ static void runGame() {
     // Without its optics the gunner's sight shows nothing any closer.
     if (view.foot.noSight && rig.mode == CAM_HOOD) rig.mode = CAM_CHASE;
     hud.map.open = mapOpen && panelKind == 0;
+    hud.grassDensity = gSet.grass;
     hud.map.hasMark = hasMark;
     hud.map.padCursor = padActive;
     hud.map.cursor = mapCursor;

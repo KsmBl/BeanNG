@@ -9,6 +9,7 @@
 #include <random>
 #include <unordered_map>
 #include "props.h"
+#include "vegetation.h"
 
 namespace {
 struct Mat4 {
@@ -597,6 +598,7 @@ struct Renderer::Impl {
 
   // Scene targets: the frame is rendered with MSAA and a motion vector per pixel, then blurred.
   GLuint progPost = 0;
+  Vegetation vegetation;
   Mat4 camVP;
   GLuint detailTex = 0;
   void buildDetailTexture() {
@@ -1412,7 +1414,7 @@ struct Renderer::Impl {
             addQuad(v, c - ua + va, c + ua + va, c + ua - va, c - ua - va, b.r, b.g, b.b, 0);
         }
     }
-    // Tufts, bushes and stones, each its own shape.
+    // Stones, each its own shape.
     for (const World::Scrub& sc : world->scrub()) {
       u32 seed = sc.seed;
       const auto rnd = [&](float a, float c) {
@@ -1435,31 +1437,7 @@ struct Renderer::Impl {
           v.push_back(q);
         }
       };
-      if (sc.kind == 0) {
-        // Blades leaning all ways, in the colours the ground has.
-        const float dry = rnd(0.f, 1.f);
-        const float cr = .13f + dry * .13f, cg = .26f + dry * .05f, cb = .07f + dry * .04f;
-        for (int k = 0; k < 4; k++) {
-          const float a = rnd(0.f, 6.28f), wid = sc.size * .22f, lean = sc.size * rnd(.1f, .6f);
-          const V3 side{std::cos(a) * wid, std::sin(a) * wid, 0};
-          const V3 foot = at + V3{rnd(-.15f, .15f), rnd(-.15f, .15f), -0.05};
-          tri(foot - side, foot + side, foot + V3{std::sin(a) * lean, -std::cos(a) * lean, sc.size * rnd(.7f, 1.2f)}, cr, cg, cb, V3{0, 0, 1});
-        }
-      } else if (sc.kind == 1) {
-        // A bush: long narrow leaves standing up and leaning out from the middle, all lit from above like the ground.
-        const float dry = rnd(0.f, 1.f);
-        const int blades = 26 + int(sc.size * 26.f);
-        for (int k = 0; k < blades; k++) {
-          const float a = rnd(0.f, 6.28f), out = sc.size * rnd(.25f, .95f), tall = sc.size * rnd(.55f, 1.15f), wid = sc.size * rnd(.05f, .11f);
-          const V3 foot = at + V3{std::cos(a) * out * .35f, std::sin(a) * out * .35f, -0.05};
-          const V3 tip = at + V3{std::cos(a) * out, std::sin(a) * out, tall};
-          const float across = a + rnd(1.0f, 2.1f);
-          const V3 side{std::cos(across) * wid, std::sin(across) * wid, 0};
-          const float d = dry + rnd(-.25f, .25f);
-          const float cr = .10f + d * .13f, cg = .23f + d * .07f, cb = .06f + d * .04f;
-          tri(foot - side, foot + side, tip, cr, cg, cb, V3{0, 0, 1});
-        }
-      } else {
+      {
         // A stone: flat, and mostly in the ground. Only what shows of it.
         const float d = rnd(.22f, .38f);
         const float rad = sc.size;
@@ -3193,6 +3171,7 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   d->buildTerrain();
   d->buildOuter();
   d->buildStatic();
+  d->vegetation.init(world, [dp = d](int ix, int iy, float& r, float& g, float& b) { dp->terrainColor(ix, iy, r, g, b); });
   d->buildWheelParts();
   d->buildRod();
 
@@ -3269,11 +3248,22 @@ bool Renderer::init(const World& world, const Sim& sim, const CarRig& rig, CarMe
   return true;
 }
 
+V3 Renderer::nearestBush(V3 from, double beyond) const { return d->vegetation.nearestBush(from, beyond); }
+
+void Renderer::vegetationStats(int& grass, int& bushes, int& tris, int& statics, double& ms) const {
+  grass = d->vegetation.grassInstances();
+  bushes = d->vegetation.bushInstances();
+  tris = grass * Vegetation::kGrassTris + bushes * Vegetation::kBushTris;
+  statics = int(d->staticCount / 3);
+  ms = d->vegetation.lastRebuildMs();
+}
+
 void Renderer::clearSkidMarks() {
   d->markNext = d->markCount = 0;
   gMarkNext = gMarkCount = 0;
   for (auto& t : d->trail) t.valid = false;
   for (auto& t : d->groundTrail) t.valid = false;
+  d->vegetation.clearMarks();
 }
 
 void Renderer::resetDamage() {
@@ -3332,6 +3322,8 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   const Mat4 proj = perspective(cam.fovY, double(w) / double(h), kZNear, kZFar);
   const Mat4 vp = mul(proj, view);
   D.updateMotion(s, cam, proj, dt);
+  D.vegetation.setDensity(hud.grassDensity);
+  D.vegetation.update(s, cam.eye, norm(cam.target - cam.eye), dt);
   D.ensureTargets(w, h);
 
   // Shadow map: a tight box following the car, for sharp contact shadows where it matters.
@@ -3447,6 +3439,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glBindVertexArray(D.staticVao);
   glDrawArrays(GL_TRIANGLES, 0, D.staticCount);
   D.drawWheels(s, D.progWheelDepth, lightVP, lightVP);
+  D.vegetation.drawShadow(lightVP.m);
 
   glBindFramebuffer(GL_FRAMEBUFFER, D.shadowFarFbo);
   glViewport(0, 0, Impl::kShadowFar, Impl::kShadowFar);
@@ -3560,6 +3553,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   glUniform1f(glGetUniformLocation(D.progWheel, "uScorch"), float(s.scorch));
   D.drawWheels(s, D.progWheel, vp, lightVP);
 
+  D.vegetation.draw(vp.m, D.prevVP.m, lightVP.m, cam.eye, D.sun);
   // From here on nothing writes motion: glass and sparks take on the motion of what is behind them.
   D.useBuffers(1);
 

@@ -28,6 +28,6 @@ add_executable(beanng-server src/server.cpp)
 target_link_libraries(beanng-server PRIVATE core)
 
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
-  add_executable(beanng src/main.cpp src/render.cpp src/audio.cpp)
+  add_executable(beanng src/main.cpp src/render.cpp src/vegetation.cpp src/audio.cpp)
   target_link_libraries(beanng PRIVATE core PkgConfig::SDL3 PkgConfig::EPOXY)
 endif()

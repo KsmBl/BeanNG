@@ -52,6 +52,12 @@ struct Snapshot {
     float halfWidth;
   };
   std::vector<GroundMark> groundMarks;
+  // What presses down what grows under it: a moving vehicle's footprint.
+  struct GroundBox {
+    V3 at, fwd, left;
+    float halfL, halfW;
+  };
+  std::vector<GroundBox> groundBoxes;
   // Which of the parked instances is what the camera follows: it moves with it, the world does not.
   int selfInstance = -1;
   bool selfOnFoot = false;  // the camera hangs on one's own figure, which so stands still in the picture
@@ -211,6 +217,7 @@ struct HudOptions {
   bool vehicleHud = true;
   bool crosshair = false;
   bool damageView = true;
+  double grassDensity = 1;
   bool xray = false, debugBeams = false, mouseSteer = false, gamepad = false;
   bool motionBlur = true, stats = true, farShadows = true;
   std::string gamepadName, cameraName, gpuName;
@@ -223,6 +230,8 @@ class Renderer {
   bool init(const World& world, const Sim& sim, const CarRig& rig, CarMesh& mesh, V3 spawn);
   void resetDamage();
   void clearSkidMarks();
+  void vegetationStats(int& grass, int& bushes, int& tris, int& statics, double& ms) const;
+  V3 nearestBush(V3 from, double beyond) const;
   void draw(const Snapshot& s, const Camera& cam, const HudOptions& hud, int w, int h, double dt);
   // Returns the nearest node under a screen position, for the mouse grabber.
   int pickNode(const Snapshot& s, const Camera& cam, int w, int h, double mx, double my, double maxPx) const;

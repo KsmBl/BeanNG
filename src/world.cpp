@@ -964,26 +964,16 @@ void World::buildArena() {
     }
   }
 
-  // What grows and lies about between all that: tufts of grass, bushes, stones. Drawn only; a bush hides someone but
-  // stops nobody, and is no more than something to look at for a bullet.
-  for (int n = 0; n < 75000; n++) {
+  // What lies about between all that: stones. Drawn only. Grass and bushes are the renderer's own affair (vegetation.cpp).
+  for (int n = 0; n < 12000; n++) {
     const double x = rnd(-860, 860), y = rnd(-860, 860);
     if (nearBase(x, y, 50.0) || std::fabs(x - riverX(y)) < kRiverHalf + 2.0) continue;
-    const double r = rnd(0, 1);
     Scrub sc;
     sc.x = float(x);
     sc.y = float(y);
     sc.seed = u32(n) * 2654435761u + 13u;
-    if (r < 0.74) {
-      sc.kind = 0;
-      sc.size = float(rnd(0.3, 0.8));
-    } else if (r < 0.9) {
-      sc.kind = 2;
-      sc.size = float(rnd(0.05, 0.2));
-    } else {
-      sc.kind = 1;
-      sc.size = float(rnd(0.5, 1.3));
-    }
+    sc.kind = 2;
+    sc.size = float(rnd(0.05, 0.2));
     // Clumped: more where the land already has something growing.
     if (vnoise(x / 37.0 + 3.0, y / 37.0) < -0.15 && rnd(0, 1) < 0.75) continue;
     if (nearRoad(x, y, 1.0 + sc.size)) continue;
