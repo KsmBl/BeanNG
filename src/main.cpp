@@ -830,6 +830,7 @@ struct Game {
     };
     // What the line is like, for the display: counted over the last second.
     int lineGot = 0, lineLost = 0;
+    u32 lineSeq = 0;
     size_t lineBytes = 0;
     double lineNext = 0, lineLoss = 0, lineKb = 0;
     struct RocketSeen {
@@ -1137,14 +1138,17 @@ struct Game {
           q.push_back(std::move(f));
           while (q.size() > 16) q.pop_front();
           // Where this machine's clock stands against the server's, without the jitter of any one packet.
-          const double seen = now - double(tick) / net::kSendRate;
+          const double seen = now - double(tick) / net::kStepRate;
           if (!replaying) {
             timeOffset = haveOffset ? timeOffset + (seen - timeOffset) * 0.01 : seen;
             haveOffset = true;
           }
         } else if (kind == net::P_META) {
+          u32 metaSeq = 0;
+          r.get(metaSeq);
           if (tick <= metaTick) continue;
-          if (metaTick != 0 && !replaying) lineLost += int(std::min<u32>(tick - metaTick - 1, 1000));
+          if (lineSeq != 0 && !replaying && int32_t(metaSeq - lineSeq) > 0) lineLost += std::min(int(metaSeq - lineSeq) - 1, 1000);
+          lineSeq = metaSeq;
           lineGot++;
           u8 ph = 0, mask = 0;
           i8 win = 0;
@@ -1426,8 +1430,9 @@ struct Game {
       if (state == NET_IN && now - lastHeard > 5.0) disconnect("Verbindung zum Server verloren");
 
       // Every tank we have word of, at the moment a little in the past that lies between two frames.
-      const double viewTime = ((replaying ? replayNow : now) - timeOffset - kViewDelay) * net::kSendRate;
-      u32 viewTick = 0;
+      const double viewTime = ((replaying ? replayNow : now) - timeOffset - kViewDelay) * net::kStepRate;
+      // The moment on the screen, for the server to judge by.
+      const u32 viewTick = u32(std::max(viewTime, 0.0));
       for (int side = 0; side < Duel::kTanks; side++) {
         const auto& q = frames[side];
         if (q.empty()) continue;
@@ -1437,7 +1442,6 @@ struct Game {
         const NetFrame& fa = b > 0 ? q[b - 1] : fb;
         const double span = double(fb.tick) - double(fa.tick);
         const double a = span > 0 ? clampd((viewTime - double(fa.tick)) / span, 0, 1) : 1.0;
-        viewTick = std::max(viewTick, fa.tick);
         Tank& t = duel.tanks[side];
         const u32 first = duel.tankFirst[side];
         const size_t count = fb.offsets.size() / 3;
@@ -1447,7 +1451,7 @@ struct Game {
           const NetFrame& last = q.back();
           const NetFrame& before = q[q.size() - 2];
           const double ticks = std::max(1.0, double(last.tick) - double(before.tick));
-          const V3 vel = (last.cog - before.cog) * (net::kSendRate / ticks);
+          const V3 vel = (last.cog - before.cog) * (net::kStepRate / ticks);
           const auto heading = [&](const NetFrame& fr) {
             const auto node = [&](u32 id) {
               const size_t k = size_t(id - first);
@@ -1457,7 +1461,7 @@ struct Game {
             return std::atan2(d.y, d.x);
           };
           const double h1 = heading(last);
-          const double seen = std::remainder(h1 - heading(before), 2.0 * PI) * (net::kSendRate / ticks);
+          const double seen = std::remainder(h1 - heading(before), 2.0 * PI) * (net::kStepRate / ticks);
           const double absV = len(vel);
           const double want = double(in.c.steer) * (absV < 5.0 ? 1.1 : clampd(7.5 / absV, 0.32, 1.1));
           // Measured on this machine's own clock from when the frame came in, so nothing can pile up over a long game.
@@ -1498,7 +1502,6 @@ struct Game {
         const CarFrame& fa = b > 0 ? q[b - 1] : fb;
         const double span = double(fb.tick) - double(fa.tick);
         const double a = span > 0 ? clampd((viewTime - double(fa.tick)) / span, 0, 1) : 1.0;
-        viewTick = std::max(viewTick, fa.tick);
         V3 cog = fa.cog + (fb.cog - fa.cog) * a;
         const u32 first = duel.carFirst[k];
         const size_t count = fb.offsets.size() / 3;
@@ -1508,8 +1511,8 @@ struct Game {
           const CarFrame& last = q.back();
           const CarFrame& before = q[q.size() - 2];
           const double ticks = std::max(1.0, double(last.tick) - double(before.tick));
-          const V3 vel = (last.cog - before.cog) * (net::kSendRate / ticks);
-          const double seen = std::remainder(std::atan2(last.fwd.y, last.fwd.x) - std::atan2(before.fwd.y, before.fwd.x), 2.0 * PI) * (net::kSendRate / ticks);
+          const V3 vel = (last.cog - before.cog) * (net::kStepRate / ticks);
+          const double seen = std::remainder(std::atan2(last.fwd.y, last.fwd.x) - std::atan2(before.fwd.y, before.fwd.x), 2.0 * PI) * (net::kStepRate / ticks);
           const double want = double(in.c.steer) * 0.45 * last.speed / 2.7;  // the bicycle model, with the lock it has
           const double age = clampd(now - last.arrived, 0.0, 0.1);
           cog = last.cog + vel * (age + ownLookAhead());

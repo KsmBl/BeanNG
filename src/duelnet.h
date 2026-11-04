@@ -9,6 +9,8 @@
 namespace net {
 
 constexpr double kSendRate = 30.0;
+// Every packet says how many physics steps the server has made: the moment it shows, whatever the send loop was up to.
+constexpr double kStepRate = 2000.0;
 constexpr int kMaxEventsPerPacket = 18;
 constexpr int kMaxBlastsPerPacket = 12;
 constexpr int kMaxSceneryPerPacket = 70;

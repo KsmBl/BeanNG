@@ -351,7 +351,8 @@ int main(int argc, char** argv) {
     }
   };
 
-  u32 tick = 0;
+  u32 tick = 0;  // how many times everyone has been told
+  u32 simStep = 0;  // the moment that is on the packets
   u32 seenMatch = duel->matchId;
   double statLoad = 0, statReal = 1;
   std::vector<SimEvent> events;
@@ -360,7 +361,7 @@ int main(int argc, char** argv) {
 
   const auto sendTank = [&](const Addr& to, int i) {
     Writer w(P_TANK);
-    w.put(tick);
+    w.put(simStep);
     w.put(duel->matchId);
     w.put(u8(i));
     const Tank& t = duel->tanks[i];
@@ -385,7 +386,7 @@ int main(int argc, char** argv) {
     for (u32 at = first; at < end; at += kPerPacket) {
       const u32 count = std::min(end - at, kPerPacket);
       Writer w(P_CAR);
-      w.put(tick);
+      w.put(simStep);
       w.put(duel->matchId);
       w.put(u8(k));
       w.putV3(f.cog);
@@ -424,8 +425,9 @@ int main(int argc, char** argv) {
 
   const auto sendMeta = [&](const Client& c, int slot) {
     Writer w(P_META);
-    w.put(tick);
+    w.put(simStep);
     w.put(duel->matchId);
+    w.put(tick);
     w.put(u8(duel->phase));
     w.put(i8(duel->winner));
     w.put(duel->wins[0]);
@@ -561,7 +563,7 @@ int main(int argc, char** argv) {
     for (size_t at = 0; at < moved.size(); at += kMaxSceneryPerPacket) {
       const size_t count = std::min(moved.size() - at, size_t(kMaxSceneryPerPacket));
       Writer w(P_SCENERY);
-      w.put(tick);
+      w.put(simStep);
       w.put(duel->matchId);
       w.put(u8(count));
       for (size_t i = at; i < at + count; i++) {
@@ -739,7 +741,7 @@ int main(int argc, char** argv) {
         in[i].aiming = c.in.aiming;
         in[i].weapon = c.in.weapon;
         // How far behind this player's screen is: their picture is a tenth of a second late and half a ping old.
-        in[i].lag = std::clamp((double(tick) - double(c.in.viewTick)) / kSendRate, 0.0, 0.3);
+        in[i].lag = std::clamp((double(simStep) - double(c.in.viewTick)) / kStepRate, 0.0, 0.3);
         in[i].repair = c.repair;
         in[i].seq = c.in.seq;
         in[i].pitch = c.in.pitch;
@@ -752,6 +754,7 @@ int main(int argc, char** argv) {
       }
       for (int i = 0; i < Duel::kMaxPlayers; i++) duel->players[i].present = clients[i].used;
       duel->step(in);
+      simStep++;
       simTime += Duel::kDt;
       done++;
     }
@@ -811,7 +814,7 @@ int main(int argc, char** argv) {
         if (tick % 6 == 0 && (!chat.empty() || c.chatSeq)) {
           // The last few lines, again and again: whatever one missed comes round in the next one.
           Writer w(P_CHATLOG);
-          w.put(tick);
+          w.put(simStep);
           w.put(duel->matchId);
           w.put(c.chatSeq);
           const u32 total = u32(chat.size());
@@ -827,7 +830,7 @@ int main(int argc, char** argv) {
         }
         if (tick % 15 == 0) {
           Writer w(P_NAMES);
-          w.put(tick);
+          w.put(simStep);
           w.put(duel->matchId);
           for (const Client& who : clients)
             for (int k = 0; k < kNameBytes; k++) w.put(who.used ? who.name[k] : char(0));
