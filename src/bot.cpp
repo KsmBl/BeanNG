@@ -9,6 +9,8 @@ constexpr double kSightTank = 480.0, kSightFoot = 280.0, kSightHidden = 90.0;
 constexpr double kReaction = 0.9;     // from seeing someone to the first shot
 constexpr double kAimError = 0.0035;  // of the range, each shot its own
 constexpr double kHintEvery = 30.0, kHintError = 110.0;
+constexpr double kBaseAlarm = 450.0;  // this close to a yard, and those who are at home know of it
+constexpr double kAtComputer = 28.0;  // this close to the main computer, and only going in will do
 constexpr double kHoldRange = 320.0;   // a tank closer than this stands and shoots
 constexpr double kAmbushRange = 380.0;  // whoever lies in wait lets them come this close first
 constexpr double kTrackSight = 40.0;    // how far off a track in the grass can be made out
@@ -50,7 +52,7 @@ int treesAround(const World& w, V3 p, double reach) {
 }  // namespace
 
 const char* Bot::tacticName(Tactic t) {
-  static const char* const kNames[kTacticCount] = {"Sturm", "Flanke", "Hinterhalt", "Scharfschuetze", "Pluenderer", "Spion", "Lenkrakete", "Helikopter", "Kettenbuggy"};
+  static const char* const kNames[kTacticCount] = {"Sturm", "Flanke", "Hinterhalt", "Scharfschuetze", "Pluenderer", "Spion", "Lenkrakete", "Helikopter", "Kettenbuggy", "Verteidigung"};
   return t < kTacticCount ? kNames[t] : "?";
 }
 
@@ -117,7 +119,7 @@ void Bot::pickTactic(const Duel& d, int me) {
   (void)d;
   (void)me;
   lastTactic_ = picked_ ? tactic_ : lastTactic_;
-  static constexpr double kWeight[kTacticCount] = {3.0, 3.0, 3.0, 2.0, 2.0, 1.5, 2.0, 2.5, 2.5};
+  static constexpr double kWeight[kTacticCount] = {3.0, 3.0, 3.0, 2.0, 2.0, 1.5, 2.0, 2.5, 2.5, 1.5};
   // Never the same way twice running: whoever was caught out by it last time is ready for it now.
   double total = 0;
   for (int t = 0; t < kTacticCount; t++)
@@ -143,6 +145,8 @@ void Bot::pickTactic(const Duel& d, int me) {
   if (tactic_ == SNIPER) tacticLimit_ = chance(170.0, 280.0);
   if (tactic_ == SCAVENGE) tacticLimit_ = chance(90.0, 150.0);
   if (tactic_ == SPY) tacticLimit_ = 240.0;
+  if (tactic_ == DEFEND) tacticLimit_ = chance(150.0, 260.0);  // if nobody has come by then, they are not coming
+  defendCalled_ = false;
   cratesWanted_ = tactic_ == SCAVENGE ? int(chance(3.0, 5.99)) : 0;
   flankSide_ = chance(0, 1) < 0.5 ? -1 : 1;
 }
@@ -153,7 +157,7 @@ void Bot::chooseLoadout(Duel& d, int me) {
     case AMBUSH:  // to sit under, and to get away from it with
       items[IT_REPAIR] = 1, items[IT_NET] = 1, items[IT_AR] = 1, items[IT_SMALL_AMMO] = 3, items[IT_SMOKE] = 2;
       break;
-    case SNIPER:  // the rifle itself has to be found
+    case SNIPER:  // the rifle and its rounds from the start, to lie out with under a suit
       items[IT_GHILLIE] = 1, items[IT_SNIPER] = 1, items[IT_SNIPER_AMMO] = 2, items[IT_AR] = 1, items[IT_SMALL_AMMO] = 4, items[IT_SMOKE] = 2;
       break;
     case SCAVENGE:  // travelling light: what it needs is out there
@@ -182,6 +186,9 @@ void Bot::think(Duel& d, int me) {
     fresh.picked_ = picked_;
     fresh.tacticLimit_ = tacticLimit_;
     fresh.stormInBuggy_ = stormInBuggy_;
+    fresh.defendCalled_ = defendCalled_;
+    fresh.beforeDefence_ = beforeDefence_;
+    fresh.limitBeforeDefence_ = limitBeforeDefence_;
     fresh.cratesWanted_ = cratesWanted_;
     fresh.flankSide_ = flankSide_;
     fresh.tracksFollowed_ = tracksFollowed_;
@@ -230,6 +237,7 @@ void Bot::think(Duel& d, int me) {
     hasPost_ = atPost_ = false;
     pathAge_ = 1e9;
   }
+  watchBase(d, me);
 
   if (pl.medkits > 0 && pl.soldier.hp < 55.0) pulse_.medkit = true;
 
@@ -315,6 +323,69 @@ void Bot::checkIdle(Duel& d, int me, V3 here) {
     wantVehicle_ = -1;
   }
   if (pl.vehicle >= 0 && pl.vehicle < Duel::kTanks && idleStrikes_ >= 2) bail(pl.vehicle);
+}
+
+// ---- The base.
+
+// Whoever gets this close to the yard is seen by the people there, and it gets around. The nearest of the team go back
+// for it, the more the more of them come, and return to their plan once it is over.
+void Bot::watchBase(const Duel& d, int me) {
+  const int team = Duel::teamOf(me);
+  const World::Base& ours = d.world.base(team);
+  const auto atBase = [&](int k) {
+    const Duel::Player& who = d.players[k];
+    return who.vehicle >= 0 ? d.frames[who.vehicle].cog : (who.heli >= 0 ? d.helis[who.heli].p : who.soldier.p);
+  };
+  int coming = 0;
+  double nearest = 1e18;
+  for (int e = 0; e < Duel::kMaxPlayers; e++) {
+    const Duel::Player& who = d.players[e];
+    if (!who.present || Duel::teamOf(e) == team || who.soldier.hp <= 0) continue;
+    const double away = len2(flat(atBase(e) - ours.centre));
+    if (away > kBaseAlarm * kBaseAlarm) continue;
+    coming++;
+    if (away < nearest) {
+      nearest = away;
+      threat_ = atBase(e);
+      threatOnFoot_ = who.vehicle < 0 && who.heli < 0;
+    }
+  }
+  threatAge_ = coming > 0 ? 0.0 : threatAge_ + kThinkEvery;
+  if (tactic_ == DEFEND && defendCalled_ && threatAge_ > 25.0) {
+    tactic_ = beforeDefence_;
+    tacticLimit_ = limitBeforeDefence_;
+    defendCalled_ = false;
+    hasPost_ = atPost_ = false;
+    pathAge_ = 1e9;
+    return;
+  }
+  if (coming == 0 || tactic_ == DEFEND || tactic_ == AIR || forced_ < kTacticCount) return;
+  // Those closest to home go first, up to half the team.
+  const double mine = len2(flat(atBase(me) - ours.centre));
+  int closer = 0, ofTeam = 0;
+  for (int k = 0; k < Duel::kMaxPlayers; k++) {
+    const Duel::Player& who = d.players[k];
+    if (!who.present || Duel::teamOf(k) != team || who.soldier.hp <= 0) continue;
+    ofTeam++;
+    if (k != me && len2(flat(atBase(k) - ours.centre)) < mine) closer++;
+  }
+  if (closer >= std::min(coming + 1, std::max((ofTeam + 1) / 2, 1))) return;
+  beforeDefence_ = tactic_;
+  limitBeforeDefence_ = tacticLimit_;
+  tactic_ = DEFEND;
+  defendCalled_ = true;
+  tacticLimit_ = 1e9;
+  crate_ = -1;
+  hasPost_ = atPost_ = false;
+  pathAge_ = 1e9;
+}
+
+// Between the command centre and where they would come from, and each to a place of its own along that line.
+V3 Bot::guardSpot(const Duel& d, int me) const {
+  const World::Base& ours = d.world.base(Duel::teamOf(me));
+  const V3 toThem = norm(flat(d.world.base(1 - Duel::teamOf(me)).centre - ours.centre));
+  const V3 across{-toThem.y, toThem.x, 0};
+  return ours.centre + toThem * 55.0 + across * (double((me / 2) % 5) - 2.0) * 16.0;
 }
 
 // ---- What it notices.
@@ -484,6 +555,7 @@ bool Bot::lookForTracks(const Duel& d, V3 eye) {
 }
 
 V3 Bot::goalFor(const Duel& d, int me, V3 at) {
+  if (tactic_ == DEFEND) return threatAge_ < 12.0 ? threat_ : guardSpot(d, me);
   if (lastSeenAge_ < 25.0) {
     // Been there, and nobody is: on with whatever else there is to go on.
     if (len2(flat(lastSeen_ - at)) > 30.0 * 30.0) return lastSeen_;
@@ -1002,6 +1074,25 @@ void Bot::onFoot(Duel& d, int me) {
     }
   }
   if (tactic_ == AIR && toHeli(d, me)) return;
+  // Someone at our computer: in after them, whatever one has to do it with.
+  if (tactic_ == DEFEND && threatAge_ < 6.0 && threatOnFoot_) {
+    const World::Base& ours = d.world.base(Duel::teamOf(me));
+    if (len2(flat(threat_ - ours.computer)) < kAtComputer * kAtComputer && len2(flat(ours.door - s.p)) < 90.0 * 90.0) {
+      doing_ = "verteidigt den Rechner";
+      const V3 out = norm(flat(ours.door - ours.computer));
+      const V3 side{-out.y, out.x, 0};
+      const double sideOf = dot(flat(s.p - ours.door), side) >= 0 ? 1.0 : -1.0;
+      const bool inside = dot(flat(s.p - ours.door), out) < -0.5;
+      const V3 steps[3] = {ours.door + side * (sideOf * 6.0) + out * 0.3, ours.door - out * 3.5, ours.computer + out * 1.2};
+      if (!inside && len2(flat(ours.door - s.p)) > 12.0 * 12.0) {
+        if (pathAge_ > 6.0) planTo(d, s.p, steps[0]);
+        walkTowards(d, me, nextPoint(s.p, 3.0), true);
+      } else {
+        walkTowards(d, me, inside ? steps[2] : (len2(flat(steps[0] - s.p)) > 1.6 * 1.6 && dot(flat(s.p - ours.door), out) > 2.0 ? steps[0] : steps[1]), false);
+      }
+      return;
+    }
+  }
   // The plans that are carried out on foot.
   if (tactic_ == SPY && !pl.tapped) {
     const World::Base& theirs = d.world.base(1 - Duel::teamOf(me));
@@ -1202,7 +1293,10 @@ void Bot::fightInTank(Duel& d, int me) {
       return;
     }
     // Lying in wait: nothing that gives it away until they are well inside.
-    const bool holdFire = tactic_ == AMBUSH && atPost_ && dist > kAmbushRange && shotsFromPost_ == 0;
+    // Nor a shell into one's own command centre, with one's own people going in after them.
+    const V3 ownComputer = d.world.base(Duel::teamOf(me)).computer;
+    const bool atHome = target.vehicle < 0 && target.heli < 0 && len2(flat(foeAt_ - ownComputer)) < kAtComputer * kAtComputer;
+    const bool holdFire = atHome || (tactic_ == AMBUSH && atPost_ && dist > kAmbushRange && shotsFromPost_ == 0);
     const V3 wanted = norm(flat(held_.c.aimPoint - t.muzzle));
     const V3 lay = norm(flat(t.gunDir));
     const double off = std::acos(clampd(dot(wanted, lay), -1.0, 1.0));
@@ -1340,6 +1434,61 @@ void Bot::inTank(Duel& d, int me) {
   if (stuckCount_ >= 5 && stopped) {
     bail(v);
     return;
+  }
+
+  // Our yard, and our computer. Out to meet whoever is coming; nobody about, then on guard and looking their way.
+  if (tactic_ == DEFEND) {
+    const World::Base& ours = d.world.base(Duel::teamOf(me));
+    const V3 guard = guardSpot(d, me);
+    const bool atComputer = threatAge_ < 6.0 && threatOnFoot_ && len2(flat(threat_ - ours.computer)) < kAtComputer * kAtComputer;
+    if (atComputer) {
+      // A tank does not go through that door.
+      if (len2(flat(ours.door - f.cog)) < 45.0 * 45.0 || stuckCount_ >= 2) {
+        doing_ = "steigt aus, zum Rechner";
+        if (stopped) {
+          pulse_.use = true;
+          useClock_ = 0.8;
+          wantVehicle_ = v;
+          wantClock_ = 0;
+        } else {
+          held_.c.brake = 1;
+          held_.c.throttle = 0;
+        }
+        return;
+      }
+      doing_ = "zurueck zum Rechner";
+      if (pathAge_ > 10.0 || d.world.bridgeFalls() != fallsSeen_) planTo(d, f.cog, ours.door);
+      driveTowards(d, me, nextPoint(f.cog, 13.0), 13.0);
+      return;
+    }
+    if (t.kind != TK_MG) {
+      if (seesFoe_ && foeDist < kHoldRange) {
+        doing_ = "verteidigt die Basis";
+        standAndFace(foeAt_);
+        return;
+      }
+      if (threatAge_ < 12.0) {
+        doing_ = "faengt sie ab";
+        if (len2(flat(threat_ - f.cog)) < 140.0 * 140.0) {
+          standAndFace(threat_);
+          return;
+        }
+        if (pathAge_ > 8.0 || d.world.bridgeFalls() != fallsSeen_) planTo(d, f.cog, threat_);
+        driveTowards(d, me, nextPoint(f.cog, 13.0), 13.0);
+        return;
+      }
+    }
+    if (threatAge_ >= 12.0 && !seesFoe_) {
+      if (len2(flat(guard - f.cog)) < 9.0 * 9.0 || (stuckCount_ >= 2 && len2(flat(guard - f.cog)) < 40.0 * 40.0)) {
+        doing_ = "bewacht die Basis";
+        standAndFace(d.world.base(1 - Duel::teamOf(me)).centre);
+        return;
+      }
+      doing_ = "zum Wachposten";
+      if (pathAge_ > 25.0 || d.world.bridgeFalls() != fallsSeen_) planTo(d, f.cog, guard);
+      driveTowards(d, me, nextPoint(f.cog, 13.0), len2(flat(guard - f.cog)) < 40.0 * 40.0 ? 4.0 : 13.0);
+      return;
+    }
   }
 
   // The buggy lives by not being where the shell lands: fast all the way, and round them in circles once it is there.

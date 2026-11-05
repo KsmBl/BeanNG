@@ -8,7 +8,7 @@
 
 class Bot {
  public:
-  enum Tactic : u8 { STORM, FLANK, AMBUSH, SNIPER, SCAVENGE, SPY, MISSILE, AIR, RAID, kTacticCount };
+  enum Tactic : u8 { STORM, FLANK, AMBUSH, SNIPER, SCAVENGE, SPY, MISSILE, AIR, RAID, DEFEND, kTacticCount };
   void forceTactic(Tactic t) { forced_ = t; }  // for the test bench
   static const char* tacticName(Tactic t);
   explicit Bot(u32 seed = 1) {
@@ -120,6 +120,13 @@ class Bot {
   // The plan for this round.
   double burstClock_ = 0;
   bool stormInBuggy_ = false;
+  // Keeping watch at home.
+  V3 threat_;
+  double threatAge_ = 1e9, limitBeforeDefence_ = 1e9;
+  Tactic beforeDefence_ = STORM;
+  bool defendCalled_ = false, threatOnFoot_ = false;
+  void watchBase(const Duel& d, int me);
+  V3 guardSpot(const Duel& d, int me) const;
   Tactic tactic_ = STORM, lastTactic_ = kTacticCount;
   bool picked_ = false;
   double tacticClock_ = 0, tacticLimit_ = 1e9;

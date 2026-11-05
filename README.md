@@ -197,6 +197,7 @@ Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom V
 | Ducken ein, aus | Strg | rechten Stick klicken |
 | Helikopter: steigen, sinken | Leertaste, Strg | A, B halten |
 | Kettenbuggy | Rast im Buggy zum Gegner, umkreist ihn und schießt in Feuerstößen mit dem MG. Sind beide Buggys weg, nimmt er einen Panzer. |
+| Verteidigung | Bleibt in der Basis, bewacht von einem Wachposten aus Hauptcomputer und Fahrzeuge und fängt Angreifer ab. Steht jemand am Rechner, geht der Bot zu Fuß hinein. Kommen Gegner näher als etwa 450 m an die Basis, wechseln auch andere Bots dorthin und danach zurück zu ihrem Plan. |
 | Menü | ESC | Start |
 | Im Menü wählen, ändern, bestätigen, zurück | Pfeile, ENTER, ESC | Steuerkreuz oder linker Stick, A, B |
 | Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | X, LB RB |

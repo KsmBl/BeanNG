@@ -3102,6 +3102,9 @@ int main(int argc, char** argv) {
       if (airOnly && i % 2 == 0) bots.back().forceTactic(Bot::AIR);
       if (raidOnly && i % 2 == 0) bots.back().forceTactic(Bot::RAID);
       if (argc > 4 && !strcmp(argv[4], "storm")) bots.back().forceTactic(Bot::STORM);
+      if (argc > 4 && !strcmp(argv[4], "spy") && i % 2 == 0) bots.back().forceTactic(Bot::SPY);
+      if (argc > 4 && !strcmp(argv[4], "sniper") && i % 2 == 0) bots.back().forceTactic(Bot::SNIPER);
+      if (argc > 4 && !strcmp(argv[4], "defend")) { if (i % 2 == 0) bots.back().forceTactic(Bot::STORM); else bots.back().forceTactic(Bot::DEFEND); }
       d->players[i].present = true;
     }
     Duel::Intent in[Duel::kMaxPlayers];
@@ -3166,7 +3169,7 @@ int main(int argc, char** argv) {
       }
       if (d->matchId > startMatch + rounds * 2) break;
     }
-    for (int i = 0; i < count; i++) printf("Bot %d: Kills %d, Tode %d, Spuren gefolgt %d, Kisten %d, Rechner %d, Rettungen %d, Fluege %d\n", i, int(d->scores[i].kills), int(d->scores[i].deaths), bots[size_t(i)].followedTracks(), bots[size_t(i)].cratesTaken(), bots[size_t(i)].computersTapped(), bots[size_t(i)].timesRescued(), bots[size_t(i)].flights());
+    for (int i = 0; i < count; i++) printf("Bot %d (Gewehr %d, %d Schuss): Kills %d, Tode %d, Spuren gefolgt %d, Kisten %d, Rechner %d, Rettungen %d, Fluege %d\n", i, int(d->players[i].hasWeapon[WP_SNIPER]), d->players[i].sniperAmmo, int(d->scores[i].kills), int(d->scores[i].deaths), bots[size_t(i)].followedTracks(), bots[size_t(i)].cratesTaken(), bots[size_t(i)].computersTapped(), bots[size_t(i)].timesRescued(), bots[size_t(i)].flights());
     printf("Schnellste Drehung eines Bots: %.0f Grad/s\n", mostTurn);
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
@@ -3226,6 +3229,39 @@ int main(int argc, char** argv) {
     printf("Buggy: auf dem Fleck %d, %.1f km/h, nach 3 s %d Schuss\n", int(d->world.onRearm(d->frames[v].cog)), B.speed * 3.6, B.ammo);
     run(3.0);
     printf("nach 6 s %d Schuss\n", B.ammo);
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "intruder")) {
+    // Someone on foot at the computer of the side with the bots.
+    auto* d = new Duel();
+    d->playersWanted = 4;
+    d->build();
+    for (int i = 0; i < 4; i++) d->players[i].present = true;
+    Duel::Intent in[Duel::kMaxPlayers];
+    std::vector<Bot> bots;
+    for (int i = 0; i < 4; i++) bots.emplace_back(u32(i + 11));
+    u8 none[IT_COUNT] = {};
+    double t = 0, playing = 0;
+    while (t < 110.0) {
+      for (int i : {1, 3}) bots[size_t(i)].step(*d, i, in[i]);
+      if (d->phase == Duel::CHOOSING) {
+        d->choose(0, none, true);
+        d->choose(2, none, true);
+      }
+      if (d->phase == Duel::PLAYING) {
+        playing += Duel::kDt;
+        const World::Base& theirs = d->world.base(1);
+        if (playing > 25.0) d->players[0].soldier.p = V3{theirs.computer.x, theirs.computer.y, theirs.door.z} + norm(V3{theirs.door.x - theirs.computer.x, theirs.door.y - theirs.computer.y, 0}) * 1.5;
+        d->players[0].soldier.hp = 100;
+        d->players[2].soldier.hp = 100;
+      }
+      d->step(in);
+      std::vector<SimEvent> ev;
+      d->drainEvents(ev);
+      t += Duel::kDt;
+      if (std::fmod(t, 5.0) < Duel::kDt && d->phase == Duel::PLAYING)
+        printf("t %3.0f | 1 %s/%s bei %.0f %.0f fz %d Leben %.0f | 3 %s/%s bei %.0f %.0f fz %d\n", playing, Bot::tacticName(bots[1].tactic()), bots[1].doing(), d->players[1].soldier.p.x, d->players[1].soldier.p.y, d->players[1].vehicle, d->players[1].soldier.hp, Bot::tacticName(bots[3].tactic()), bots[3].doing(), d->players[3].soldier.p.x, d->players[3].soldier.p.y, d->players[3].vehicle);
+    }
     return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "gatcar")) {
