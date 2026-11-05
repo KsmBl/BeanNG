@@ -83,7 +83,7 @@ static void saveSettings() {
 namespace {
 
 enum CamMode { CAM_CHASE, CAM_ORBIT, CAM_HOOD, CAM_DRIVER, CAM_COUNT };
-const char* kCamNames[CAM_COUNT] = {"Verfolger", "Orbit", "Haube", "Fahrer"};
+const char* kCamNames[CAM_COUNT] = {"Verfolger", "Orbit", "Bordkamera", "Fahrer"};
 
 // Everything that tells the driver how fast and how rough it is, read from the running simulation.
 // Shared by the camera and the sound, so that what shakes is also what is heard.
