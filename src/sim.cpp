@@ -1,8 +1,51 @@
 #include "sim.h"
 #include "prof.h"
+#include "workers.h"
 #include <algorithm>
 #include <random>
 #include "world.h"
+
+namespace {
+constexpr size_t kParallelWork = 6000;  // nodes and beams awake, below which the threads would only get in each other's way
+// What the threads of a step would all write to, kept apart and put together when they are done.
+struct SimSlot {
+  std::vector<SimEvent> events;
+  std::vector<Scrape> scrapes;
+  u64 clamped = 0, broken = 0;
+  double plastic = 0;
+};
+SimSlot gSlots[Workers::kMost];
+thread_local SimSlot* tlSlot = nullptr;
+}  // namespace
+
+// Side by side where there is enough to be worth it, and then what they have noted goes where it belongs.
+template <class F>
+void Sim::inParallel(int count, F&& fn) {
+  size_t work = 0;
+  for (u32 oi : active) work += objs[oi].beamList.size() + objs[oi].nodes.size();
+  Workers& w = Workers::get();
+  if (work < kParallelWork || w.threads() < 2 || count < 2) {
+    for (int i = 0; i < count; i++) fn(i, 0);
+    return;
+  }
+  w.run(count, [&](int task, int slot) {
+    tlSlot = &gSlots[slot];
+    fn(task, slot);
+    tlSlot = nullptr;
+  });
+  for (int k = 0; k < w.threads(); k++) {
+    SimSlot& sl = gSlots[k];
+    for (const SimEvent& e : sl.events)
+      if (events.size() < 512) events.push_back(e);
+    sl.events.clear();
+    scrapes.insert(scrapes.end(), sl.scrapes.begin(), sl.scrapes.end());
+    sl.scrapes.clear();
+    clampedSteps += sl.clamped;
+    sl.clamped = 0;
+    brokenBeams += u32(sl.broken);
+    sl.broken = 0;
+  }
+}
 
 namespace {
 constexpr double kContactOmega = 1000.0;  // contact stiffness = m * omega^2, stable at 2 kHz
@@ -182,8 +225,14 @@ double Sim::maxEigenvalue(u32 obj, u32* worstNode) const {
 void Sim::forces(double dt) {
   ProfScope profBeams(PS_BEAMS);
   const V3 gv{0, 0, -g};
-  for (u32 oi : active) {
-    const Obj& o = objs[oi];
+  // Each object's beams only ever touch that object's nodes, so the objects can go side by side.
+  const int nActive = int(active.size());
+  double plastic = 0;
+  const auto oneObject = [&](int ai, int slot) {
+    SimSlot* me = tlSlot;
+    (void)slot;
+    const u32 oi = active[size_t(ai)];
+    Obj& o = objs[oi];
     if (o.kind == OBJ_PROP) {
       // Loose objects lose energy to internal friction, and so come to rest instead of humming on
       // their springs for ever, which is what lets them go back to sleep. It acts on slow motion
@@ -200,11 +249,6 @@ void Sim::forces(double dt) {
     } else {
       for (u32 i : o.nodes) force[i] = gv * mass[i];
     }
-  }
-
-  double plastic = 0;
-  for (u32 oi : active) {
-    const Obj& o = objs[oi];
     const bool isCar = o.kind == OBJ_CAR;
     double objPlastic = 0;
     for (u32 bi : o.beamList) {
@@ -258,7 +302,15 @@ void Sim::forces(double dt) {
       force[b.a] += fv;
       force[b.b] -= fv;
     }
-    if (isCar) plastic += objPlastic;
+    if (isCar) {
+      if (me) me->plastic += objPlastic;
+      else plastic += objPlastic;
+    }
+  };
+  inParallel(nActive, oneObject);
+  for (SimSlot& sl : gSlots) {
+    plastic += sl.plastic;
+    sl.plastic = 0;
   }
   plasticEnergy += plastic;
   applyBlasts(dt);
@@ -558,7 +610,8 @@ void Sim::applyBlasts(double dt) {
 
 void Sim::breakBeam(Beam& b, bool notify, double f) {
   b.flags |= BF_BROKEN;
-  brokenBeams++;
+  if (tlSlot) tlSlot->broken++;
+  else brokenBeams++;
   objs[nodeObj[b.a]].dirty = true;
   if (b.tag == kTagWood) {
     // A crack runs: the fibres next to a failed one suddenly carry its load and go too, which is why
@@ -601,6 +654,10 @@ void Sim::finish(double dt) {
 }
 
 void Sim::event(EventKind k, V3 p, V3 v, float s) {
+  if (tlSlot) {
+    if (tlSlot->events.size() < 128) tlSlot->events.push_back({p, v, s, k});
+    return;
+  }
   if (events.size() < 512) events.push_back({p, v, s, k});
 }
 
@@ -950,7 +1007,8 @@ void Sim::collidePairs(double dt) {
 static constexpr double kRimCushion = 0.65;
 
 void Sim::collideWorld(double dt) {
-  for (u32 oi : active) {
+  inParallel(int(active.size()), [&](int ai, int) {
+    const u32 oi = active[size_t(ai)];
     const Obj& o = objs[oi];
     for (u32 i : o.nodes) {
       const u8 fl = flags[i];
@@ -972,19 +1030,19 @@ void Sim::collideWorld(double dt) {
       force[i] += c.n * fn + ff;
 
       const double vt2 = len2(vel[i]) - vn * vn;
-      if (((stepCount + i) & 7) == 0 && !(fl & NF_WHEEL) && vt2 > 1.0 && fn > 150.0 && objs[oi].root == 0 && scrapes.size() < 400)
-        scrapes.push_back({rest[i], norm(vel[i] - c.n * vn), float(clampd(fn / 4000.0, 0.15, 1.0))});
+      if (((stepCount + i) & 7) == 0 && !(fl & NF_WHEEL) && vt2 > 1.0 && fn > 150.0 && objs[oi].root == 0 && (tlSlot ? tlSlot->scrapes.size() < 100 : scrapes.size() < 400))
+        (tlSlot ? tlSlot->scrapes : scrapes).push_back({rest[i], norm(vel[i] - c.n * vn), float(clampd(fn / 4000.0, 0.15, 1.0))});
       if (vt2 > 16.0 && fn > 300.0 && (stepCount & 15) == 0) {
         const bool soft = c.surface == SURF_GRASS || c.surface == SURF_GRAVEL;
         event(soft ? EV_DUST : EV_SPARK, pos[i], vel[i], float(std::sqrt(vt2)));
       }
     }
-  }
+  });
 }
 
 void Sim::integrate(double dt) {
-  for (u32 oi : active) {
-    const Obj& o = objs[oi];
+  inParallel(int(active.size()), [&](int ai, int) {
+    const Obj& o = objs[active[size_t(ai)]];
     for (u32 i : o.nodes) {
       V3 dv = force[i] * (invMass[i] * dt);
       // Last line of defence: no legitimate force changes a node's speed this much in 0.5 ms. It
@@ -992,7 +1050,8 @@ void Sim::integrate(double dt) {
       const double dv2 = len2(dv);
       if (dv2 > kMaxDv * kMaxDv) {
         dv = dv * (kMaxDv / std::sqrt(dv2));
-        clampedSteps++;
+        if (tlSlot) tlSlot->clamped++;
+        else clampedSteps++;
       }
       V3 v = vel[i] + dv;
       const double s2 = len2(v);
@@ -1000,7 +1059,7 @@ void Sim::integrate(double dt) {
       vel[i] = v;
       pos[i] += v * dt;
     }
-  }
+  });
 }
 
 // Finds out whether a damaged object still hangs together. If it has come apart, every separate piece

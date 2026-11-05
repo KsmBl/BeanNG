@@ -247,6 +247,8 @@ class Sim {
   void integrate(double dt);
   void sleepWake();
   void splitObjects();
+  template <class F>
+  void inParallel(int count, F&& fn);
   void breakBeam(Beam& b, bool notify, double f);
   void computeBounds(Obj& o);
   bool triPairAllowed(u32 node, const Tri& t) const;

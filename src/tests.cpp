@@ -3176,6 +3176,16 @@ int main(int argc, char** argv) {
     }
     for (int i = 0; i < count; i++) printf("Bot %d (Gewehr %d, %d Schuss): Kills %d, Tode %d, Spuren gefolgt %d, Kisten %d, Rechner %d, Rettungen %d, Fluege %d\n", i, int(d->players[i].hasWeapon[WP_SNIPER]), d->players[i].sniperAmmo, int(d->scores[i].kills), int(d->scores[i].deaths), bots[size_t(i)].followedTracks(), bots[size_t(i)].cratesTaken(), bots[size_t(i)].computersTapped(), bots[size_t(i)].timesRescued(), bots[size_t(i)].flights());
     printf("Schnellste Drehung eines Bots: %.0f Grad/s\n", mostTurn);
+    {
+      // What the threads rely on: no beam reaches from one object into another.
+      u32 across = 0;
+      for (const Obj& o : d->sim.objs)
+        for (u32 bi : o.beamList) {
+          const Beam& b = d->sim.beams[bi];
+          if (!(b.flags & BF_BROKEN) && (&d->sim.objs[d->sim.nodeObj[b.a]] != &o || &d->sim.objs[d->sim.nodeObj[b.b]] != &o)) across++;
+        }
+      printf("Balken ueber Objektgrenzen: %u\n", across);
+    }
     if (gProfOn) {
       static const char* const kStages[PS_COUNT] = {"Spieler", "Balken", "Fahrzeuge", "Paare", "Kontakte", "Boden", "Integration", "Schlaf", "Bots"};
       for (int k = 0; k < PS_COUNT; k++) printf("  %-12s %7.2f s\n", kStages[k], gProf[k]);
