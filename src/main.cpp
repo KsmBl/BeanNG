@@ -506,17 +506,14 @@ static void loadServerAddress() {
     gServerHost = host;
     gServerPort = port;
   }
-  if (got == 3) gUserName = name;
+  if (got == 3) gUserName = name;  // on one line without spaces, as a name has to be anyway
   fclose(f);
 }
 
 static void saveServerAddress() {
   FILE* f = fopen(kServerFile, "w");
   if (!f) return;
-  // On one line without spaces; a name with a space in it comes back with underscores.
-  std::string name = gUserName;
-  for (char& ch : name)
-    if (ch == ' ') ch = '_';
+  const std::string& name = gUserName;
   fprintf(f, "%s %d %s\n", gServerHost.c_str(), gServerPort, name.c_str());
   fclose(f);
 }
@@ -2751,7 +2748,9 @@ static void runGame() {
     } else {
       const int group = oskGroup(osk.x);
       if (group == 0) osk.shift = !osk.shift;
-      else if (group == 1) oskType(' ');
+      else if (group == 1) {
+        if (osk.target != 0) oskType(' ');  // a name has no spaces
+      }
       else if (group == 2) oskBack();
       else oskDone();
     }
@@ -3158,7 +3157,7 @@ static void runGame() {
         std::lock_guard<std::mutex> lock(G.inputMutex);
         for (const char* t = e.text.text; *t; t++) {
           const unsigned char ch = static_cast<unsigned char>(*t);
-          if (panelSel == 0 && gUserName.size() + 1 < size_t(net::kNameBytes) && (ch >= 128 || std::isgraph(ch) || ch == ' ')) gUserName += char(ch);
+          if (panelSel == 0 && gUserName.size() + 1 < size_t(net::kNameBytes) && (ch >= 128 || std::isgraph(ch))) gUserName += char(ch);
           if (panelSel == 1 && gServerHost.size() < 63 && (std::isalnum(ch) || ch == '.' || ch == '-')) gServerHost += char(ch);
           if (panelSel == 2 && std::isdigit(ch) && gServerPort < 6553) gServerPort = gServerPort * 10 + (ch - '0');
         }

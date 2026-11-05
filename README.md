@@ -119,7 +119,7 @@ Bots spielen nach denselben Regeln wie alle anderen, wissen aber etwas mehr: all
 
 **Replay:** Nach dem Verlassen eines Matches zeigt das Hauptmenü **Letztes Match ansehen**, aus der Sicht jedes Spielers oder frei fliegend.
 
-**Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill`, `/kick`, `/bot add|remove`, `/bridge <1-3>`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt beiden von Anfang an alle Waffen, zum Ausprobieren.
+**Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill`, `/kick`, `/bot add|remove`, `/bridge <1-3>`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt allen von Anfang an alle Waffen und den angezapften Rechner, zum Ausprobieren. Spieler heißen in allen Befehlen bei ihrem Namen. `/players` zeigt bei Bots die aktuelle Taktik und was sie gerade tun; jeder Taktikwechsel erscheint außerdem nur auf der Konsole.
 
 ### Netz
 

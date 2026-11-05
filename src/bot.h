@@ -18,6 +18,7 @@ class Bot {
   // Fills in what this player does for this physics step.
   void step(Duel& d, int me, Duel::Intent& out);
   Tactic tactic() const { return tactic_; }
+  bool planned() const { return picked_; }
   // How it is getting on, for the test bench.
   const char* doing() const { return doing_; }
   int followedTracks() const { return tracksFollowed_; }
