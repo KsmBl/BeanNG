@@ -142,7 +142,7 @@ Hinterhalt und Scharfschütze warten nur begrenzt, Plünderer und Flanke geben i
 
 Bots spielen nach denselben Regeln wie alle anderen, wissen aber etwas mehr: alle 30 Sekunden ungefähr, wo der nächste Gegner ist, damit ein Match nicht ewig dauert; ungefähr, woher ein Treffer kam; und in welche Richtung eine Spur führt. Bäume, Häuser und Nebel versperren ihnen die Sicht, Büsche nicht. Artillerie, Autos, Minen und Drohnen benutzen sie nicht.
 
-**Vegetation:** Wiesen aus Gras in drei Höhen und Büsche, die im Wind wogen. Was darüberfährt, drückt sie platt, eine Explosion brennt sie weg. Beides sind Instanzen mit je einem Drawcall, das Gras wird nur um die Kamera herum erzeugt und dünnt mit der Entfernung weich aus. Die **Grasdichte** lässt sich in den Spiel-Einstellungen wählen.
+**Vegetation:** Wiesen aus Gras in drei Höhen und Büsche, die im Wind wogen. Was darüberfährt, drückt sie platt, eine Explosion brennt sie weg. Beides sind Instanzen mit je einem Drawcall, das Gras wird nur um die Kamera herum erzeugt und dünnt mit der Entfernung weich aus. Das Gras ist für alle gleich dicht und lässt sich nicht abschalten: Es verdeckt Soldaten und zeigt, wo Fahrzeuge gefahren sind.
 
 ![Die Wiese, mit der Spur eines Panzers](docs/screenshots/wiese.jpg)
 
