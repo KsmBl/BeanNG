@@ -1393,6 +1393,9 @@ void Duel::fireWeapon(int p, const Intent& in) {
   b.owner = p;
   b.kind = w;
   b.lag = in.lag;
+  // The big rifle's shot leaves the same thin line of smoke as the gatling's.
+  b.trail = w == WP_SNIPER;
+  b.trailFrom = b.p;
   bullets.push_back(b);
   sim.event(EV_MUZZLE, b.p, dir, muzzleSize(w));
   if (w == WP_SNIPER) {
