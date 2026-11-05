@@ -959,8 +959,10 @@ void Duel::stepHeli(int h, const Intent in[kMaxPlayers], double dt) {
     const double tall = Soldier::kHeight * (1.0 - 0.32 * pl.soldier.crouch);
     const double overHead = hub.z - feet.z;
     // A rotor running down with nobody at the controls is high enough up to walk under.
-    const bool blades = pilot >= 0 && H.power > 0.25 && overHead > -0.3 && overHead < tall + 1.6 && std::hypot(hub.x - feet.x, hub.y - feet.y) < 5.4 + Soldier::kRadius;
-    const bool tailBlades = pilot >= 0 && H.power > 0.25 && tailRotor.z - feet.z > -0.3 && tailRotor.z - feet.z < tall + 0.9 && std::hypot(tailRotor.x - feet.x, tailRotor.y - feet.y) < 1.2;
+    // Your own pilot's blades pass you by: nobody is to be killed by a friend's rotor.
+    const bool ours = pilot >= 0 && teamOf(i) == teamOf(pilot);
+    const bool blades = pilot >= 0 && !ours && H.power > 0.25 && overHead > -0.3 && overHead < tall + 1.6 && std::hypot(hub.x - feet.x, hub.y - feet.y) < 5.4 + Soldier::kRadius;
+    const bool tailBlades = pilot >= 0 && !ours && H.power > 0.25 && tailRotor.z - feet.z > -0.3 && tailRotor.z - feet.z < tall + 0.9 && std::hypot(tailRotor.x - feet.x, tailRotor.y - feet.y) < 1.2;
     const V3 belly = H.at(-0.5, 0, 1.0);
     const bool squashed = fast > 2.5 && len(belly - (feet + V3{0, 0, tall * 0.5})) < 1.9;
     if (!blades && !tailBlades && !squashed) continue;
