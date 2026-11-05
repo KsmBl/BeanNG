@@ -2854,6 +2854,72 @@ int main(int argc, char** argv) {
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "gatcar")) {
+    // The gatling on a car with someone in it: what goes when, at twenty rounds a second, a burst at a time.
+    auto* d = new Duel();
+    d->playersWanted = 2;
+    d->build();
+    d->players[0].present = d->players[1].present = true;
+    Duel::Intent in[Duel::kMaxPlayers];
+    const auto run = [&](double seconds) {
+      for (double t = 0; t < seconds; t += Duel::kDt) {
+        d->step(in);
+        std::vector<SimEvent> ev;
+        d->drainEvents(ev);
+      }
+    };
+    u8 none[IT_COUNT] = {};
+    while (d->phase != Duel::CHOOSING) run(0.1);
+    d->choose(0, none, true);
+    d->choose(1, none, true);
+    while (d->phase != Duel::PLAYING) run(0.05);
+    const int k = argc > 2 ? atoi(argv[2]) : 0;
+    Vehicle& car = d->cars[size_t(k)];
+    const VehicleFrame& f = d->frames[Duel::kTanks + k];
+    d->players[0].soldier.p = f.cog + f.left * 2.0;
+    in[0].use = true;
+    run(Duel::kDt * 0.5);
+    in[0].use = false;
+    printf("Im Auto %d: %d\n", k, int(d->players[0].vehicle == Duel::kTanks + k));
+    const auto say = [&](double t) {
+      const auto& r = d->carRounds[k];
+      printf("t %4.1f Treffer %2d Tank %d brennt %.1f | Motor fest %d Kuehler %d Oel %d Tank %d Getriebe %d Benzin %.0f Reifen %d%d%d%d | zerstoert %d Fahrer %.0f\n", t, r.hits, r.tankHits, r.burning, int(car.dmg.seized), int(car.dmg.radiator), int(car.dmg.oilLeak), int(car.dmg.tank), int(car.dmg.gearbox), car.fuelLitres, car.wheels[0].deflate > 0, car.wheels[1].deflate > 0, car.wheels[2].deflate > 0, car.wheels[3].deflate > 0, int(car.exploded), d->players[0].soldier.hp);
+    };
+    double t = 0;
+    say(t);
+    u32 seed = 7;
+    for (int shot = 0; shot < 400 && !car.exploded; shot++) {
+      // Roughly at the middle of it, from up front and above, the way it spreads.
+      seed = seed * 1664525u + 1013904223u;
+      const double a = double(seed >> 16) / 65535.0 * 6.283;
+      seed = seed * 1664525u + 1013904223u;
+      const double r = double(seed >> 16) / 65535.0 * 1.6;
+      const V3 aim = f.cog + f.fwd * (std::cos(a) * r) + f.left * (std::sin(a) * r * 0.5);
+      const V3 from = aim + f.fwd * 60.0 + V3{0, 0, 45.0};
+      Duel::Bullet b;
+      b.p = from;
+      b.v = norm(aim - from) * kWeapons[WP_AR].speed;
+      b.owner = 1;
+      b.kind = WP_AR;
+      b.gatling = true;
+      d->bullets.push_back(b);
+      run(0.05);
+      t += 0.05;
+      if (shot % 10 == 9) say(t);
+      if (d->carRounds[k].burning >= 0) {
+        // On fire now: no more shooting, to see what the fire does by itself.
+        for (int w = 0; w < 24 && !car.exploded; w++) {
+          run(0.5);
+          t += 0.5;
+          if (w % 4 == 3) say(t);
+        }
+        break;
+      }
+    }
+    say(t);
+    printf("Kills Schuetze %d, Tode Fahrer %d\n", int(d->scores[1].kills), int(d->scores[0].deaths));
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "gunwall")) {
     // A tank beside the command centre: the barrel swings against the wall and stops; pushed through it, the shell stays this side.
     auto* d = new Duel();

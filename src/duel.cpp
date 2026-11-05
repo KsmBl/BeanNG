@@ -915,6 +915,7 @@ void Duel::stepHeli(int h, const Intent in[kMaxPlayers], double dt) {
         b.kind = WP_AR;
         b.lag = I.lag;
         b.trail = true;
+        b.gatling = true;
         b.trailFrom = b.p;
         bullets.push_back(b);
         H.ammo--;
@@ -1404,8 +1405,49 @@ void Duel::fireWeapon(int p, const Intent& in) {
   }
 }
 
-bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind, int owner) {
+void Duel::stepCarRounds(double dt) {
+  for (int k = 0; k < kCars; k++) {
+    CarRounds& r = carRounds[k];
+    if (r.hits < kCarSmokeHits && r.burning < 0) continue;
+    Vehicle& car = cars[size_t(k)];
+    if (car.exploded) continue;
+    const VehicleFrame& f = frames[kTanks + k];
+    r.smokeClock -= dt;
+    if (r.burning < 0 && (r.hits >= kCarFireHits || r.tankHits >= kCarFireTankHits)) {
+      r.burning = 0;
+      car.engineRunning = false;
+    }
+    if (r.smokeClock <= 0) {
+      // Smoke out of the bonnet first, and then it is alight, more and more.
+      r.smokeClock = r.burning >= 0 ? 0.07 : 0.16;
+      const double fierce = r.burning >= 0 ? clampd(0.3 + r.burning / kCarBurnTime * 0.7, 0.3, 1.0) : 0.1 + 0.1 * double(r.hits) / double(kCarFireHits);
+      sim.event(EV_FIRE, f.cog + f.fwd * 1.2 + f.up * 0.5, V3{}, float(fierce));
+      if (r.burning >= 0 && r.tankHits > 0) sim.event(EV_FIRE, f.cog - f.fwd * 1.4 + f.up * 0.1, V3{}, float(fierce * 0.8));
+    }
+    if (r.burning < 0) continue;
+    r.burning += dt;
+    if (r.burning < kCarBurnTime) continue;
+    // The fuel, in the end. Not much of a bang, but nothing is left to drive.
+    car.wreck(sim);
+    car.burnTime = 0;
+    sim.blastBy = carHitBy[k];
+    sim.blastIsMissile = false;
+    sim.explode(f.cog + f.up * 0.3, 1800.0, 9.0);
+  }
+}
+
+bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind, int owner, bool gatling) {
   Vehicle& car = cars[size_t(k)];
+  if (gatling) {
+    // Wherever it goes in: a hole, and the panel around it pushed in. Enough of those and something catches.
+    carRounds[k].hits++;
+    sim.wake(car.obj);
+    for (u32 n : sim.objs[car.obj].nodes) {
+      const double d2 = len2(sim.pos[n] - from - dir * 0.5);
+      if (d2 < 0.45 * 0.45) sim.vel[n] += dir * (7.0 * (1.0 - std::sqrt(d2) / 0.45));
+    }
+    sim.event(EV_SPARK, from + dir * 0.5, dir * -3.0, 0.7f);
+  }
   const VehicleFrame& f = frames[kTanks + k];
   const auto middle = [&](const std::vector<u32>& nodes, V3 fallback) {
     if (nodes.empty()) return fallback;
@@ -1441,7 +1483,7 @@ bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind, int owner) {
     }
   }
   if (!first) return false;
-  const bool heavy = kind == WP_SNIPER;
+  const bool heavy = kind == WP_SNIPER || gatling;
   // Small arms go for the tyres, and for whoever is sitting there; the big rifle for all of it.
   if (!heavy && first->part != DRIVER && first->part < WHEEL0) return false;
   sim.wake(car.obj);
@@ -1460,6 +1502,7 @@ bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind, int owner) {
       car.dmg.tank = true;
       // Through a full tank a bullet this size leaves a big hole.
       car.fuelLitres = std::max(0.0, car.fuelLitres - 8.0);
+      if (gatling) carRounds[k].tankHits++;
       break;
     case GEARBOX:
       car.dmg.gearbox = true;
@@ -1614,7 +1657,7 @@ void Duel::stepBullets(double dt) {
           if (v >= kTanks && !vehicleDead(v) && b.kind < WP_RPG) {
             inCar = true;
             carHitBy[v - kTanks] = b.owner;
-            bulletInCar(v - kTanks, p - norm(seg) * 0.5, norm(seg), b.kind, b.owner);
+            bulletInCar(v - kTanks, p - norm(seg) * 0.5, norm(seg), b.kind, b.owner, b.gatling);
           }
         }
       }
@@ -2118,6 +2161,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
           } else {
             Vehicle& car = cars[size_t(pl.repairing - kTanks)];
             car.dmg = decltype(car.dmg){};
+            carRounds[pl.repairing - kTanks] = CarRounds{};  // patched up, and put out
             car.repairRunningGear(sim, carsStart[size_t(pl.repairing - kTanks)], simStart);
           }
         }
@@ -2181,7 +2225,10 @@ void Duel::restart() {
   winner = -1;
   phaseClock = 0;
   for (int i = 0; i < kMaxPlayers; i++) hurtBy[i] = -1;
-  for (int i = 0; i < kCars; i++) carHitBy[i] = -1;
+  for (int i = 0; i < kCars; i++) {
+    carHitBy[i] = -1;
+    carRounds[i] = CarRounds{};
+  }
   bullets.clear();
   incoming.clear();
   smoke.clear();
@@ -2407,6 +2454,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     if (!sim.objs[a].awake) continue;
     for (u32 n : sim.objs[a].nodes) sim.force[n] -= sim.vel[n] * (sim.mass[n] * k);
   }
+  stepCarRounds(kDt);
   sim.finish(kDt);
   updateFrames();
   countDeaths();

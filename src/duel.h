@@ -236,6 +236,7 @@ class Duel {
     int by = -1;  // whose it is, for what flies with nobody as its owner
     // A thin line of smoke behind it, handed out in lengths as it flies: the gatling's. For the first second only.
     bool trail = false;
+    bool gatling = false;  // a 20 mm round: more to a car than any rifle's
     V3 trailFrom;
     double trailClock = 0;
   };
@@ -345,6 +346,16 @@ class Duel {
   double hurtByAge[kMaxPlayers] = {};
   bool hurtByMissile[kMaxPlayers] = {};  // with a guided missile: the kill cam flies with it
   bool carHitByMissile[kCars] = {};
+  // A car under cannon fire does not go up at once: holes, then smoke, then fire, and only the fire ends it.
+  struct CarRounds {
+    int hits = 0, tankHits = 0;
+    double burning = -1;   // since when it has been on fire; negative while it is not
+    double smokeClock = 0;
+  };
+  CarRounds carRounds[kCars];
+  static constexpr int kCarSmokeHits = 8, kCarFireHits = 22, kCarFireTankHits = 4;
+  static constexpr double kCarBurnTime = 9.0;
+  void stepCarRounds(double dt);
   // And if it was a shell, its flight, for the kill cam to follow.
   using Shot = ShellFlight;
   Shot hurtShot[kMaxPlayers];
@@ -427,7 +438,7 @@ class Duel {
   void fireWeapon(int p, const Intent& in);
   void stepBullets(double dt);
   // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
-  bool bulletInCar(int k, V3 from, V3 dir, int kind, int owner);
+  bool bulletInCar(int k, V3 from, V3 dir, int kind, int owner, bool gatling = false);
 public:
   void creditHurt(int victim, int by, bool missile = false, const Shot& shot = Shot{});
 private:
