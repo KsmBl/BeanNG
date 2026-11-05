@@ -87,6 +87,7 @@ const char* kCamNames[CAM_COUNT] = {"Verfolger", "Orbit", "Bordkamera", "Fahrer"
 
 // Everything that tells the driver how fast and how rough it is, read from the running simulation.
 // Shared by the camera and the sound, so that what shakes is also what is heard.
+static_assert(Snapshot::kPlayersMost == Duel::kMaxPlayers);
 static constexpr double kBuggyRevs = 2.1;  // heard, not driven: its gearbox is built on the tanks' 2400 rpm
 
 struct DriveFeel {
@@ -1300,7 +1301,7 @@ struct Game {
         }
       }
 
-      u8 buf[net::kMaxPacket];
+      u8 buf[net::kMaxPacket * 2];  // twelve players close together with their drones up can go a little past it
       net::Addr from;
       int n;
       if (sock && fakeLine) {
@@ -1471,7 +1472,8 @@ struct Game {
               lineJitter = std::max(std::max(seen - timeOffset, 0.0), lineJitter * std::exp(-0.3 / net::kSendRate));
             }
           }
-          u8 ph = 0, mask = 0;
+          u8 ph = 0;
+          u16 mask = 0;
           i8 win = 0;
           float pc = 0;
           r.get(ph);
@@ -1480,7 +1482,8 @@ struct Game {
           r.get(mask);
           i8 vehicles[Duel::kMaxPlayers];
           u8 seats[Duel::kMaxPlayers] = {};
-          u8 readyMask = 0, wantedMask = 0, toldMask = 0;
+          u16 readyMask = 0, toldMask = 0;
+          u8 wantedMask = 0;
           r.get(readyMask);
           r.get(wantedMask);
           r.get(toldMask);
@@ -1491,7 +1494,7 @@ struct Game {
             duel.cars[size_t(k)].netOn = tarpMask & (1 << k);
             duel.cars[size_t(k)].netClock = tarpBusy & (1 << k) ? 1.0 : 0.0;
           }
-          u8 heliMask = 0;
+          u16 heliMask = 0;
           r.get(heliMask);
           for (int h = 0; h < Duel::kHelis; h++) {
             if (!(heliMask & (1 << h))) continue;
@@ -1815,7 +1818,7 @@ struct Game {
           r.get(tap);
           r.get(tapClock);
           r.get(fixWait);
-          u8 fixMask = 0;
+          u16 fixMask = 0;
           r.get(fixMask);
           Duel::Player& self = duel.players[mySlot];
           self.tapped = tap & 1;

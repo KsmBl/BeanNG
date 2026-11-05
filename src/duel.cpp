@@ -18,6 +18,7 @@ void turnNodes(Sim& sim, u32 first, u32 end, V3 about, double yaw) {
 }  // namespace
 
 void Duel::build() {
+  for (int& who : hurtBy) who = -1;
   world.buildArena();
   sim.world = &world;
   int at = 0;

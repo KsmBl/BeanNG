@@ -67,8 +67,8 @@ struct Snapshot {
   bool selfOnFoot = false;  // the camera hangs on one's own figure, which so stands still in the picture
   int selfTrack = -1;
   V3 trackLeft[2];
-  float parkedScorch[64] = {};
-  float parkedHeat[64] = {};  // how warm each is through a thermal sight, 0..1
+  float parkedScorch[96] = {};
+  float parkedHeat[96] = {};  // how warm each is through a thermal sight, 0..1
   struct WeakSpot {
     V3 p;
     float radius = 0;
@@ -85,10 +85,11 @@ struct Snapshot {
   };
   std::vector<BoardRow> board;
   // For the kill cam: where each player's own view is, and their guided missile if one is in the air.
+  static constexpr int kPlayersMost = 12;  // as Duel::kMaxPlayers, checked where the two meet
   struct ViewTrack {
-    V3 eye[6], look[6];
-    bool missileOn[6] = {};
-    V3 missileP[6], missileV[6];
+    V3 eye[kPlayersMost], look[kPlayersMost];
+    bool missileOn[kPlayersMost] = {};
+    V3 missileP[kPlayersMost], missileV[kPlayersMost];
   };
   ViewTrack track;
   int killer = -1;

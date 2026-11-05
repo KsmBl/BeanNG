@@ -245,7 +245,7 @@ int main(int argc, char** argv) {
   // Room for them and at least one person, half to a side.
   wanted = std::clamp(std::max(wanted, (botsWanted + 2) / 2 * 2), 2, int(Duel::kMaxPlayers));
   if (port <= 0 || port > 65535) {
-    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all] [--players 2|4|6] [--bots n] [--log]\n");
+    fprintf(stderr, "Benutzung: beanng-server [port] [--give-all] [--players 2|4|6|8|10|12] [--bots n] [--log]\n");
     return 1;
   }
   std::signal(SIGINT, onSignal);
@@ -604,22 +604,22 @@ int main(int argc, char** argv) {
     w.put(u8(duel->phase));
     w.put(i8(duel->winner));
     w.put(float(duel->phaseClock));
-    u8 here = 0;
+    u16 here = 0;
     {
-      u8 ready = 0;
+      u16 ready = 0;
       for (int k = 0; k < Duel::kMaxPlayers; k++) {
-        if (clients[k].used) here |= u8(1 << k);
-        if (duel->players[k].ready) ready |= u8(1 << k);
+        if (clients[k].used) here |= u16(1 << k);
+        if (duel->players[k].ready) ready |= u16(1 << k);
       }
       w.put(here);
       w.put(ready);
       w.put(u8(duel->playersWanted));
     }
     // Oneself with every tick, the others by how far away they are.
-    u8 told = 0;
+    u16 told = 0;
     for (int k = 0; k < Duel::kMaxPlayers; k++) {
       if (!clients[k].used) continue;
-      if (k == slot || (tick + u32(k)) % sendEvery(len(duel->players[k].soldier.p - viewerAt(slot))) == 0) told |= u8(1 << k);
+      if (k == slot || (tick + u32(k)) % sendEvery(len(duel->players[k].soldier.p - viewerAt(slot))) == 0) told |= u16(1 << k);
     }
     w.put(told);
     // Which cars are under a tarpaulin, and on which one it is going up.
@@ -631,10 +631,10 @@ int main(int argc, char** argv) {
     w.put(tarps);
     w.put(tarpsBusy);
     // The helicopters: every time while anything happens to them, and now and then in any case.
-    u8 heliMask = 0;
+    u16 heliMask = 0;
     for (int h = 0; h < Duel::kHelis; h++) {
       const Heli& H = duel->helis[h];
-      if (H.power > 0 || !H.onGround || duel->heliPilot(h) >= 0 || (tick + u32(h)) % 30 == 0) heliMask |= u8(1 << h);
+      if (H.power > 0 || !H.onGround || duel->heliPilot(h) >= 0 || (tick + u32(h)) % 30 == 0) heliMask |= u16(1 << h);
     }
     w.put(heliMask);
     for (int h = 0; h < Duel::kHelis; h++) {
@@ -765,9 +765,9 @@ int main(int argc, char** argv) {
     w.put(u8(me.tapped ? 1 : 0));
     w.put(float(me.tapClock));
     w.put(float(me.fixWait));
-    u8 fixMask = 0;
+    u16 fixMask = 0;
     for (int k = 0; k < Duel::kMaxPlayers; k++)
-      if (me.fixes[k].on) fixMask |= u8(1 << k);
+      if (me.fixes[k].on) fixMask |= u16(1 << k);
     w.put(fixMask);
     for (const Duel::Player::Fix& f : me.fixes) {
       if (!f.on) continue;

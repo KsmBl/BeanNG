@@ -137,7 +137,7 @@ class Duel {
   static constexpr int kCarKinds = 3;
   static constexpr int kCars = 2 * kCarKinds;
   static constexpr double kMedkitHeal = 50.0;
-  static constexpr int kMaxPlayers = 6;
+  static constexpr int kMaxPlayers = 12;  // six a side at most; what stands in the yard stays the same
   static int teamOf(int player) { return player % 2; }
   static constexpr int kVehicles = kTanks + kCars;
 
@@ -349,7 +349,7 @@ class Duel {
   Score scores[kMaxPlayers];
   // Who last hurt each player, and how long ago: it only counts as their kill if it is still fresh.
   static constexpr double kKillCredit = 30.0;
-  int hurtBy[kMaxPlayers] = {-1, -1, -1, -1, -1, -1};
+  int hurtBy[kMaxPlayers];  // set to nobody in build()
   double hurtByAge[kMaxPlayers] = {};
   bool hurtByMissile[kMaxPlayers] = {};  // with a guided missile: the kill cam flies with it
   bool carHitByMissile[kCars] = {};
