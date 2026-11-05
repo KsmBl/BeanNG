@@ -103,10 +103,12 @@ struct Snapshot {
   struct DrivenEngine {
     int vehicle = -1;
     V3 p;
+    V3 v;
     float rpm = 0, load = 0, tracks = 0, cylinders = 8, pitch = 1;
   };
   std::vector<DrivenEngine> drivenEngines;
   bool buggy = false;  // the one being driven is the buggy, not a tank
+  float echo = 0;      // how much the walls close to the camera throw back
   std::vector<PartState> heliParts;
   // One's own side, for the name and health over each of them.
   struct Mate {

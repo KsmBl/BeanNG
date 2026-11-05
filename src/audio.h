@@ -34,9 +34,11 @@ struct AudioFeed {
     float dull = 0;        // 0 close by .. 1 far off, when only the low end carries
     float cylinders = 8, pitch = 1;
     float tracks = 0;      // m/s of track, for the rattle; 0 on wheels
+    float doppler = 1;     // how much higher it sounds for coming closer
   };
   static constexpr int kDistant = 6;
   Distant distant[kDistant];
+  float echo = 0;          // walls close by that throw things back, 0 in the open .. 1 between houses
 };
 
 enum class Sfx : uint8_t { Metal, Glass, Thump, Clunk, Boom, Gun, Crack };
@@ -97,6 +99,10 @@ class AudioSynth {
     Svf a, b, rattle;
   };
   DistantVoice distant_[AudioFeed::kDistant];
+  // What comes back off the walls: engines and bangs, not what one is sitting in.
+  std::vector<float> echoL_, echoR_;
+  int echoAt_ = 0;
+  float echoTone_[2] = {};  // the walls keep the top of it
 
   // Engine.
   double crank_ = 0;       // revolutions within the four-stroke cycle, 0..2

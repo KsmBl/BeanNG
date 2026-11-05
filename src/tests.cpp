@@ -2587,6 +2587,43 @@ int main(int argc, char** argv) {
     printf("Ausrollen von %.0f km/h\n", from);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "audiofx")) {
+    // Coming closer it sounds higher, and walls make a bang last.
+    const auto pitchOf = [](float doppler) {
+      AudioFeed f;
+      AudioFeed::Distant& o = f.distant[0];
+      o.rpm = 3000;
+      o.load = 1;
+      o.gain = 1;
+      o.cylinders = 4;
+      o.doppler = doppler;
+      AudioSynth synth;
+      synth.setFeed(f);
+      std::vector<float> out(48000 * 2 * 4);
+      synth.render(out.data(), 48000 * 4);
+      // Rising through zero, over the last two seconds: what the firing rate comes to.
+      int cross = 0;
+      for (size_t i = 48000 * 4; i + 2 < out.size(); i += 2)
+        if (out[i] < 0 && out[i + 2] >= 0) cross++;
+      return cross / 2.0;
+    };
+    printf("Tonhoehe bei Doppler 1,0: %.0f Hz, 1,2: %.0f Hz, 0,8: %.0f Hz\n", pitchOf(1.f), pitchOf(1.2f), pitchOf(0.8f));
+    for (float echo : {0.f, 1.f}) {
+      AudioFeed f;
+      f.echo = echo;
+      AudioSynth synth;
+      synth.setFeed(f);
+      std::vector<float> settle(48000 * 2);
+      synth.render(settle.data(), 48000);
+      synth.trigger(Sfx::Boom, 1.f, 0.f, 0.3f);
+      std::vector<float> out(48000 * 2);
+      synth.render(out.data(), 48000);
+      double late = 0;
+      for (size_t i = 48000; i < out.size(); i++) late += out[i] * out[i];
+      printf("Knall, Echo %.0f: zweite halbe Sekunde RMS %.4f\n", echo, std::sqrt(late / 48000.0));
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "buggytree")) {
     // Into a tree at any of these. It is the frame that gives, not the whole thing that goes up.
     for (double kmh : {60.0, 100.0, 130.0, 150.0}) {

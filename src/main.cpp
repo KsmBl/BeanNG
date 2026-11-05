@@ -280,6 +280,7 @@ struct SoundDriver {
   AudioSynth synth;
   double metalClock = 0, glassClock = 0, thumpClock = 0, crackClock = 0;
   int distantSlot[AudioFeed::kDistant] = {-1, -1, -1, -1, -1, -1};
+  V3 earAt, earVel;
   int lastGear = 1;
   double scrapeLP = 0;
 
@@ -342,6 +343,13 @@ struct SoundDriver {
       f.inputRpm *= kBuggyRevs;
     }
     f.rotor = s.heliNoise;
+    f.echo = s.echo;
+    // How fast the ears are going themselves, without a jump of the camera counting as speed.
+    {
+      const V3 now = (cam.eye - earAt) * (1.0 / std::max(dt, 1e-3));
+      earAt = cam.eye;
+      earVel += ((len(now) < 80.0 ? now : earVel) - earVel) * clampd(dt / 0.1, 0, 1);
+    }
     // The others, nearest first. Whoever is in a slot stays there as long as it is heard, so that nothing clicks.
     {
       struct Heard {
@@ -380,6 +388,9 @@ struct SoundDriver {
         o.pan = float(clampd(dot(r, right) / std::max(h.d, 1.0), -1, 1));
         o.gain = float(1.0 / (1.0 + h.d / 22.0) * clampd(1.0 - h.d / 420.0, 0, 1));
         o.dull = float(clampd(h.d / 220.0, 0, 1));
+        // Sound goes at 340 m/s: what comes closer is higher, and what has gone by drops.
+        const double closing = -dot(h.e->v - earVel, r / std::max(h.d, 1.0));
+        o.doppler = float(clampd(340.0 / (340.0 - closing), 0.75, 1.35));
       }
       for (int i = 0; i < AudioFeed::kDistant; i++) distantSlot[i] = used[i];
     }
@@ -679,6 +690,7 @@ struct Game {
       Snapshot::DrivenEngine e;
       e.vehicle = v;
       e.p = duel.frames[v].cog;
+      e.v = duel.frames[v].fwd * duel.frames[v].speed;
       if (v < Duel::kTanks) {
         const Tank& t = duel.tanks[v];
         if (t.destroyed || t.mod[TM_ENGINE] <= 0) continue;
@@ -6177,6 +6189,13 @@ static void runGame() {
 
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);
+    // Walls near the ears throw it all back: a house or two around, or the command centre.
+    {
+      double walls = 0;
+      for (const World::House& h : G.world.houses()) walls += clampd(1.0 - std::hypot(h.x - cam.eye.x, h.y - cam.eye.y) / 42.0, 0, 1) * 0.8;
+      for (int b = 0; b < 2; b++) walls += clampd(1.0 - len(G.world.base(b).door - cam.eye) / 45.0, 0, 1) * 1.2;
+      view.echo = float(clampd(walls, 0, 1));
+    }
     sound->update(view, cam, feel, rig.mode, dt);
     if (!wavPath.empty()) {
       wavDebt += dt * AudioSynth::kRate;

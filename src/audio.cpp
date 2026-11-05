@@ -23,6 +23,8 @@ AudioSynth::AudioSynth() {
   pending_.reserve(64);
   // Exhaust pipe length, from the manifold to the silencer and back: gives the note its body.
   pipeL_.assign(size_t(kRateF * 0.0058f), 0.f);
+  echoL_.assign(size_t(kRateF * 0.36f), 0.f);
+  echoR_.assign(echoL_.size(), 0.f);
   pipeR_.assign(size_t(kRateF * 0.0058f), 0.f);
 }
 
@@ -179,7 +181,7 @@ void AudioSynth::render(float* out, int frames) {
     now_.engineOn = tgt.engineOn;
     now_.starter = tgt.starter;
 
-    float L = 0, R = 0;
+    float L = 0, R = 0, sendL = 0, sendR = 0;
     const float n1 = noise(), n2 = noise();
 
     // ---- Engine: a real V6 fires six times in two revolutions, in turn from the two banks. Each
@@ -335,18 +337,19 @@ void AudioSynth::render(float* out, int frames) {
       o.now.pan += (want.pan - o.now.pan) * k * 0.3f;
       o.now.dull += (want.dull - o.now.dull) * k * 0.1f;
       o.now.tracks += (want.tracks - o.now.tracks) * k * 0.3f;
+      o.now.doppler += (want.doppler - o.now.doppler) * k * 0.05f;
       o.now.cylinders = want.cylinders;
       o.now.pitch = want.pitch;
       if (o.now.rpm < 20.f) continue;
-      o.firing += double(o.now.rpm) / 60.0 * double(o.now.cylinders) * 0.5 / double(kRateF);
+      o.firing += double(o.now.rpm) / 60.0 * double(o.now.cylinders) * 0.5 * double(o.now.doppler) / double(kRateF);
       if (o.firing >= 1.0) {
         o.firing -= std::floor(o.firing);
         o.pulse += (0.25f + 0.75f * clamp01(o.now.load)) * (1.f + 0.12f * n1);
       }
       o.pulse *= 0.9975f - 0.0015f * clamp01(o.now.rpm / 5000.f);
-      float s = o.a.bandpass(o.pulse, fc(118.f * o.now.pitch), 0.6f) * 2.4f + o.b.bandpass(o.pulse, fc(265.f * o.now.pitch), 0.65f) * 1.5f * (1.f - 0.6f * o.now.dull);
+      float s = o.a.bandpass(o.pulse, fc(118.f * o.now.pitch * o.now.doppler), 0.6f) * 2.4f + o.b.bandpass(o.pulse, fc(265.f * o.now.pitch * o.now.doppler), 0.65f) * 1.5f * (1.f - 0.6f * o.now.dull);
       if (o.now.tracks > 0.2f) {
-        o.link += double(o.now.tracks) / 0.19 / double(kRateF);
+        o.link += double(o.now.tracks) * double(o.now.doppler) / 0.19 / double(kRateF);
         if (o.link >= 1.0) {
           o.link -= std::floor(o.link);
           o.hit = 1.f;
@@ -359,6 +362,8 @@ void AudioSynth::render(float* out, int frames) {
       const float out = o.low * o.now.gain * 0.6f;
       L += out * (1.f - 0.65f * std::max(o.now.pan, 0.f));
       R += out * (1.f + 0.65f * std::min(o.now.pan, 0.f));
+      sendL += out * (1.f - 0.65f * std::max(o.now.pan, 0.f));
+      sendR += out * (1.f + 0.65f * std::min(o.now.pan, 0.f));
     }
 
     // ---- Tank tracks: every link hitting the sprocket and the road wheels.
@@ -434,10 +439,29 @@ void AudioSynth::render(float* out, int frames) {
       }
       L += sum * vc.gainL;
       R += sum * vc.gainR;
+      sendL += sum * vc.gainL;
+      sendR += sum * vc.gainR;
       if (level < 1e-3f && vc.grainsLeft <= 0) vc.on = false;
     }
 
     // ---- Output: remove any DC, then a soft limiter so that a pile-up saturates instead of clipping.
+    // Off the walls: a first answer quickly, a second later, duller each time, and each side from the other side's wall.
+    now_.echo += (tgt.echo - now_.echo) * k * 0.02f;
+    if (now_.echo > 0.003f || sendL != 0.f || sendR != 0.f) {
+      const int size = int(echoL_.size());
+      const auto back = [&](const std::vector<float>& line, float seconds) { return line[size_t((echoAt_ - int(seconds * kRateF) + size) % size)]; };
+      const float wetL = back(echoR_, 0.11f) * 0.62f + back(echoL_, 0.23f) * 0.38f;
+      const float wetR = back(echoL_, 0.13f) * 0.62f + back(echoR_, 0.27f) * 0.38f;
+      const float amount = now_.echo * 0.55f;
+      echoTone_[0] += (wetL - echoTone_[0]) * 0.28f;
+      echoTone_[1] += (wetR - echoTone_[1]) * 0.28f;
+      const float toneL = echoTone_[0], toneR = echoTone_[1];
+      L += toneL * amount;
+      R += toneR * amount;
+      echoL_[size_t(echoAt_)] = sendL + toneR * 0.22f * now_.echo;
+      echoR_[size_t(echoAt_)] = sendR + toneL * 0.22f * now_.echo;
+      echoAt_ = (echoAt_ + 1) % size;
+    }
     dcL_ += (L - dcL_) * 0.0008f;
     dcR_ += (R - dcR_) * 0.0008f;
     L = (L - dcL_) * now_.master;
