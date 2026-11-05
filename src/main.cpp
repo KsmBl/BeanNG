@@ -681,7 +681,7 @@ struct Game {
       e.p = duel.frames[v].cog;
       if (v < Duel::kTanks) {
         const Tank& t = duel.tanks[v];
-        if (t.destroyed || t.mod[TM_ENGINE] <= 0 || t.fuel <= 0) continue;
+        if (t.destroyed || t.mod[TM_ENGINE] <= 0) continue;
         const bool buggy = t.hull == HK_BUGGY;
         e.rpm = float(t.rpm() * (buggy ? kBuggyRevs : 1.0));
         e.load = float(t.throttleAct);
@@ -777,7 +777,6 @@ struct Game {
     part(nullptr, 4, 34, 12, 170, tank.trackOff[0] ? 0.0 : tank.mod[TM_TRACK_L]);
     part(nullptr, 84, 34, 12, 170, tank.trackOff[1] ? 0.0 : tank.mod[TM_TRACK_R]);
     part(nullptr, 34, 188, 32, 12, tank.mod[TM_RADIATOR]);
-    part(nullptr, 44, 200, 12, 8, tank.mod[TM_FUEL]);
     part(nullptr, 36, 96, 10, 10, tank.mod[TM_SIGHT]);
     part(nullptr, 54, 96, 10, 10, tank.mod[TM_RANGE]);
     part(nullptr, 25, 56, 12, 8, tank.mod[TM_PERISCOPE]);
@@ -815,9 +814,7 @@ struct Game {
     s.lonG = (car ? car->lonAcc : tank.lonAcc) / 9.81;
     s.gear = s.foot.inCar ? duel.cars[size_t(myVehicle - Duel::kTanks)].gear : tank.gear;
     s.running = myVehicle >= 0;
-    s.fuel = car ? car->fuelLitres : tank.fuel;
     s.coolant = car ? car->dmg.coolantTemp : 90.0;
-    s.foot.fuelShare = car ? car->fuelLitres / std::max(duel.carsStart[size_t(myVehicle - Duel::kTanks)].fuelLitres, 1.0) : 1.0;
     s.engineLoad = car ? car->throttleAct : (myVehicle >= 0 ? tank.loadNow : 0.0);
     s.inputRpm = 0;
     s.turretYaw = tank.turretYaw;
@@ -867,7 +864,7 @@ struct Game {
       u32 tick = 0;
       double arrived = 0;
       V3 cog, fwd, left, up;
-      float speed = 0, rpm = 0, throttle = 0, brake = 0, steer = 0, fuel = 0, coolant = 0, lat = 0, lon = 0;
+      float speed = 0, rpm = 0, throttle = 0, brake = 0, steer = 0, coolant = 0, lat = 0, lon = 0;
       float theta[4] = {};
       u8 hurt = 0, flat = 0;
       int gear = 1;
@@ -876,7 +873,7 @@ struct Game {
     };
     struct CarShown {
       std::deque<CarFrame> frames;
-      float fuel = 0, coolant = 0;
+      float coolant = 0;
     } shown[Duel::kCars];
     // What the server has told of each vehicle's nodes, against the part they belong to.
     net::VehicleShapes shapes;
@@ -1878,7 +1875,6 @@ struct Game {
           r.get(slow);
           CarShown& c = shown[k];
           if (slow) {
-            r.get(c.fuel);
             r.get(c.coolant);
           }
           if (!r.ok()) continue;
@@ -1892,7 +1888,6 @@ struct Game {
           f.gear = gear;
           f.exploded = flags & 1;
           f.hurt = flags >> 1;
-          f.fuel = c.fuel;
           f.coolant = c.coolant;
           if (!c.frames.empty() && c.frames.back().tick >= tick) continue;
           i16* told = toldCars.data() + shapes.carAt(int(k));
@@ -2151,7 +2146,6 @@ struct Game {
         v.throttleAct = fb.throttle;
         v.brakeAct = fb.brake;
         v.steerAct = fb.steer;
-        v.fuelLitres = fb.fuel;
         v.dmg.coolantTemp = fb.coolant;
         v.latAcc = lerpd(fa.lat, fb.lat, a);
         v.lonAcc = lerpd(fa.lon, fb.lon, a);
@@ -2522,11 +2516,11 @@ struct Game {
       }
 
       if (vehicleNow >= 0 && vehicleNow < Duel::kTanks) {
-        static const char* kLost[TM_COUNT] = {"Motor ausgefallen", "Turmdrehkranz zerstört", "Kanone zerstört", nullptr, "Linke Kette abgerissen", "Rechte Kette abgerissen", "Richtoptik zerstört", "Entfernungsmesser zerstört", "Fahrer-Winkelspiegel zerstört", "Kühler durchschossen", "Treibstoffleitung durchschossen", "Höhenrichtanlage zerstört", "Funkantenne zerstört"};
+        static const char* kLost[TM_COUNT] = {"Motor ausgefallen", "Turmdrehkranz zerstört", "Kanone zerstört", nullptr, "Linke Kette abgerissen", "Rechte Kette abgerissen", "Richtoptik zerstört", "Entfernungsmesser zerstört", "Fahrer-Winkelspiegel zerstört", "Kühler durchschossen", "Höhenrichtanlage zerstört", "Funkantenne zerstört"};
         const Tank& watched = duel.tanks[vehicleNow];
         for (int i = 0; i < TM_COUNT; i++) {
           // Those that bleed slowly say so on the first hit, the others when they are gone.
-          const bool leaking = i == TM_RADIATOR || i == TM_FUEL;
+          const bool leaking = i == TM_RADIATOR;
           const bool lost = leaking ? (watched.mod[i] < 1 && lastMod[i] >= 1) : (watched.mod[i] <= 0 && lastMod[i] > 0);
           if (lost && lastTankWatched == vehicleNow && kLost[i]) {
             alert = kLost[i];
@@ -2547,7 +2541,7 @@ struct Game {
         // What has just gone wrong with the car one is sitting in.
         const int k = vehicleNow - Duel::kTanks;
         if (carWatched == k) {
-          static const char* kCarLost[5] = {"Motor getroffen: er steht", "Ölwanne leck", "Kühler leck", "Tank leck", "Getriebe getroffen"};
+          static const char* kCarLost[5] = {"Motor getroffen: er steht", "Ölwanne leck", "Kühler leck", "", "Getriebe getroffen"};
           for (int i = 0; i < 5; i++)
             if ((carHurt[k] & (1 << i)) && !(seenHurt & (1 << i))) {
               alert = kCarLost[i];
@@ -5339,10 +5333,8 @@ static void runGame() {
       view.steering = G.snap.steering;
       view.seized = G.snap.seized;
       view.gearboxBad = G.snap.gearboxBad;
-      view.tankBad = G.snap.tankBad;
       view.oilBad = G.snap.oilBad;
       view.lhm = G.snap.lhm;
-      view.fuel = G.snap.fuel;
       view.damageMsg = G.snap.damageMsg;
       view.watchOn = G.snap.watchOn;
       view.watchP = G.snap.watchP;

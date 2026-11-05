@@ -442,7 +442,7 @@ void testAccel() {
   ok = b.sane();
   printf("  0-60: %.2f s  0-100: %.2f s  400 m: %.2f s  vmax: %.1f km/h at t=%.0f  sane %d\n", t60, t100, t400, vTop, tTop, ok);
   printf("  (listed: about 8.2 s, 230 km/h)\n");
-  printf("  fuel %.1f l, LHM %.2f l, accumulator %.0f bar, gear %d, shaft twist %.3f rad\n", b.car.fuelLitres, b.car.reservoir * 1000, b.car.accumulator / 1e5, b.car.gear, b.car.shaftAngle[0]);
+  printf("  LHM %.2f l, accumulator %.0f bar, gear %d, shaft twist %.3f rad\n", b.car.reservoir * 1000, b.car.accumulator / 1e5, b.car.gear, b.car.shaftAngle[0]);
 }
 
 void testBraking() {
@@ -741,7 +741,7 @@ void testPowertrain() {
   auto report = [&](double t) {
     if (t >= next) {
       next += 0.5;
-      printf("  t=%4.1f v=%5.1f gear %2d phase %d rpm %5.0f disc %6.1f input %6.1f carrier %6.1f spider %+6.2f clutch %.2f mani %.2f shaft %+6.0f %+6.0f Nm  acc %3.0f bar fuel %.2f\n", t, b.car.speed * 3.6, b.car.gear, b.car.shiftPhase, b.car.rpm(), b.car.discOmega, b.car.inputOmega, b.car.carrierOmega, b.car.spiderOmega, b.car.clutch, b.car.manifold, b.car.wheels[0].driveT, b.car.wheels[1].driveT, b.car.accumulator / 1e5, b.car.fuelLitres);
+      printf("  t=%4.1f v=%5.1f gear %2d phase %d rpm %5.0f disc %6.1f input %6.1f carrier %6.1f spider %+6.2f clutch %.2f mani %.2f shaft %+6.0f %+6.0f Nm  acc %3.0f bar\n", t, b.car.speed * 3.6, b.car.gear, b.car.shiftPhase, b.car.rpm(), b.car.discOmega, b.car.inputOmega, b.car.carrierOmega, b.car.spiderOmega, b.car.clutch, b.car.manifold, b.car.wheels[0].driveT, b.car.wheels[1].driveT, b.car.accumulator / 1e5);
     }
   };
   b.run(9.0, [&](double t, Controls& c) { c.throttle = 1.0; report(t); });
@@ -3067,8 +3067,8 @@ int main(int argc, char** argv) {
           if (pl.vehicle >= 0 && pl.vehicle < Duel::kTanks) {
             const Tank& tk = d->tanks[pl.vehicle];
             printf(" sch %.2f mun %d v %.1f", tk.damage, tk.ammo, d->frames[pl.vehicle].speed);
-            if (struck) printf(" gas %.2f brems %.2f lenk %.2f gang %d mods %.1f %.1f %.1f %.1f", in[i].c.throttle, in[i].c.brake, in[i].c.steer, tk.gear, tk.mod[TM_RING], tk.mod[TM_RADIATOR], tk.mod[TM_FUEL], tk.radiatorHeat);
-            if (struck) printf(" motor %.2f ketten %d%d benzin %.0f set %d", tk.mod[TM_ENGINE], int(tk.trackOff[0]), int(tk.trackOff[1]), tk.fuel, int(pl.items[IT_REPAIR]));
+            if (struck) printf(" gas %.2f brems %.2f lenk %.2f gang %d mods %.1f %.1f %.1f", in[i].c.throttle, in[i].c.brake, in[i].c.steer, tk.gear, tk.mod[TM_RING], tk.mod[TM_RADIATOR], tk.radiatorHeat);
+            if (struck) printf(" motor %.2f ketten %d%d set %d", tk.mod[TM_ENGINE], int(tk.trackOff[0]), int(tk.trackOff[1]), int(pl.items[IT_REPAIR]));
           }
         }
         printf("\n");
@@ -3114,7 +3114,7 @@ int main(int argc, char** argv) {
     printf("Im Auto %d: %d\n", k, int(d->players[0].vehicle == Duel::kTanks + k));
     const auto say = [&](double t) {
       const auto& r = d->carRounds[k];
-      printf("t %4.1f Treffer %2d Tank %d brennt %.1f | Motor fest %d Kuehler %d Oel %d Tank %d Getriebe %d Benzin %.0f Reifen %d%d%d%d | zerstoert %d Fahrer %.0f\n", t, r.hits, r.tankHits, r.burning, int(car.dmg.seized), int(car.dmg.radiator), int(car.dmg.oilLeak), int(car.dmg.tank), int(car.dmg.gearbox), car.fuelLitres, car.wheels[0].deflate > 0, car.wheels[1].deflate > 0, car.wheels[2].deflate > 0, car.wheels[3].deflate > 0, int(car.exploded), d->players[0].soldier.hp);
+      printf("t %4.1f Treffer %2d Tank %d brennt %.1f | Motor fest %d Kuehler %d Oel %d Getriebe %d Reifen %d%d%d%d | zerstoert %d Fahrer %.0f\n", t, r.hits, r.tankHits, r.burning, int(car.dmg.seized), int(car.dmg.radiator), int(car.dmg.oilLeak), int(car.dmg.gearbox), car.wheels[0].deflate > 0, car.wheels[1].deflate > 0, car.wheels[2].deflate > 0, car.wheels[3].deflate > 0, int(car.exploded), d->players[0].soldier.hp);
     };
     double t = 0;
     say(t);

@@ -776,7 +776,7 @@ bool Bot::goodTank(const Duel& d, int v) const {
   const Tank& t = d.tanks[v];
   if (t.destroyed || givenUp_[v] || d.occupied(v) || t.ammo == 0 || t.mod[TM_GUN] <= 0) return false;
   if (t.kind == TK_ARTILLERY) return false;  // a howitzer wants a different head
-  return !t.trackOff[0] && !t.trackOff[1] && t.mod[TM_ENGINE] > 0 && t.fuel > 0;
+  return !t.trackOff[0] && !t.trackOff[1] && t.mod[TM_ENGINE] > 0;
 }
 
 void Bot::chooseTank(const Duel& d, int me, V3 from) {
@@ -1235,7 +1235,7 @@ void Bot::inTank(Duel& d, int me) {
   const Tank& t = d.tanks[v];
   const VehicleFrame& f = d.frames[v];
   const bool driver = pl.seat == 0;
-  const bool cantDrive = t.trackOff[0] || t.trackOff[1] || t.mod[TM_ENGINE] <= 0 || t.fuel <= 0;
+  const bool cantDrive = t.trackOff[0] || t.trackOff[1] || t.mod[TM_ENGINE] <= 0;
   const bool gunGone = t.mod[TM_GUN] <= 0;
   const double foeDist = seesFoe_ ? len(foeAt_ - f.cog) : 1e9;
   const bool stopped = std::fabs(f.speed) < 1.5;
@@ -1259,7 +1259,7 @@ void Bot::inTank(Duel& d, int me) {
   }
 
   // What a kit can put right is worth getting out for, once nobody is close. An empty tank it cannot fill.
-  const bool mendable = (t.trackOff[0] || t.trackOff[1] || t.mod[TM_ENGINE] <= 0 || gunGone) && t.fuel > 0 && pl.items[IT_REPAIR] > 0;
+  const bool mendable = (t.trackOff[0] || t.trackOff[1] || t.mod[TM_ENGINE] <= 0 || gunGone) && pl.items[IT_REPAIR] > 0;
   brokenClock_ = cantDrive || gunGone ? brokenClock_ + kThinkEvery : 0;
   if (mendable && stopped && (foeDist > 120.0 || brokenClock_ > 14.0)) {
     repairing_ = true;

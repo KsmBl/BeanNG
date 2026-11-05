@@ -45,7 +45,7 @@ struct HullSpec {
 const HullSpec& hullSpec(HullKind k);
 std::string tankMeshFile(HullKind hull, TurretKind turret);
 
-enum TankModule { TM_ENGINE, TM_RING, TM_GUN, TM_AMMO, TM_TRACK_L, TM_TRACK_R, TM_SIGHT, TM_RANGE, TM_PERISCOPE, TM_RADIATOR, TM_FUEL, TM_ELEVATION, TM_ANTENNA, TM_COUNT };
+enum TankModule { TM_ENGINE, TM_RING, TM_GUN, TM_AMMO, TM_TRACK_L, TM_TRACK_R, TM_SIGHT, TM_RANGE, TM_PERISCOPE, TM_RADIATOR, TM_ELEVATION, TM_ANTENNA, TM_COUNT };
 
 class Tank {
  public:
@@ -116,7 +116,6 @@ class Tank {
   V3 cog, vCog, fwd{1, 0, 0}, left{0, 1, 0}, up{0, 0, 1};
   V3 muzzle, gunDir{1, 0, 0}, sight;
   double speed = 0, latAcc = 0, lonAcc = 0, roll = 0;
-  double fuel = 1160;
   double rpm() const { return engineOmega * 60.0 / (2.0 * PI); }
 
   // Damage. A direct hit does about half of what it takes; beside the running gear it throws the track off.
@@ -125,7 +124,7 @@ class Tank {
   bool destroyed = false;
   double burnTime = 0;
   bool trackOff[2] = {false, false};
-  double mod[TM_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};  // what is left of each part; at nothing it no longer works
+  double mod[TM_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};  // what is left of each part; at nothing it no longer works
   double radiatorHeat = 0;  // grows with a holed radiator, and takes the engine's power with it
   // A bullet on its way from a to b: what it hits among the weak spots, with this much force (1 is the big rifle).
   bool bulletHit(Sim& sim, V3 a, V3 b, double force);
@@ -195,10 +194,10 @@ class Tank {
     V3 vel, muzzle, gunDir, sight;
     float recoil = 0, turretYaw = 0, gunPitch = 0, reload = 0, reloadTime = 4, damage = 0, burnTime = 0;
     float trackPhase[2] = {}, trackOmega[2] = {};
-    float engineOmega = 0, throttle = 0, brake = 0, steer = 0, speed = 0, latAcc = 0, lonAcc = 0, fuel = 0, load = 0;
+    float engineOmega = 0, throttle = 0, brake = 0, steer = 0, speed = 0, latAcc = 0, lonAcc = 0, load = 0;
     int gear = 1, ammo = -1;
     bool destroyed = false, trackOff[2] = {};
-    float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    float mod[TM_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
     int missiles = 0, smokeCharges = 0;
     bool netOn = false;
     float netClock = 0;
@@ -239,7 +238,7 @@ class Tank {
     V3 at;
     double radius, toughness;
   };
-  static constexpr int kBulletSpots = 21;
+  static constexpr int kBulletSpots = 19;
   void keepUpright(Sim& sim);
   void bulletSpots(const Sim& sim, V3 ring, BulletSpot out[kBulletSpots]) const;
   void aimAngles(V3 ring, const Controls& in, double& wantYaw, double& wantPitch) const;

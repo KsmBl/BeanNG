@@ -115,7 +115,6 @@ Vehicle buildOne1(Sim& sim, V3 spawn, CarRig* rig) {
   veh.activaOn = false;
   veh.engineOmega = 105;
   veh.discOmega = 105;
-  veh.fuelLitres = 80;
 
   std::set<std::pair<u32, u32>> seen;
   const auto world = [&](V3 d, int side) { return spawn + V3{kNoseX - d.x, side == 0 ? d.y : -d.y, d.z}; };

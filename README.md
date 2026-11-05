@@ -67,7 +67,7 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Panzerung:** Es zählt, wo und wie eine Granate auftrifft. Von vorn hält ein mittlerer Panzer fünf Volltreffer der 105 mm aus, in die Seite vier, ins Heck drei; der Turm hat seine eigene Front, und das Dach ist dünn. Je schräger der Treffer, desto weniger richtet er an. Trifft eine Kanonengranate flacher als etwa 75° zur Senkrechten auf, prallt sie ab und fliegt weiter; der Schütze sieht dann „Abpraller“. Die Artillerie schert das nicht, Raketen und Minen prallen ebenfalls nicht ab.
 
-**Schaden am Panzer:** Motor, Kanone, Turmkranz, Munition und Ketten nehmen einzeln Schaden. Schwachstellen wie Optik, Entfernungsmesser, Winkelspiegel, Kühler, Treibstoffleitung, Höhenrichtanlage und Antenne erreicht auch das Scharfschützengewehr, und jede nimmt dem Panzer etwas anderes.
+**Schaden am Panzer:** Motor, Kanone, Turmkranz, Munition und Ketten nehmen einzeln Schaden. Schwachstellen wie Optik, Entfernungsmesser, Winkelspiegel, Kühler, Höhenrichtanlage und Antenne erreicht auch das Scharfschützengewehr, und jede nimmt dem Panzer etwas anderes.
 
 **Scharfschützengewehr:** schießt aus jeder Haltung und zieht eine kurze Rauchspur, Zoom 6x bis 24x, Geschossabfall, Wind und Flugzeit. Auf 1000 m sind das gut eine Sekunde und 5,5 m Abfall. Im Auto trifft es, was im Weg liegt: Tank, Ölwanne, Motor, Kühler, Getriebe, Reifen oder den Fahrer.
 

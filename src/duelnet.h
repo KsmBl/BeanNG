@@ -89,7 +89,7 @@ inline void writeState(Writer& w, const Tank::NetState& n, V3 cog, bool slow) {
     w.putV3(n.missileV);
   }
   if (!slow) return;
-  for (float v : {n.reloadTime, n.damage, n.burnTime, n.fuel, n.load, n.netClock}) w.put(v);
+  for (float v : {n.reloadTime, n.damage, n.burnTime, n.load, n.netClock}) w.put(v);
   w.put(i16(n.ammo));
   for (float m : n.mod) w.put(m);
   w.put(u8(n.missiles));
@@ -151,7 +151,7 @@ inline void readState(Reader& r, Tank::NetState& n, V3 cog) {
     n.missileV = r.getV3();
   }
   if (!(flags & 32)) return;
-  for (float* v : {&n.reloadTime, &n.damage, &n.burnTime, &n.fuel, &n.load, &n.netClock}) r.get(*v);
+  for (float* v : {&n.reloadTime, &n.damage, &n.burnTime, &n.load, &n.netClock}) r.get(*v);
   i16 ammo = 0;
   r.get(ammo);
   n.ammo = ammo;

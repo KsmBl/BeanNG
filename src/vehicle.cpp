@@ -839,8 +839,8 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   const double rpmNow = rpm();
   double th = throttleAct;
   bool ignition = engineRunning;
-  if (fuelLitres <= 0 || dmg.seized) ignition = false;
-  if (throttleAct > 0.15 && !engineRunning && !dmg.seized && starterClock <= 0 && fuelLitres > 0) starterClock = 1.2;
+  if (dmg.seized) ignition = false;
+  if (throttleAct > 0.15 && !engineRunning && !dmg.seized && starterClock <= 0) starterClock = 1.2;
   // Automated shifting manages the revs: throttle closed on the way up, a blip to match on the way down.
   if (shiftPhase != 0) {
     const double wanted = std::fabs(ratioOf(shiftTarget) * carrierOmega);
@@ -886,13 +886,12 @@ void Vehicle::updateDrivetrain(Sim& sim, const Controls& in, double dt) {
   if (starterClock > 0) {
     starterClock -= dt;
     Te += 55.0;
-    if (rpmNow > 500.0 && !dmg.seized && fuelLitres > 0) {
+    if (rpmNow > 500.0 && !dmg.seized) {
       engineRunning = true;
       starterClock = 0;
     }
   }
   engineTorqueOut = Te;
-  if (ignition) fuelLitres = std::max(0.0, fuelLitres - load * rpmNow * 1.6e-6 * dt);
 
   // ---- Clutch: automated. Slips at launch, opens for a shift, closes progressively afterwards.
   clutchRamp_ = std::min(1.0, clutchRamp_ + dt * 11.0);
@@ -1114,11 +1113,6 @@ void Vehicle::updateDamage(Sim& sim, double dt) {
       note("GETRIEBE VOM MOTOR GERISSEN");
     }
   }
-  if (!dmg.tank && plastified(tankBeams, 0.08) >= 3) {
-    dmg.tank = true;
-    note("TANK LECK");
-  }
-  if (dmg.tank) fuelLitres = std::max(0.0, fuelLitres - dt * 0.4);
   // Oil temperature: it carries the bearings' heat away. As the level drops the same heat goes into
   // less and less oil, and at the end nothing lubricates the bearings. That, not the coolant, seizes it.
   {

@@ -2526,8 +2526,6 @@ struct Renderer::Impl {
       if (s.foot.inCar) {
         snprintf(buf, sizeof buf, "%.0f %%", s.foot.hp);
         row(IC_ENGINE, "Gesundheit", float(s.foot.hp / 100.0), s.foot.hp < 34 ? red : green, buf);
-        snprintf(buf, sizeof buf, "%.0f L", s.fuel);
-        row(IC_FUEL, "Tank", float(s.foot.fuelShare), s.foot.fuelShare < 0.1 ? red : green, buf);
         snprintf(buf, sizeof buf, "%.0f °C", s.coolant);
         row(IC_WATER, "Wasser", float((s.coolant - 40.0) / 95.0), s.coolant > 112 ? red : teal, buf);
       } else if (!s.tank) {
@@ -2544,8 +2542,6 @@ struct Renderer::Impl {
           snprintf(buf, sizeof buf, "%.0f bar", s.accum / 1e5);
           row(IC_WRENCH, "LHM", float(s.accum / 170e5), s.accum > 90e5 ? green : red, buf);
         }
-        snprintf(buf, sizeof buf, "%.0f L", s.fuel);
-        row(IC_FUEL, "Tank", float(s.fuel / (s.conventional ? 80.0 : 55.0)), s.fuel < 6 ? red : green, buf);
       } else {
         if (s.reload > 0) snprintf(buf, sizeof buf, "%.1f s", s.reload);
         else if (s.tankAmmo >= 0) snprintf(buf, sizeof buf, s.tankAmmo ? "bereit · %d" : "leer", s.tankAmmo);
@@ -2556,9 +2552,6 @@ struct Renderer::Impl {
         if (s.missiles > 0 || s.missileLive) {
           snprintf(buf, sizeof buf, s.missileLive ? "%d + fliegt" : "%d", s.missiles);
           row(IC_SHELL, "Raketen", float(s.missiles) / 8.f, teal, buf);
-        } else {
-          snprintf(buf, sizeof buf, "%.0f L", s.fuel);
-          row(IC_FUEL, "Tank", float(s.fuel / 1160.0), green, buf);
         }
         if (s.tankDead) snprintf(buf, sizeof buf, "zerstört");
         else snprintf(buf, sizeof buf, "%.0f %%", s.tankArmour * 100.0);
@@ -2682,7 +2675,6 @@ struct Renderer::Impl {
       warn(s.steering, IC_WARN, "Lenkung defekt");
       warn(s.flat[0] || s.flat[1] || s.flat[2] || s.flat[3], IC_TYRE, "Reifenschaden");
       warn(s.gearboxBad, IC_WARN, "Getriebe defekt");
-      warn(s.tankBad, IC_FUEL, "Tank leck");
       warn(s.oilBad, IC_OIL, "Ölverlust");
     }
 

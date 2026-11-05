@@ -120,7 +120,6 @@ Vehicle buildHummer(Sim& sim, V3 spawn, CarRig* rig) {
   veh.activaOn = false;
   veh.engineOmega = 72;
   veh.discOmega = 72;
-  veh.fuelLitres = 140;
   veh.steerTravel = 0.064;
 
   std::set<std::pair<u32, u32>> seen;

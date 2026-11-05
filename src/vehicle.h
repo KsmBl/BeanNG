@@ -139,7 +139,7 @@ struct HydroAxle {
 struct DamageState {
   bool radiator = false, hydraulics = false, engineMount = false, steering = false;
   bool seized = false;
-  bool gearbox = false, bellHousing = false, tank = false, oilLeak = false;
+  bool gearbox = false, bellHousing = false, oilLeak = false;
   double coolantTemp = 90;
   double oilTemp = 95;
   double coolant = 1.0;
@@ -185,7 +185,6 @@ class Vehicle {
   int shiftPhase = 0;          // 0 in gear, 1 clutch opening, 2 synchronising
   int shiftTarget = 1;
   double shiftClock = 0;
-  double fuelLitres = 55;
   double oilLevel = 1;
   double starterClock = 0;
 

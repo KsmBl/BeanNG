@@ -363,7 +363,7 @@ void Tank::dampHull(Sim& sim, double dt) {
 }
 
 // A narrow thing with its gun high up, at 150 km/h on open ground. What makes it drivable is a low centre of gravity
-// a real one would get from its engine and fuel: here a hand that pulls it back on its tracks, and over if it has gone.
+// a real one would get from its engine: here a hand that pulls it back on its tracks, and over if it has gone.
 void Tank::keepUpright(Sim& sim) {
   if (destroyed) return;
   const double weight = 6000.0 * 9.81;
@@ -657,10 +657,9 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   const double speedRatio = engineOmega > 1.0 ? clampd(inputOmega / engineOmega, 0, 1) : 0;
   const double multiply = lerpd(2.2, 1.0, std::min(speedRatio / 0.85, 1.0));
   // What is left of the engine, and a heavy turret takes its share of what it can do.
-  // A holed radiator lets it run hot in a minute or so; a cut fuel line empties the tanks in a few.
+  // A holed radiator lets it run hot in a minute or so.
   radiatorHeat = std::min(radiatorHeat + (1.0 - mod[TM_RADIATOR]) * dt / 45.0, 1.0);
-  fuel = std::max(0.0, fuel - (1.0 - mod[TM_FUEL]) * 7.0 * dt);
-  const double power = (fuel <= 0 ? 0.0 : 1.0) * clampd(1.0 - radiatorHeat * 0.75, 0.25, 1.0) * spec().powerScale * hullSpec().powerScale * (mod[TM_ENGINE] <= 0 ? 0.0 : lerpd(0.35, 1.0, mod[TM_ENGINE]));
+  const double power = clampd(1.0 - radiatorHeat * 0.75, 0.25, 1.0) * spec().powerScale * hullSpec().powerScale * (mod[TM_ENGINE] <= 0 ? 0.0 : lerpd(0.35, 1.0, mod[TM_ENGINE]));
   const double Te = loadNow * engineTorque(rpmNow) * hullSpec().torque * power - 80.0 - engineOmega * 0.8;
   engineOmega += (Te - Tconv) * dt / 7.0;
   engineOmega = clampd(engineOmega, 0.0, 270.0);
@@ -923,7 +922,7 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   Contact c;
   if (sim.world->contact(missileP, c)) hit = true;
   else hit = pathHit(sim, from, missileP, missileAge < 1.5, at);
-  // Enough fuel for the whole map and back; then it comes down wherever it is.
+  // Enough to go the whole map and back; then it comes down wherever it is.
   if (hit || missileAge > 60.0) {
     sim.blastDir = norm(missileV);
     sim.blastBy = missileBy;
@@ -949,8 +948,6 @@ void Tank::bulletSpots(const Sim& sim, V3 ring, BulletSpot out[kBulletSpots]) co
       {TM_PERISCOPE, onHull(1.05, 0.48, -0.12), 0.2, 1.0},     // the driver's periscopes on the glacis
       {TM_RADIATOR, onHull(5.55, 0.62, 0.03), 0.55, 2.0},      // the cooling grilles on the engine deck
       {TM_RADIATOR, onHull(5.55, -0.62, 0.03), 0.55, 2.0},
-      {TM_FUEL, onHull(6.9, 0.95, -0.3), 0.2, 1.0},            // the fuel line low on the rear plate
-      {TM_FUEL, onHull(6.9, -0.95, -0.3), 0.2, 1.0},
       {TM_RING, onTurret(1.28, 0, 0.02), 0.22, 2.0},           // the gap under the turret, front, sides and back
       {TM_RING, onTurret(0, 1.3, 0.02), 0.22, 2.0},
       {TM_RING, onTurret(0, -1.3, 0.02), 0.22, 2.0},
@@ -984,8 +981,8 @@ void Tank::weakPoints(const Sim& sim, std::vector<WeakPoint>& out) const {
   bool named[TM_COUNT] = {};
   for (const BulletSpot& s : spots) {
     if (mod[s.module] <= 0) continue;
-    const bool crippling = s.module == TM_TRACK_L || s.module == TM_TRACK_R || s.module == TM_RING || s.module == TM_FUEL || s.module == TM_RADIATOR;
-    static constexpr const char* kNames[TM_COUNT] = {"", "Turmring", "", "", "Kette", "Kette", "Optik", "Entfernungsmesser", "Winkelspiegel", "Kühler", "Treibstoff", "Höhenrichtwerk", "Antenne"};
+    const bool crippling = s.module == TM_TRACK_L || s.module == TM_TRACK_R || s.module == TM_RING || s.module == TM_RADIATOR;
+    static constexpr const char* kNames[TM_COUNT] = {"", "Turmring", "", "", "Kette", "Kette", "Optik", "Entfernungsmesser", "Winkelspiegel", "Kühler", "Höhenrichtwerk", "Antenne"};
     out.push_back({s.at, s.radius, crippling ? 1 : 2, named[s.module] ? "" : kNames[s.module]});
     named[s.module] = true;
   }
@@ -1329,7 +1326,6 @@ Tank::NetState Tank::netState() const {
   n.speed = float(speed);
   n.latAcc = float(latAcc);
   n.lonAcc = float(lonAcc);
-  n.fuel = float(fuel);
   n.bounces = bounces;
   n.load = float(loadNow);
   n.gear = gear;
@@ -1376,7 +1372,6 @@ void Tank::applyNetState(Sim& sim, const NetState& n, double dt) {
   speed = n.speed;
   latAcc = n.latAcc;
   lonAcc = n.lonAcc;
-  fuel = n.fuel;
   bounces = n.bounces;
   loadNow = n.load;
   gear = n.gear;

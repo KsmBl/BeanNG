@@ -1448,7 +1448,7 @@ void Duel::stepCarRounds(double dt) {
     if (r.burning < 0) continue;
     r.burning += dt;
     if (r.burning < kCarBurnTime) continue;
-    // The fuel, in the end. Not much of a bang, but nothing is left to drive.
+    // In the end it goes up. Not much of a bang, but nothing is left to drive.
     car.wreck(sim);
     car.burnTime = 0;
     sim.blastBy = carHitBy[k];
@@ -1521,9 +1521,6 @@ bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind, int owner, bool gatling
       car.dmg.radiator = true;
       break;
     case TANK:
-      car.dmg.tank = true;
-      // Through a full tank a bullet this size leaves a big hole.
-      car.fuelLitres = std::max(0.0, car.fuelLitres - 8.0);
       if (gatling) carRounds[k].tankHits++;
       break;
     case GEARBOX:
