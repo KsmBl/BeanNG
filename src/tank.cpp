@@ -48,8 +48,8 @@ const TurretSpec& turretSpec(TurretKind k) {
       // Slow enough that the whole map lies inside the high arc: half a minute in the air from end to end.
       {"Artillerie", "assets/leopard_arty.mesh", 1.80, 0.70, 6.40, 0.50, 260e3, 12.0, 8, 160.0, 12000.0, 30.0, 60.0, -3, 78, 14, 10, 0},
       {"Lenkraketen", "assets/leopard_missile.mesh", 0.85, 0.95, 2.20, 0.05, 8e3, 3.0, 20, 700.0, 260.0, 5.0, 6.0, -6, 20, 40, 30, 8},
-      // 400 rounds a minute. What comes out is a rifle's bullet, not a shell: the game takes it from here, see Duel::step.
-      {"MG", "assets/buggy.mesh", 0.06, 1.00, 1.35, 0.0, 0.0, 60.0 / 400.0, 800, 800.0, 0.0, 0.0, 0.0, -14, 50, 260, 170, 0},
+      // 1600 rounds a minute. What comes out is a rifle's bullet, not a shell: the game takes it from here, see Duel::step.
+      {"MG", "assets/buggy.mesh", 0.06, 1.00, 1.35, 0.0, 0.0, 60.0 / 1600.0, 1000, 800.0, 0.0, 0.0, 0.0, -14, 50, 260, 170, 0},
   };
   return table[k];
 }
