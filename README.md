@@ -194,6 +194,7 @@ Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom V
 | Punktestand zeigen | TAB halten | Back halten |
 | Ducken ein, aus | Strg | rechten Stick klicken |
 | Helikopter: steigen, sinken | Leertaste, Strg | A, B halten |
+| Kettenbuggy | Rast im Buggy zum Gegner, umkreist ihn und schießt in Feuerstößen mit dem MG. Sind beide Buggys weg, nimmt er einen Panzer. |
 | Menü | ESC | Start |
 | Im Menü wählen, ändern, bestätigen, zurück | Pfeile, ENTER, ESC | Steuerkreuz oder linker Stick, A, B |
 | Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | X, LB RB |

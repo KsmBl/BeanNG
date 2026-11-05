@@ -50,7 +50,7 @@ int treesAround(const World& w, V3 p, double reach) {
 }  // namespace
 
 const char* Bot::tacticName(Tactic t) {
-  static const char* const kNames[kTacticCount] = {"Sturm", "Flanke", "Hinterhalt", "Scharfschuetze", "Pluenderer", "Spion", "Lenkrakete", "Helikopter"};
+  static const char* const kNames[kTacticCount] = {"Sturm", "Flanke", "Hinterhalt", "Scharfschuetze", "Pluenderer", "Spion", "Lenkrakete", "Helikopter", "Kettenbuggy"};
   return t < kTacticCount ? kNames[t] : "?";
 }
 
@@ -117,7 +117,7 @@ void Bot::pickTactic(const Duel& d, int me) {
   (void)d;
   (void)me;
   lastTactic_ = picked_ ? tactic_ : lastTactic_;
-  static constexpr double kWeight[kTacticCount] = {3.0, 3.0, 3.0, 2.0, 2.0, 1.5, 2.0, 2.5};
+  static constexpr double kWeight[kTacticCount] = {3.0, 3.0, 3.0, 2.0, 2.0, 1.5, 2.0, 2.5, 2.5};
   // Never the same way twice running: whoever was caught out by it last time is ready for it now.
   double total = 0;
   for (int t = 0; t < kTacticCount; t++)
@@ -157,7 +157,7 @@ void Bot::chooseLoadout(Duel& d, int me) {
     case SCAVENGE:  // travelling light: what it needs is out there
       items[IT_AR] = 1, items[IT_SMALL_AMMO] = 3, items[IT_SMOKE] = 2;
       break;
-    case FLANK: case SPY: case MISSILE: case AIR:
+    case FLANK: case SPY: case MISSILE: case AIR: case RAID:
       items[IT_REPAIR] = 1, items[IT_AR] = 1, items[IT_SMALL_AMMO] = 4, items[IT_SMOKE] = 4;
       break;
     default:
@@ -783,18 +783,26 @@ void Bot::chooseTank(const Duel& d, int me, V3 from) {
   if (wantVehicle_ >= 0 && wantClock_ > 70.0) givenUp_[wantVehicle_] = true;
   if (wantVehicle_ >= 0 && wantVehicle_ < Duel::kTanks && goodTank(d, wantVehicle_)) return;
   wantVehicle_ = -1;
-  const TurretKind wantTurret = tactic_ == MISSILE ? TK_MISSILE : TK_STANDARD;
+  const bool wantBuggy = tactic_ == RAID;
+  const TurretKind wantTurret = wantBuggy ? TK_MG : (tactic_ == MISSILE ? TK_MISSILE : TK_STANDARD);
   const HullKind wantHull = tactic_ == FLANK || tactic_ == SPY || tactic_ == SCAVENGE || tactic_ == SNIPER ? HK_FAST : (tactic_ == AMBUSH ? HK_HEAVY : ((me & 1) ? HK_HEAVY : HK_MEDIUM));
   double best = 1200.0 * 1200.0 * 40.0;
   for (int v = 0; v < Duel::kTanks; v++) {
     if (!goodTank(d, v)) continue;
     const Tank& t = d.tanks[v];
+    // The buggy is for a rush, or a plan of its own: nobody else thinks of it as a tank to go to war in. And whoever
+    // has made that plan takes nothing else, while a rush takes what there is.
+    if (t.kind == TK_MG ? !wantBuggy : tactic_ == RAID) continue;
     double dist = std::max(len2(d.frames[v].cog - from), 100.0);
     // Each bot leans to another one, and the front row is the easy way out of the yard.
     dist *= 1.0 + double((v + me * 5) % 7) * 0.08;
     if (t.kind != wantTurret) dist *= t.kind == TK_LIGHT ? 30.0 : 3.0;
     if (t.hull != wantHull) dist *= 1.6;
     if (dist < best) best = dist, wantVehicle_ = v;
+  }
+  // Both of ours are gone or in use: then it is a tank like everyone else's.
+  if (wantVehicle_ < 0 && tactic_ == RAID) {
+    tactic_ = STORM;
   }
   if (wantVehicle_ != wasWanted) {
     wantClock_ = 0;
@@ -1178,6 +1186,17 @@ void Bot::fightInTank(Duel& d, int me) {
     };
     if (foeFlying && seenFor_ < 0.3) newOffset();
     aimAt(d, me, t.spec().shellSpeed, t.muzzle);
+    if (t.kind == TK_MG) {
+      // Bursts, close enough to be of use and with the gun about on them, and the aim wanders between them.
+      burstClock_ -= kThinkEvery;
+      if (burstClock_ < -chance(0.5, 1.2)) {
+        burstClock_ = chance(0.8, 2.0);
+        newOffset();
+      }
+      const V3 want = norm(held_.c.aimPoint - t.muzzle);
+      held_.fireHeld = !gunGone && t.ammo != 0 && seenFor_ > kReaction * reactSkill_ && burstClock_ > 0 && dot(want, t.gunDir) > 0.995 && dist < 350.0;
+      return;
+    }
     // Lying in wait: nothing that gives it away until they are well inside.
     const bool holdFire = tactic_ == AMBUSH && atPost_ && dist > kAmbushRange && shotsFromPost_ == 0;
     const V3 wanted = norm(flat(held_.c.aimPoint - t.muzzle));
@@ -1194,7 +1213,10 @@ void Bot::fightInTank(Duel& d, int me) {
       if (atPost_) shotsFromPost_++;
       newOffset();
     }
-  } else if (lastSeenAge_ < 12.0) {
+    return;
+  }
+  held_.fireHeld = false;
+  if (lastSeenAge_ < 12.0) {
     held_.c.aimPoint = lastSeen_;
   } else if (atPost_) {
     held_.c.aimPoint = watch_;
@@ -1296,6 +1318,21 @@ void Bot::inTank(Duel& d, int me) {
   // Stuck over and over, whatever it tries: this tank is not going anywhere any more.
   if (stuckCount_ >= 5 && stopped) {
     bail(v);
+    return;
+  }
+
+  // The buggy lives by not being where the shell lands: fast all the way, and round them in circles once it is there.
+  if (t.kind == TK_MG) {
+    if (seesFoe_ && foeDist < 170.0) {
+      doing_ = "umkreist sie im Buggy";
+      const V3 away = norm(flat(f.cog - foeAt_)), across{-away.y, away.x, 0};
+      driveTowards(d, me, foeAt_ + (away + across * dodgeSide_) * 60.0, foeDist < 80.0 ? 17.0 : 26.0);
+      return;
+    }
+    doing_ = "rast im Buggy zu ihnen";
+    const V3 goal = seesFoe_ ? foeAt_ : goalFor(d, me, f.cog);
+    if (pathAge_ > 15.0 || len(flat(goal - pathGoal_)) > 40.0 || d.world.bridgeFalls() != fallsSeen_) planTo(d, f.cog, goal);
+    driveTowards(d, me, nextPoint(f.cog, 28.0), 36.0);
     return;
   }
 

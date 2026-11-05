@@ -3000,6 +3000,7 @@ int main(int argc, char** argv) {
     const bool idle = argc > 4 && !strcmp(argv[4], "ford");  // and the other side just standing there, out of sight until one is close
     // What a guided missile does to the tank bot 0 is in: square on the nose, again and again, as long as it sits in one.
     const bool struck = argc > 4 && !strcmp(argv[4], "hit");
+    const bool raidOnly = argc > 4 && !strcmp(argv[4], "raid");
     const bool airOnly = argc > 4 && !strcmp(argv[4], "air");  // only helicopters: do they get up, and do they find anyone
     const int rounds = argc > 5 ? atoi(argv[5]) : 2;
     double nextStrike = 40.0;
@@ -3013,6 +3014,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < count; i++) {
       bots.push_back(Bot(u32(i + 1)));
       if (airOnly && i % 2 == 0) bots.back().forceTactic(Bot::AIR);
+      if (raidOnly && i % 2 == 0) bots.back().forceTactic(Bot::RAID);
       d->players[i].present = true;
     }
     Duel::Intent in[Duel::kMaxPlayers];

@@ -8,7 +8,7 @@
 
 class Bot {
  public:
-  enum Tactic : u8 { STORM, FLANK, AMBUSH, SNIPER, SCAVENGE, SPY, MISSILE, AIR, kTacticCount };
+  enum Tactic : u8 { STORM, FLANK, AMBUSH, SNIPER, SCAVENGE, SPY, MISSILE, AIR, RAID, kTacticCount };
   void forceTactic(Tactic t) { forced_ = t; }  // for the test bench
   static const char* tacticName(Tactic t);
   explicit Bot(u32 seed = 1) {
@@ -118,6 +118,7 @@ class Bot {
   double wantHeliClock_ = 0, mendClock_ = 0, orbitSide_ = 1, orbitClock_ = 0, wantHigh_ = 45.0;
 
   // The plan for this round.
+  double burstClock_ = 0;
   Tactic tactic_ = STORM, lastTactic_ = kTacticCount;
   bool picked_ = false;
   double tacticClock_ = 0, tacticLimit_ = 1e9;
