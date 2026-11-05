@@ -206,6 +206,12 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
     axle(kSprocketX, kSprocketZ, T.sprocket[side]);
     axle(kIdlerX, kIdlerZ, T.idler[side]);
   }
+  // Where each wheel belongs along the hull, for as long as the tank lives.
+  {
+    const V3 O0 = (sim.pos[T.refFL] + sim.pos[T.refFR] + sim.pos[T.refRL] + sim.pos[T.refRR]) * 0.25;
+    const V3 ahead0 = norm(sim.pos[T.refFL] + sim.pos[T.refFR] - sim.pos[T.refRL] - sim.pos[T.refRR]);
+    for (Tank::RoadWheel& w : T.wheels) w.ahead = dot((sim.pos[w.in] + sim.pos[w.out]) * 0.5 - O0, ahead0);
+  }
   sim.endObj();
   sim.objs[T.hullObj].armoured = true;
   T.rigidNodes_ = hull;
@@ -669,6 +675,26 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   const double dNow = trackOmega[1] - trackOmega[0];
   const double Tsteer = clampd((dWant - dNow) * 60000.0, -520000.0, 520000.0);
   const double Tside[2] = {0.5 * Tdrive - 0.5 * Tsteer, 0.5 * Tdrive + 0.5 * Tsteer};
+
+  // A trailing arm only swings: with nothing else in the way, what the track pulls with takes the wheel forward under its
+  // pivot and over to the far side, up into the hull, where it can no longer be seen. The real arm has a stop.
+  {
+    const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
+    const V3 vO = (sim.vel[refFL] + sim.vel[refFR] + sim.vel[refRL] + sim.vel[refRR]) * 0.25;
+    const double gear = hullSpec().gearMass;
+    constexpr double kFree = 0.10;
+    for (const RoadWheel& w : wheels) {
+      const V3 C = (sim.pos[w.in] + sim.pos[w.out]) * 0.5;
+      const double off = dot(C - O, fwd) - w.ahead;
+      if (std::fabs(off) <= kFree) continue;
+      const double swing = dot((sim.vel[w.in] + sim.vel[w.out]) * 0.5 - vO, fwd);
+      const double pull = -(std::copysign(std::fabs(off) - kFree, off) * 1.5e6 + swing * 9000.0) * gear;
+      const V3 F = fwd * pull;
+      sim.force[w.in] += F * 0.5;
+      sim.force[w.out] += F * 0.5;
+      addToHull(sim, C, F * -1.0);
+    }
+  }
 
   // Track forces, then the tracks themselves.
   double Fsum[2] = {};

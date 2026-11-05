@@ -53,6 +53,7 @@ class Tank {
   static constexpr double kSprocketR = 0.33;  // drive sprocket, at the rear
 
   struct RoadWheel {
+    double ahead = 0;  // along the hull from its reference point, as built
     u32 in = 0, out = 0;
     bool left = true;
     double Fn = 0;
