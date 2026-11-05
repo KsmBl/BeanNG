@@ -10,7 +10,12 @@ class Bot {
  public:
   enum Tactic : u8 { STORM, FLANK, AMBUSH, SNIPER, SCAVENGE, SPY, MISSILE, kTacticCount };
   static const char* tacticName(Tactic t);
-  explicit Bot(u32 seed = 1) : rand_(seed * 2654435761u + 12345u) {
+  explicit Bot(u32 seed = 1) {
+    // Well stirred: numbers next to each other must not make bots that start out alike.
+    rand_ = seed * 2654435761u + 12345u;
+    rand_ = (rand_ ^ (rand_ >> 15)) * 2246822519u;
+    rand_ = (rand_ ^ (rand_ >> 13)) * 3266489917u;
+    rand_ ^= rand_ >> 16;
     // No two play quite alike: some are quicker, some shoot straighter.
     aimSkill_ = chance(0.7, 1.35);
     reactSkill_ = chance(0.75, 1.3);
@@ -113,6 +118,8 @@ class Bot {
   V3 post_, watch_;
   int shotsFromPost_ = 0;
   double dodgeClock_ = 0, dodgeSide_ = 1, shiftClock_ = 8;
+  double noEffect_ = 0, moveClock_ = 0;  // shooting from here does nothing: from somewhere else, then
+  u16 landedSeen_ = 0;
   int flankSide_ = 1;
   bool flanked_ = false;
   double queryClock_ = 0;

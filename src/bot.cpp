@@ -1377,6 +1377,26 @@ void Bot::inTank(Duel& d, int me) {
 
   // Everyone else: find them, and get on with it.
   const double holdAt = tactic_ == MISSILE ? kSightTank : kHoldRange;
+  // In sight and nothing lands, whatever the reason: a crest or a tree that the shells find and the eye does not.
+  if (pl.hitsLanded != landedSeen_) {
+    landedSeen_ = pl.hitsLanded;
+    noEffect_ = 0;
+  } else if (seesFoe_) {
+    noEffect_ += kThinkEvery;
+  }
+  if (noEffect_ > 12.0) {
+    noEffect_ = 0;
+    moveClock_ = chance(6.0, 10.0);
+    dodgeSide_ = chance(0, 1) < 0.5 ? -1.0 : 1.0;
+  }
+  if (moveClock_ > 0 && seesFoe_) {
+    moveClock_ -= kThinkEvery;
+    doing_ = "sucht besseres Schussfeld";
+    const V3 to = flat(foeAt_ - f.cog);
+    const V3 across = V3{-to.y, to.x, 0} / std::max(len(to), 1.0);
+    driveTowards(d, me, foeAt_ + across * (dodgeSide_ * std::max(40.0, foeDist * 0.5)), 7.0);
+    return;
+  }
   if (seesFoe_ && foeDist < holdAt) {
     // Not forever on one spot, though.
     if (shiftClock_ <= 0 && !t.missileLive) {
