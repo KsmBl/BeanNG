@@ -34,7 +34,6 @@ struct GameSettings {
   bool fullscreen = false, vsync = true, farShadows = true;
   double volume = 0.8, fov = 0, mouse = 1;
   double padSens = 1;
-  double grass = 1;
   bool rumble = true;
 };
 static GameSettings gSet;
@@ -104,7 +103,6 @@ static void loadSettings() {
     else if (k == "mouse") gSet.mouse = clampd(v, 0.2, 3);
     else if (k == "pad_sensitivity") gSet.padSens = clampd(v, 0.3, 2.5);
     else if (k == "rumble") gSet.rumble = v != 0;
-    else if (k == "grass") gSet.grass = clampd(v, 0, 1);
   }
   fclose(f);
 }
@@ -114,7 +112,7 @@ static void saveSettings() {
   if (!f) return;
   fprintf(f, "motion_blur %d\ncamera_shake %d\ndamage_view %d\nstats %d\nmuted %d\nfullscreen %d\nvsync %d\nfar_shadows %d\nvolume %.2f\nfov %.0f\nmouse %.2f\n",
           gSet.motionBlur, gSet.shake, gSet.damageView, gSet.stats, gSet.muted, gSet.fullscreen, gSet.vsync, gSet.farShadows, gSet.volume, gSet.fov, gSet.mouse);
-  fprintf(f, "pad_sensitivity %g\nrumble %d\ngrass %g\ntutorial_seen %d\n", gSet.padSens, gSet.rumble, gSet.grass, gTutorialSeen ? 1 : 0);
+  fprintf(f, "pad_sensitivity %g\nrumble %d\ntutorial_seen %d\n", gSet.padSens, gSet.rumble, gTutorialSeen ? 1 : 0);
   for (int a = 0; a < KA_COUNT; a++) fprintf(f, "%s %d\n", kKeyFile[a], int(gKeys[a]));
   fclose(f);
 }
@@ -3560,7 +3558,6 @@ static void runGame() {
       toggle("Bewegungsunschärfe", gSet.motionBlur, [&] { gSet.motionBlur = !gSet.motionBlur; });
       toggle("Kamera-Wackeln", gSet.shake, [&] { gSet.shake = !gSet.shake; });
       toggle("Ferne Schatten", gSet.farShadows, [&] { gSet.farShadows = !gSet.farShadows; });
-      percent("Grasdichte", gSet.grass, 0.0, 1.0, 0.1);
       {
         char b[32];
         snprintf(b, sizeof b, "%+.0f°", gSet.fov);
@@ -5962,7 +5959,8 @@ static void runGame() {
     // Without its optics the gunner's sight shows nothing any closer.
     if (view.foot.noSight && rig.mode == CAM_HOOD) rig.mode = CAM_CHASE;
     hud.map.open = mapOpen && panelKind == 0;
-    hud.grassDensity = gSet.grass;
+    // Always all of it: what grows hides people and shows where tracks went, for everyone alike.
+    hud.grassDensity = 1.0;
     {
       // On the map a mouse has a place as well.
       hud.vector.clear();
