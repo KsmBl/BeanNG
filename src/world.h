@@ -66,6 +66,7 @@ class World {
   bool isArena() const { return arena_; }
   // Whether someone at this height is in the river. On a bridge above it they are not.
   bool isWater(double x, double y, double z) const;
+  double waterDepth(double x, double y, double bottom) const;  // how far under the surface that is, 0 if it is not
   // What one would stand on coming down from z here: the ground, or whatever solid lies on it, such as a bridge.
   double groundUnder(double x, double y, double z) const;
   static V3 fordPoint(int i);  // the middle of a ford, without its height

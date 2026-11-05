@@ -35,6 +35,7 @@ struct HullSpec {
   double massScale, powerScale;
   double armour;  // what a hit does to it: below 1 it takes more of them
   double torque = 1.6;  // on top of what the engine gives: the pull of each hull, for it to feel as strong as it looks
+  double gearing = 1.0;  // the whole gearbox: longer for the fast one, shorter for the heavy one, and that sets their top speeds
 };
 const HullSpec& hullSpec(HullKind k);
 std::string tankMeshFile(HullKind hull, TurretKind turret);

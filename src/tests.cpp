@@ -2408,6 +2408,89 @@ int main(int argc, char** argv) {
     printf("Kartenrand: groesster Hoehensprung %.3f m\n", step);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "waterout")) {
+    // A tank in the middle of the deep river, and full throttle towards the bank. Does it get out, and how fast does it go in there?
+    for (int h = 0; h < HK_COUNT; h++) {
+      auto* d = new Duel();
+      d->playersWanted = 2;
+      d->build();
+      d->players[0].present = d->players[1].present = true;
+      Duel::Intent in[Duel::kMaxPlayers];
+      const auto run = [&](double seconds) {
+        for (double t = 0; t < seconds; t += Duel::kDt) {
+          d->step(in);
+          std::vector<SimEvent> ev;
+          d->drainEvents(ev);
+        }
+      };
+      u8 none[IT_COUNT] = {};
+      while (d->phase != Duel::CHOOSING) run(0.1);
+      d->choose(0, none, true);
+      d->choose(1, none, true);
+      while (d->phase != Duel::PLAYING) run(0.05);
+      const int v = Duel::tankIndex(0, TK_STANDARD, HullKind(h));
+      Tank& t = d->tanks[v];
+      const double y = 300.0;
+      const V3 to{World::riverAt(y), y, d->world.height(World::riverAt(y), y) + 1.5};
+      d->players[0].soldier.p = t.cog + t.left * 3.0;
+      in[0].use = true;
+      run(Duel::kDt * 0.5);
+      in[0].use = false;
+      const V3 by = to - t.cog;
+      for (u16 oi : {t.hullObj, t.turretObj})
+        for (u32 n : d->sim.objs[oi].nodes) d->sim.pos[n] += by;
+      run(1.5);
+      in[0].c.throttle = 1;
+      double top = 0, outAt = -1;
+      for (double at = 0; at < 60.0 && outAt < 0; at += 0.5) {
+        run(0.5);
+        top = std::max(top, std::fabs(d->frames[v].speed) * 3.6);
+        if (std::fabs(t.cog.x - World::riverAt(t.cog.y)) > 24.0) outAt = at;
+        if (int(at * 2) % 8 == 0) printf("  t %4.1f quer zum Fluss %5.1f m, %4.1f km/h, Hoehe %.1f, Wasser %d\n", at, t.cog.x - World::riverAt(t.cog.y), d->frames[v].speed * 3.6, t.cog.z, int(d->world.isWater(t.cog.x, t.cog.y, t.cog.z)));
+      }
+      printf("%-18s draussen nach %.1f s, schnellste %.1f km/h\n", hullSpec(HullKind(h)).name, outAt, top);
+      delete d;
+    }
+    // A bridge: is it water up there?
+    auto* d = new Duel();
+    d->build();
+    const World::Bridge& br = d->world.bridgeSpans()[0];
+    printf("Bruecke: Deck z %.1f, Wasser auf dem Deck %d, 1.3 m darueber %d, 3 m darueber %d, unter dem Deck am Fluss %d\n", br.at.z, int(d->world.isWater(br.at.x, br.at.y, br.at.z + 0.1)), int(d->world.isWater(br.at.x, br.at.y, br.at.z + 1.3)), int(d->world.isWater(br.at.x, br.at.y, br.at.z + 3.0)), int(d->world.isWater(br.at.x, br.at.y, 2.0)));
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "tankpull")) {
+    // Every hull from a standstill on the level, and then up a slope as steep as the map has for a road.
+    for (int h = 0; h < HK_COUNT; h++) {
+      auto* w = new World();
+      auto* s = new Sim();
+      CarRig r;
+      w->build();
+      w->clearBoxes();
+      w->flatten();
+      w->pave();
+      s->world = w;
+      Tank t = buildLeopard(*s, V3{-400, 0, 0}, &r, TK_STANDARD, HullKind(h));
+      s->finalize();
+      t.settle(*s, 3.0);
+      Controls c;
+      c.throttle = 1;
+      double t20 = -1, t40 = -1, t60 = -1, top = 0, maxTconv = 0;
+      for (int k = 0; k < 2000 * 45; k++) {
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+        const double kmh = t.speed * 3.6, at = k * kDt;
+        if (t20 < 0 && kmh >= 20) t20 = at;
+        if (t40 < 0 && kmh >= 40) t40 = at;
+        if (t60 < 0 && kmh >= 60) t60 = at;
+        top = std::max(top, kmh);
+        maxTconv = std::max(maxTconv, t.lonAcc);
+      }
+      s->events.clear();
+      printf("%-18s 0-20 %5.1f s  0-40 %5.1f s  0-60 %5.1f s  Spitze %5.1f km/h  hoechste Beschl. %.2f m/s2\n", hullSpec(HullKind(h)).name, t20, t40, t60, top, maxTconv);
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "tankrun")) {
     auto* w = new World();
     auto* s = new Sim();
@@ -2417,7 +2500,7 @@ int main(int argc, char** argv) {
     w->flatten();
     w->pave();
     s->world = w;
-    Tank t = buildLeopard(*s, V3{-400, 0, 0}, &r);
+    Tank t = buildLeopard(*s, V3{-400, 0, 0}, &r, TK_STANDARD, argc > 2 ? HullKind(atoi(argv[2])) : HK_MEDIUM);
     s->finalize();
     t.settle(*s, 3.0);
     Controls c;

@@ -821,7 +821,11 @@ double World::groundUnder(double x, double y, double z) const {
 }
 
 bool World::isWater(double x, double y, double z) const {
-  return arena_ && std::fabs(x - riverX(y)) < kRiverHalf + 3.0 && std::fabs(y) < 830.0 && groundUnder(x, y, z + 0.5) < kWaterZ;
+  return arena_ && std::fabs(x - riverX(y)) < kRiverHalf + 3.0 && std::fabs(y) < 830.0 && z < kWaterZ && groundUnder(x, y, z + 0.5) < kWaterZ;
+}
+
+double World::waterDepth(double x, double y, double bottom) const {
+  return isWater(x, y, bottom) ? kWaterZ - bottom : 0.0;
 }
 
 void World::buildArena() {

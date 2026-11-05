@@ -2448,8 +2448,9 @@ void Duel::step(const Intent in[kMaxPlayers]) {
   // Water holds back whatever goes through it. A tank just grinds on; a car, with less weight on it, hardly at all.
   for (int v = 0; v < kVehicles; v++) {
     const VehicleFrame& f = frames[v];
-    if (!world.isWater(f.cog.x, f.cog.y, f.cog.z)) continue;
-    const double k = v < kTanks ? 9.0 : 7.0;
+    const double depth = world.waterDepth(f.cog.x, f.cog.y, f.cog.z - (v < kTanks ? 0.7 : 0.5));
+    if (depth <= 0) continue;
+    const double k = 2.5 * std::min(depth / 1.5, 1.0);
     const u16 a = v < kTanks ? tanks[v].hullObj : cars[size_t(v - kTanks)].obj;
     if (!sim.objs[a].awake) continue;
     for (u32 n : sim.objs[a].nodes) sim.force[n] -= sim.vel[n] * (sim.mass[n] * k);

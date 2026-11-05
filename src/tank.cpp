@@ -57,9 +57,9 @@ const TurretSpec& turretSpec(TurretKind k) {
 const HullSpec& hullSpec(HullKind k) {
   // A heavy one that takes twice the hits and is in no hurry, a light one that outruns everything and does not last.
   static const HullSpec table[HK_COUNT] = {
-      {"Mittlerer Panzer", "", 1.0, 1.0, 1.0},
-      {"Schwerer Panzer", "_heavy", 1.45, 1.05, 0.5},
-      {"Schneller Panzer", "_fast", 0.62, 0.95, 1.7},
+      {"Mittlerer Panzer", "", 1.0, 1.0, 1.0, 1.6, 0.97},
+      {"Schwerer Panzer", "_heavy", 1.45, 1.05, 0.5, 1.6, 1.36},
+      {"Schneller Panzer", "_fast", 0.62, 0.95, 1.7, 2.4, 0.68},
   };
   return table[k];
 }
@@ -577,7 +577,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   shiftClock += dt;
 
   const double avgTrack = 0.5 * (trackOmega[0] + trackOmega[1]);
-  const double ratio = gear < 0 ? -kRatios[0] : kRatios[std::clamp(gear, 1, 4)];
+  const double ratio = (gear < 0 ? -kRatios[0] : kRatios[std::clamp(gear, 1, 4)]) * hullSpec().gearing;
   const double inputOmega = std::fabs(avgTrack * ratio);
   if (gear > 0 && shiftClock > 1.2) {
     const double rpmIn = inputOmega * 60.0 / (2.0 * PI);
@@ -690,7 +690,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     const double Tres = (0.022 * Fn * kSprocketR + 120.0 + brakeAct * 90000.0 + in.handbrake * 90000.0 + parked);
     const double dv = Tres * dt / kTrackInertia;
     om = std::fabs(om) <= dv ? 0.0 : om - std::copysign(dv, om);
-    trackOmega[s] = clampd(om, -60.0, 60.0);
+    trackOmega[s] = clampd(om, -110.0, 110.0);
     trackPhase[s] += trackOmega[s] * kSprocketR * dt;
   }
 }
