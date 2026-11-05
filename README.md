@@ -97,6 +97,8 @@ Jeder Panzerschuss in seiner Nähe, jede Rakete und jede schwere Explosion lasse
 
 Fahrzeuge, Wracks, Bäume, Häuser und andere Helikopter bringen ihn zum Absturz, auch mit dem Rotor; fährt ein Fahrzeug in einen stehenden Helikopter, explodiert er ebenfalls. Wer in einen laufenden Rotor gerät, stirbt, auch aufrecht darunter am Boden; geduckt kommt man unter ihm durch. Einen Fallschirm gibt es nicht: Wer in der Luft aussteigt, stirbt beim Aufprall, außer aus geringer Höhe.
 
+**Rohre:** Das Rohr eines Panzers geht nicht durch Wände, Häuser oder andere Fahrzeuge, es bleibt daran stehen. Steckt es doch drin, weil der Panzer dagegen gefahren ist, geht die Granate noch auf dieser Seite los.
+
 **Lenkraketen:** Sie reichen 1100 m; danach ist der Motor aus, die Verbindung weg, und sie fallen. Um jede Basis stehen Störsender (240 m, auf der Karte eingezeichnet): Darin bricht das Bild ab und die Rakete fliegt zufällig umher, bis sie die Zone wieder verlässt. Mit Feuer lässt sie sich jederzeit sprengen.
 
 **Haltung:** Strg schaltet das Ducken ein und aus (Controller: Klick auf den rechten Stick): niedriger, schwerer zu treffen und langsamer, Rennen und Springen gehen dabei nicht. X legt dich jederzeit hin und wieder auf (Controller: B), mit jeder Waffe; im Liegen bist du flach und bewegst dich nicht. Geschossen wird aus jeder Haltung, auch mit dem Scharfschützengewehr und durch sein Zielfernrohr.

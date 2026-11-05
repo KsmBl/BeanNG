@@ -429,6 +429,40 @@ void Tank::showOwnAim(Sim& sim, const Controls& in, double& yawShown, double& pi
   gunPitch = pitchShown;
 }
 
+int Tank::gunDepth(const Sim& sim, V3 trun, V3 dir) const {
+  const double length = spec().gunLen;
+  int depth = 0;
+  for (double s = 0.8; s <= length + 0.2; s += 0.25) {
+    Contact c;
+    if (sim.world->contact(trun + dir * s, c)) depth++;
+  }
+  V3 at;
+  if (pathHit(sim, trun + dir * 0.8, trun + dir * (length + 0.2), true, at)) depth++;
+  return depth;
+}
+
+bool Tank::gunAgainst(const Sim& sim, V3 trun, V3 dir, V3* firstFree) const {
+  const double length = spec().gunLen;
+  // From a little out of the mantlet to just past the muzzle.
+  V3 clear = trun + dir * 0.8;
+  for (double s = 0.8; s <= length + 0.2; s += 0.25) {
+    const V3 p = trun + dir * s;
+    Contact c;
+    if (sim.world->contact(p, c)) {
+      if (firstFree) *firstFree = clear;
+      return true;
+    }
+    clear = p;
+  }
+  V3 at;
+  // Houses and trees are made of the same stuff as the vehicles; those too.
+  if (pathHit(sim, trun + dir * 0.8, trun + dir * (length + 0.2), true, at)) {
+    if (firstFree) *firstFree = trun + dir * std::max(dot(at - trun, dir) - 0.3, 0.8);
+    return true;
+  }
+  return false;
+}
+
 void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   const V3 vO = vCog;
   const V3 ring = ringPoint(sim);
@@ -447,6 +481,24 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
     if (turretYaw > PI) turretYaw -= 2 * PI;
     if (turretYaw < -PI) turretYaw += 2 * PI;
     gunPitch += clampd((wantPitch - gunPitch) * 6.0, -kPitchRate, kPitchRate) * dt;
+    // Running against something, it goes no further. A barrel already in something, because the tank has driven it
+    // there, may turn any way that takes it less far in.
+    if ((sim.stepCount & 7) == 0 && (turretYaw != gunGoodYaw || gunPitch != gunGoodPitch)) {
+      const auto depthAt = [&](double yawAt, double pitchAt) {
+        const double cyNow = std::cos(yawAt), syNow = std::sin(yawAt), cpNow = std::cos(pitchAt), spNow = std::sin(pitchAt);
+        const V3 fNow = fwd * cyNow + left * syNow, lNow = left * cyNow - fwd * syNow;
+        return gunDepth(sim, ring + fNow * trunnion.x + lNow * trunnion.y + up * trunnion.z, fNow * cpNow + up * spNow);
+      };
+      const int depth = depthAt(turretYaw, gunPitch);
+      const int was = depthAt(gunGoodYaw, gunGoodPitch);
+      if (depth > was) {
+        turretYaw = gunGoodYaw;
+        gunPitch = gunGoodPitch;
+      } else {
+        gunGoodYaw = turretYaw;
+        gunGoodPitch = gunPitch;
+      }
+    }
   }
 
   const double cy = std::cos(turretYaw), sy = std::sin(turretYaw);
@@ -493,6 +545,9 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
     shotsFired += 1;
     Shell s;
     s.p = muzzle + gF * 0.2;
+    // With the muzzle through a wall the shell still leaves on this side of it, and goes off right there.
+    V3 firstFree;
+    if (gunAgainst(sim, trun, gF, &firstFree)) s.p = firstFree;
     s.by = gunner;
     s.from = s.p;
     // Without its sight the gunner lays it by eye, and it shows.

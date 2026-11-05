@@ -2854,6 +2854,80 @@ int main(int argc, char** argv) {
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "gunwall")) {
+    // A tank beside the command centre: the barrel swings against the wall and stops; pushed through it, the shell stays this side.
+    auto* d = new Duel();
+    d->playersWanted = 2;
+    d->build();
+    d->players[0].present = d->players[1].present = true;
+    Duel::Intent in[Duel::kMaxPlayers];
+    const auto run = [&](double seconds) {
+      for (double t = 0; t < seconds; t += Duel::kDt) {
+        d->step(in);
+        std::vector<SimEvent> ev;
+        d->drainEvents(ev);
+      }
+    };
+    u8 none[IT_COUNT] = {};
+    while (d->phase != Duel::CHOOSING) run(0.1);
+    d->choose(0, none, true);
+    d->choose(1, none, true);
+    while (d->phase != Duel::PLAYING) run(0.05);
+    const int v = Duel::tankIndex(0, TK_STANDARD, HK_MEDIUM);
+    Tank& t = d->tanks[v];
+    const World::Base& base = d->world.base(0);
+    const V3 ahead{std::cos(base.facing), std::sin(base.facing), 0}, side{-ahead.y, ahead.x, 0};
+    // The front wall of the command centre lies 16.4 m behind the middle of the yard.
+    const double wall = -26.0 + 9.0 + 0.6;
+    const auto moveTo = [&](double aheadOf, double along) {
+      const V3 to = base.centre + ahead * aheadOf + side * along;
+      const V3 by{to.x - t.cog.x, to.y - t.cog.y, 0};
+      for (u16 oi : {t.hullObj, t.turretObj})
+        for (u32 n : d->sim.objs[oi].nodes) d->sim.pos[n] += by;
+    };
+    moveTo(wall + 7.0, 8.0);
+    d->players[0].soldier.p = t.cog + side * 3.0;
+    in[0].use = true;
+    run(Duel::kDt * 0.5);
+    in[0].use = false;
+    printf("eingestiegen %d\n", int(d->players[0].vehicle == v));
+    in[0].c.brake = 1;
+    const auto wallGap = [&](V3 p) { return dot(p - base.centre, ahead) - wall; };
+    // First along the wall, and then swung towards it: it has to stop short.
+    moveTo(wall + 4.4, 8.0);
+    run(0.5);
+    in[0].c.aimPoint = t.cog + side * 60.0 + V3{0, 0, 1.0};
+    run(4.0);
+    printf("laengs der Wand: Muendung %.2f m vor der Wand\n", wallGap(t.muzzle));
+    in[0].c.aimPoint = t.cog - ahead * 60.0 + V3{0, 0, 1.0};
+    run(5.0);
+    printf("zur Wand geschwenkt: Muendung %.2f m vor der Wand, Rohrrichtung zur Wand %.2f\n", wallGap(t.muzzle), -dot(norm(t.gunDir), ahead));
+    moveTo(wall + 7.0, 8.0);
+    in[0].c.aimPoint = t.cog + ahead * 40.0 + V3{0, 0, 1.0};
+    run(3.0);
+    printf("zeigt weg von der Wand: Muendung %.2f m vor der Wand\n", wallGap(t.muzzle));
+    in[0].c.aimPoint = t.cog - ahead * 60.0 + V3{0, 0, 1.0};
+    run(5.0);
+    printf("zur Wand gedreht: Muendung %.2f m vor der Wand, Rohrrichtung zur Wand %.2f\n", wallGap(t.muzzle), -dot(norm(t.gunDir), ahead));
+    in[0].c.fire = true;
+    run(Duel::kDt * 0.5);
+    in[0].c.fire = false;
+    size_t seen = d->sim.blastLog.size();
+    run(1.0);
+    for (size_t k = seen; k < d->sim.blastLog.size(); k++) printf("Einschlag %.2f m vor der Wand (negativ: dahinter)\n", wallGap(d->sim.blastLog[k].c));
+    // And the same with the tank shoved up so close that the barrel has to be through it.
+    moveTo(wall + 1.5 + 3.6, 8.0);
+    run(0.3);
+    printf("dicht an der Wand: Muendung %.2f m vor der Wand\n", wallGap(t.muzzle));
+    seen = d->sim.blastLog.size();
+    run(t.reload + 0.2);
+    in[0].c.fire = true;
+    run(Duel::kDt * 0.5);
+    in[0].c.fire = false;
+    run(1.0);
+    for (size_t k = seen; k < d->sim.blastLog.size(); k++) printf("Einschlag %.2f m vor der Wand (negativ: dahinter)\n", wallGap(d->sim.blastLog[k].c));
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "heli")) {
     // Up, along, down again; then what brings it down: bullets on the parts that matter, and a shell of any size.
     auto* d = new Duel();
