@@ -2500,6 +2500,39 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "buggycoast")) {
+    // Flat out, and the foot off.
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    w->clearBoxes();
+    w->flatten();
+    w->pave();
+    s->world = w;
+    Tank t = buildLeopard(*s, V3{-600, 0, 0}, &r, TK_MG, HK_BUGGY);
+    s->finalize();
+    t.settle(*s, 3.0);
+    Controls c;
+    c.throttle = 1;
+    const auto run = [&](double seconds) {
+      for (int k = 0; k < int(seconds * 2000); k++) {
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+      }
+      s->events.clear();
+    };
+    run(22.0);
+    const double from = t.speed * 3.6;
+    c.throttle = 0;
+    for (int at = 2; at <= 22; at += 2) {
+      run(2.0);
+      printf("  %2d s nach Gas weg: %5.1f km/h\n", at, t.speed * 3.6);
+    }
+    printf("Ausrollen von %.0f km/h\n", from);
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "buggytree")) {
     // Into a tree at any of these. It is the frame that gives, not the whole thing that goes up.
     for (double kmh : {60.0, 100.0, 130.0, 150.0}) {

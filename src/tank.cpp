@@ -741,7 +741,14 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     sim.force[w.out] += F * 0.5;
     if (!trackOff[s]) Fsum[s] += Fx;
   }
-  constexpr double kTrackInertia = 900.0;
+  // Foot off, the buggy's light engine and loose tracks take the speed off it quickly: a tank's weight carries it on.
+  if (hull == HK_BUGGY && std::fabs(speed) > 0.5) {
+    double onGround = 0;
+    for (const RoadWheel& w : wheels) onGround += w.Fn > 0 ? 1.0 : 0.0;
+    addToHull(sim, cog, fwd * (-std::copysign(1.0, speed) * 22000.0 * clampd(1.0 - throttleAct / 0.15, 0.0, 1.0) * clampd(onGround / 7.0, 0.0, 1.0) * clampd(std::fabs(speed) / 3.0, 0.0, 1.0)));
+  }
+  // What goes round in the tracks. On the buggy little: on a tank's it would run on for as long as a tank.
+  const double kTrackInertia = hull == HK_BUGGY ? 120.0 : 900.0;
   for (int s = 0; s < 2; s++) {
     if (trackOff[s]) {
       trackOmega[s] = 0;
