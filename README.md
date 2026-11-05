@@ -99,7 +99,7 @@ Fahrzeuge, Wracks, Bäume, Häuser und andere Helikopter bringen ihn zum Absturz
 
 **Lenkraketen:** Sie reichen 1100 m; danach ist der Motor aus, die Verbindung weg, und sie fallen. Um jede Basis stehen Störsender (240 m, auf der Karte eingezeichnet): Darin bricht das Bild ab und die Rakete fliegt zufällig umher, bis sie die Zone wieder verlässt. Mit Feuer lässt sie sich jederzeit sprengen.
 
-**Ducken:** Solange Strg gehalten wird (Controller: Klick auf den rechten Stick schaltet um), bist du niedriger, schwerer zu treffen und langsamer. Rennen und Springen gehen dabei nicht.
+**Haltung:** Strg schaltet das Ducken ein und aus (Controller: Klick auf den rechten Stick): niedriger, schwerer zu treffen und langsamer, Rennen und Springen gehen dabei nicht. X legt dich jederzeit hin und wieder auf (Controller: B), mit jeder Waffe; im Liegen bist du flach und bewegst dich nicht. Geschossen wird aus jeder Haltung, auch mit dem Scharfschützengewehr und durch sein Zielfernrohr.
 
 **Tarnnetz:** Das Tarnnetz lässt sich jetzt auch als Plane über ein stehendes Auto ziehen. Das dauert 3 Sekunden, beim Losfahren bleibt es zurück.
 
@@ -175,14 +175,14 @@ Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom V
 | Karte | K | LB |
 | Karte: Ziel markieren, löschen | Klick, Rechtsklick | rechter Stick und A, X |
 | Rakete starten, Feuer sprengt sie | G | B im Panzer |
-| Scharfschützengewehr aufbauen | X | B zu Fuß |
+| Hinlegen, aufstehen | X | B zu Fuß |
 | Zielfernrohr, Zoom 6x bis 24x | rechte Maustaste, Mausrad | LT, Steuerkreuz links, rechts |
 | Visier auf Entfernung einstellen | Pfeil hoch, runter | Steuerkreuz hoch, runter |
 | Zielfernrohr: normal, thermal, Schwachstellen | T | Y |
 | Kamera, Abstand | C, Mausrad | Y, Steuerkreuz hoch, runter |
 | Chat | Enter | Back kurz tippen: Schnellnachrichten oder Bildschirmtastatur |
 | Punktestand zeigen | TAB halten | Back halten |
-| Ducken | Strg halten | rechten Stick klicken |
+| Ducken ein, aus | Strg | rechten Stick klicken |
 | Helikopter: steigen, sinken | Leertaste, Strg | A, B halten |
 | Menü | ESC | Start |
 | Im Menü wählen, ändern, bestätigen, zurück | Pfeile, ENTER, ESC | Steuerkreuz oder linker Stick, A, B |

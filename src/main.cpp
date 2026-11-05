@@ -1175,7 +1175,7 @@ struct Game {
           const Duel::Player& pl = duel.players[mySlot];
           const int ammoLeft = w == WP_SNIPER ? pl.sniperAmmo : (w == WP_RPG ? pl.rpgAmmo : pl.smallAmmo);
           const bool pulled = in.c.fire || (in.fireHeld && kWeapons[w].automatic);
-          if (w != WP_KNIFE && pulled && pl.hasWeapon[w] && now >= ownGunReady && ammoLeft > 0 && !(w == WP_SNIPER && me.prone < 0.99)) {
+          if (w != WP_KNIFE && pulled && pl.hasWeapon[w] && now >= ownGunReady && ammoLeft > 0) {
             ownGunReady = now + kWeapons[w].interval;
             const V3 eye = Duel::eyeOf(me);
             const V3 dir = norm(in.c.aimPoint - eye);
@@ -3064,7 +3064,7 @@ static void runGame() {
   bool strikePending = false;  // a strike code chosen: the next click on the map says where
   // The controller's part of all that.
   bool padActive = false, padAim = false, padFire = false, padScopeHeld = false, padSprint = false;
-  bool backDown = false, boardOn = false, padCrouch = false;
+  bool backDown = false, boardOn = false, crouchOn = false;
   double backHeld = 0;
   double padLx = 0, padLy = 0;
   V3 mapCursor;
@@ -3152,7 +3152,7 @@ static void runGame() {
     const double pitchUp = lookHigh ? -1.4 : -0.30, pitchDown = view.missileLive ? 1.5 : 1.2;
     rig.pitch = clampd(rig.pitch, pitchUp, pitchDown);
     // Nothing to do on foot before or after the match itself: one waits where one stands.
-    if (!onFoot || weaponPick != WP_SNIPER || view.foot.prone < 0.99) scoped = false;
+    if (!onFoot || weaponPick != WP_SNIPER) scoped = false;
     // Through the scope: plain, or with whichever of the found sights one has.
     const bool hasThermal = view.foot.has & kHasThermal, hasWeak = view.foot.has & kHasWeak;
     if ((scopeView == SV_THERMAL && !hasThermal) || (scopeView == SV_WEAK && !hasWeak)) scopeView = SV_PLAIN;
@@ -3337,7 +3337,8 @@ static void runGame() {
       key("Werkzeuge: Minen, Medikit, Nebel, Drohne, Bombencode", "Q", "RB");
       key("Karte, Ziel für die Artillerie", "K", "LB");
       key("Rakete starten, fliegt mit dem Blick", "G", "B");
-      key("Scharfschützengewehr aufbauen", "X", "B");
+      key("Hinlegen, aufstehen", "X", "B");
+      key("Ducken ein, aus", "Strg", "rechter Stick");
       key("Zielfernrohr, Zoom", "Rechte Maustaste, Mausrad", "LT, Steuerkreuz links, rechts");
       key("Visier auf Entfernung einstellen", "Pfeil hoch, runter", "Steuerkreuz hoch, runter");
       key("Zielfernrohr: normal, thermal, Schwachstellen", "T", "Y");
@@ -3694,7 +3695,7 @@ static void runGame() {
               }
               break;
             case SDL_GAMEPAD_BUTTON_LEFT_STICK: padSprint = true; break;
-            case SDL_GAMEPAD_BUTTON_RIGHT_STICK: padCrouch = !padCrouch; break;
+            case SDL_GAMEPAD_BUTTON_RIGHT_STICK: if (onFoot) crouchOn = !crouchOn; break;
             case SDL_GAMEPAD_BUTTON_DPAD_UP:
               if (scoped) scopeZero = std::min(scopeZero + 50, 2000);
               else rig.dist = clampd(rig.dist * 0.85, 2.5, 40.0);
@@ -3747,6 +3748,7 @@ static void runGame() {
             case SDLK_T: if (scoped) nextScopeView(); break;
             case SDLK_E: edges.use = true; break;
             case SDLK_X: edges.setup = true; break;
+            case SDLK_LCTRL: case SDLK_RCTRL: if (onFoot && !view.foot.heliOn) crouchOn = !crouchOn; break;
             case SDLK_UP: if (scoped) scopeZero = std::min(scopeZero + 50, 2000); break;
             case SDLK_DOWN: if (scoped) scopeZero = std::max(scopeZero - 50, 100); break;
             case SDLK_F12: wantShot = true; break;
@@ -3758,7 +3760,7 @@ static void runGame() {
             if (view.watchOn) G.teamWatch++;
             else edges.fire = true;
           }
-          if (e.button.button == SDL_BUTTON_RIGHT && onFoot && weaponPick == WP_SNIPER && view.foot.prone > 0.99) scoped = !scoped;
+          if (e.button.button == SDL_BUTTON_RIGHT && onFoot && weaponPick == WP_SNIPER) scoped = !scoped;
           break;
         case SDL_EVENT_MOUSE_MOTION: {
           const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse / (scoped ? scopeZoom * 0.5 : 1.0) * lerpd(1.0, inTank ? 0.3 : 0.55, aimBlend);
@@ -3867,7 +3869,7 @@ static void runGame() {
         padFire = fireNow;
         const bool aimNow = lt > 0.4;
         const bool scopeWeapon = onFoot && weaponPick == WP_SNIPER;
-        if (aimNow && !padScopeHeld && scopeWeapon && view.foot.prone > 0.99) scoped = !scoped;
+        if (aimNow && !padScopeHeld && scopeWeapon) scoped = !scoped;
         padScopeHeld = aimNow;
         padAim = aimNow && !scopeWeapon;
       } else {
@@ -4061,6 +4063,33 @@ static void runGame() {
           fflush(stdout);
           wantShot = true;
           stage = 4;
+        }
+      }
+    }
+    if (scriptMode == 84 && netState == Game::NET_IN) {
+      // The big rifle from every stance, and lying down with something else in the hand.
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      static int stage = 0;
+      static double stageAt = 0;
+      if (inMatch && stageAt == 0) stageAt = tNow + 2.0;
+      if (inMatch && stage < 9 && tNow > stageAt) {
+        rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
+        weaponPick = stage >= 7 ? WP_PISTOL : WP_SNIPER;
+        const auto line = [&](const char* what) {
+          printf("%s: Munition %d, geduckt %.2f, liegt %.2f, Zielfernrohr %d\n", what, view.foot.ammo, view.foot.crouch, view.foot.prone, int(scoped));
+          fflush(stdout);
+        };
+        switch (stage++) {
+          case 0: line("steht"); scoped = true; stageAt = tNow + 1.0; break;
+          case 1: sendC.fire = true; wantShot = true; stageAt = tNow + 3.0; break;
+          case 2: line("im Stehen geschossen"); scoped = false; crouchOn = true; stageAt = tNow + 1.0; break;
+          case 3: sendC.fire = true; stageAt = tNow + 3.0; wantShot = true; break;
+          case 4: line("in der Hocke geschossen"); crouchOn = false; sendC.setup = true; stageAt = tNow + 4.0; break;
+          case 5: sendC.fire = true; wantShot = true; stageAt = tNow + 3.0; break;
+          case 6: line("im Liegen geschossen"); stageAt = tNow + 1.0; break;
+          case 7: line("Pistole, liegend"); wantShot = true; sendC.fire = true; stageAt = tNow + 1.0; break;
+          case 8: line("Pistole abgefeuert"); sendC.setup = true; break;
         }
       }
     }
@@ -4922,7 +4951,10 @@ static void runGame() {
       G.input.yaw = rig.yaw;
       G.input.pitch = rig.pitch;
       G.input.sprint = sprint;
-      G.input.crouch = panelKind == 0 && !chatting && !osk.open && (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL] || padCrouch || gScriptCrouch || (view.foot.heliOn && gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_EAST)));
+      // Ducking stays on until it is pressed again. In a helicopter the same keys are for going down, as long as they are held.
+      if (!onFoot || view.foot.hp <= 0 || view.foot.heliOn) crouchOn = false;
+      const bool heliDown = view.foot.heliOn && (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL] || (gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_EAST)));
+      G.input.crouch = panelKind == 0 && !chatting && !osk.open && (crouchOn || heliDown || gScriptCrouch);
       G.input.weapon = weaponPick;
       G.input.scoped = scoped;
       G.input.scopeView = scopeView;

@@ -851,6 +851,11 @@ void Bot::onFoot(Duel& d, int me) {
   Duel::Player& pl = d.players[me];
   const Soldier& s = pl.soldier;
   doing_ = "zu Fuss";
+  // Lying down is only for the post: nothing else gets done from down there.
+  if (pl.wantProne && !(tactic_ == SNIPER && atPost_ && hasPost_) && useClock_ <= 0) {
+    pulse_.setup = true;
+    useClock_ = 0.2;
+  }
   // What lies within reach gets taken, on the way past or not.
   const int nearBy = d.nearCrate(s.p + V3{0, 0, 0.3});
   if (useClock_ <= 0 && nearBy >= 0) {

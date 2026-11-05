@@ -1377,8 +1377,6 @@ void Duel::fireWeapon(int p, const Intent& in) {
   }
   int& ammo = w == WP_SNIPER ? pl.sniperAmmo : (w == WP_RPG ? pl.rpgAmmo : pl.smallAmmo);
   if (ammo <= 0) return;
-  // The big rifle takes setting up: it fires lying still behind its bipod, or not at all.
-  if (w == WP_SNIPER && s.prone < 0.99) return;
   ammo--;
   pl.shotClock = kWeapons[w].interval;
   V3 dir = norm(in.c.aimPoint - eye);
@@ -1951,8 +1949,9 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     pl.shotClock = std::max(0.0, pl.shotClock - kDt);
     if (in[i].weapon >= 0 && in[i].weapon < WP_COUNT && pl.hasWeapon[in[i].weapon]) pl.weapon = in[i].weapon;
     // Getting down and up again takes its time, and only the big rifle asks for it.
-    if (in[i].setup && pl.weapon == WP_SNIPER && pl.vehicle < 0) pl.wantProne = !pl.wantProne;
-    if (pl.weapon != WP_SNIPER || pl.vehicle >= 0) pl.wantProne = false;
+    // Down on the ground or up again, with whatever is in the hand.
+    if (in[i].setup && pl.vehicle < 0 && pl.heli < 0) pl.wantProne = !pl.wantProne;
+    if (pl.vehicle >= 0 || pl.heli >= 0) pl.wantProne = false;
     s.prone = clampd(s.prone + (pl.wantProne ? 1.0 : -1.5) * kDt / kSetupTime * (pl.wantProne ? 1.0 : 3.0), 0.0, 1.0);
     if (in[i].strike && phase == PLAYING) callStrike(i, in[i].strikeAt);
     if (in[i].smoke && phase == PLAYING) useSmoke(i);
