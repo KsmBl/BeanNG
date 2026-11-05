@@ -102,6 +102,8 @@ layout(location=1) in vec3 aNrm;
 layout(location=2) in vec4 aCol;
 layout(location=3) in vec3 aRest;
 layout(location=4) in vec3 aRestN;
+layout(location=5) in mat4 aInstance;  // for the running gear: hundreds of rods in a draw
+uniform bool uInstanced;
 uniform mat4 uVP;
 uniform mat4 uModel;
 uniform mat4 uShadowVP;
@@ -112,9 +114,10 @@ out vec4 vClip; out vec4 vPrevClip;
 void main(){
   vRest = aRest;
   vRestN = aRestN;
-  vec4 w = uModel * vec4(aPos,1.0);
+  mat4 model = uInstanced ? aInstance : uModel;
+  vec4 w = model * vec4(aPos,1.0);
   vPos = w.xyz;
-  vNrm = mat3(uModel) * aNrm;
+  vNrm = mat3(model) * aNrm;
   vCol = aCol;
   vShadow = uShadowVP * w;
   gl_Position = uVP * w;
@@ -427,8 +430,9 @@ void main(){
 
 const char* kDepthVS = R"(#version 330 core
 layout(location=0) in vec3 aPos;
-uniform mat4 uVP; uniform mat4 uModel;
-void main(){ gl_Position = uVP*uModel*vec4(aPos,1.0); })";
+layout(location=5) in mat4 aInstance;
+uniform mat4 uVP; uniform mat4 uModel; uniform bool uInstanced;
+void main(){ gl_Position = uVP*(uInstanced ? aInstance : uModel)*vec4(aPos,1.0); })";
 const char* kDepthFS = R"(#version 330 core
 void main(){})";
 
@@ -618,7 +622,10 @@ struct Renderer::Impl {
   GLuint wheelVao2 = 0, wheelVbo2 = 0, wheelIbo2 = 0;
   std::vector<int> wheelDrawFirst, wheelDrawCount, wheelDrawMode, staticDrawFirst, staticDrawCount;
   // Unit rod for arms, shafts and struts.
-  GLuint rodVao = 0, rodVbo = 0;
+  GLuint rodVao = 0, rodVbo = 0, rodInstanceVbo = 0;
+  std::vector<Mat4> rodInstances;
+  size_t rodFirst[MM_COUNT + 1] = {};  // where each material's rods begin among them
+  bool rodsReady = false;
   GLsizei rodCount = 0;
   float rodColor[MM_COUNT][4];
 
@@ -1863,6 +1870,61 @@ struct Renderer::Impl {
     glBindBuffer(GL_ARRAY_BUFFER, rodVbo);
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(Vtx)), v.data(), GL_STATIC_DRAW);
     setupVtxAttribs();
+    glGenBuffers(1, &rodInstanceVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, rodInstanceVbo);
+    for (int k = 0; k < 4; k++) {
+      glEnableVertexAttribArray(GLuint(5 + k));
+      glVertexAttribDivisor(GLuint(5 + k), 1);
+    }
+  }
+
+  // One link as it is drawn: a rod, or for a strut a slim rod and a thick one.
+  template <class F>
+  void linkRods(const VisLink& l, const Snapshot& s, F&& out) {
+    const V3 a = s.pos[l.a], b = s.pos[l.b];
+    const double restL = len(sim->rest[l.b] - sim->rest[l.a]);
+    if (len(b - a) > restL * 1.6) return;  // torn off
+    if (l.kind == 1) {
+      // Strut: slim chrome rod from the top, body over the lower part.
+      const V3 mid = lerpv(a, b, 0.42);
+      out(rodMatrix(a, mid, l.radius * 0.45f), int(MM_CHROME));
+      out(rodMatrix(mid, b, l.radius), int(l.mat));
+    } else if (l.kind == 2) {
+      const V3 ax = norm(b - a) * 0.02;
+      out(rodMatrix(a - ax, b + ax, l.radius), int(l.mat));
+    } else {
+      out(rodMatrix(a, b, l.radius), int(l.mat));
+    }
+  }
+  // Everything that holds still in the blur's eyes, sorted by material and put in a buffer once a frame.
+  void prepareRods(const Snapshot& s) {
+    if (rodsReady) return;
+    rodsReady = true;
+    static std::vector<Mat4> byMat[MM_COUNT];
+    for (auto& v : byMat) v.clear();
+    for (size_t li = 0; li < rig->links.size() && li < rig->rocketLinks; li++) {
+      if (li < rig->linkInstance.size() && rig->linkInstance[li] == s.selfInstance) continue;
+      linkRods(rig->links[li], s, [&](const Mat4& m, int mat) { byMat[mat].push_back(m); });
+    }
+    rodInstances.clear();
+    for (int k = 0; k < MM_COUNT; k++) {
+      rodFirst[k] = rodInstances.size();
+      rodInstances.insert(rodInstances.end(), byMat[k].begin(), byMat[k].end());
+    }
+    rodFirst[MM_COUNT] = rodInstances.size();
+    glBindBuffer(GL_ARRAY_BUFFER, rodInstanceVbo);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(rodInstances.size() * sizeof(Mat4)), rodInstances.data(), GL_STREAM_DRAW);
+  }
+  void drawRodInstances(GLuint prog) {
+    glBindBuffer(GL_ARRAY_BUFFER, rodInstanceVbo);
+    glUniform1i(glGetUniformLocation(prog, "uInstanced"), 1);
+    for (int k = 0; k < MM_COUNT; k++) {
+      const size_t n = rodFirst[k + 1] - rodFirst[k];
+      if (n == 0) continue;
+      for (int c = 0; c < 4; c++) glVertexAttribPointer(GLuint(5 + c), 4, GL_FLOAT, GL_FALSE, sizeof(Mat4), (void*)(rodFirst[k] * sizeof(Mat4) + size_t(c) * 16));
+      glDrawArraysInstanced(GL_TRIANGLES, k * rodCount, rodCount, GLsizei(n));
+    }
+    glUniform1i(glGetUniformLocation(prog, "uInstanced"), 0);
   }
 
   Mat4 rodMatrix(V3 a, V3 b, float radius) {
@@ -3689,6 +3751,7 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
   }
   const Mat4 lightFarVP = mul(ortho(-kRangeFar, kRangeFar, -kRangeFar, kRangeFar, 1.0, 900.0), lookAt(focusFar + D.sun * 450.0, focusFar, V3{0, 0, 1}));
 
+  D.rodsReady = false;
   auto drawDyn = [&](GLuint prog) {
     D.setMat(prog, "uModel", I);
     D.setMat(prog, "uPrevWorld", D.carPrevWorld);
@@ -3726,31 +3789,24 @@ void Renderer::draw(const Snapshot& s, const Camera& cam, const HudOptions& hud,
     if (uScorchLoc >= 0) glUniform1f(uScorchLoc, 0.f);
     // Running gear: arms, shafts and struts between their real nodes.
     glBindVertexArray(D.rodVao);
+    // The great mass of it in one go. What the blur has to treat apart goes on its own: the rods of the vehicle the camera
+    // follows, and the rockets at the end.
+    D.prepareRods(s);
+    D.drawRodInstances(prog);
     bool linkSelf = false;
     for (size_t li = 0; li < D.rig->links.size(); li++) {
       const VisLink& l = D.rig->links[li];
       if (li == D.rig->rocketLinks) D.setMat(prog, "uPrevVP", vp);
       const bool self = li < D.rig->linkInstance.size() && D.rig->linkInstance[li] == s.selfInstance;
+      if (!self && li < D.rig->rocketLinks) continue;
       if (self != linkSelf) {
         D.setMat(prog, "uPrevWorld", self ? D.carPrevWorld : I);
         linkSelf = self;
       }
-      const V3 a = s.pos[l.a], b = s.pos[l.b];
-      const double restL = len(D.sim->rest[l.b] - D.sim->rest[l.a]);
-      if (len(b - a) > restL * 1.6) continue;  // torn off
-      if (l.kind == 1) {
-        // Strut: slim chrome rod from the top, body over the lower part.
-        const V3 mid = lerpv(a, b, 0.42);
-        D.setMat(prog, "uModel", D.rodMatrix(a, mid, l.radius * 0.45f));
-        glDrawArrays(GL_TRIANGLES, MM_CHROME * D.rodCount, D.rodCount);
-        D.setMat(prog, "uModel", D.rodMatrix(mid, b, l.radius));
-      } else if (l.kind == 2) {
-        const V3 ax = norm(b - a) * 0.02;
-        D.setMat(prog, "uModel", D.rodMatrix(a - ax, b + ax, l.radius));
-      } else {
-        D.setMat(prog, "uModel", D.rodMatrix(a, b, l.radius));
-      }
-      glDrawArrays(GL_TRIANGLES, l.mat * D.rodCount, D.rodCount);
+      D.linkRods(l, s, [&](const Mat4& m, int mat) {
+        D.setMat(prog, "uModel", m);
+        glDrawArrays(GL_TRIANGLES, mat * D.rodCount, D.rodCount);
+      });
     }
     D.setMat(prog, "uPrevVP", D.prevVP);
     D.setMat(prog, "uModel", I);
