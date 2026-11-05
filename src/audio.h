@@ -27,6 +27,16 @@ struct AudioFeed {
   float tracks = 0;        // tank tracks running, 0..1
   float turbo = 0;         // boost pressure, 0..1
   float rotor = 0;         // a helicopter, 0..1
+  // What the others are driving, as heard from here: their own engines, however far off.
+  struct Distant {
+    float rpm = 0, load = 0;
+    float gain = 0, pan = 0;
+    float dull = 0;        // 0 close by .. 1 far off, when only the low end carries
+    float cylinders = 8, pitch = 1;
+    float tracks = 0;      // m/s of track, for the rattle; 0 on wheels
+  };
+  static constexpr int kDistant = 6;
+  Distant distant[kDistant];
 };
 
 enum class Sfx : uint8_t { Metal, Glass, Thump, Clunk, Boom, Gun, Crack };
@@ -78,6 +88,15 @@ class AudioSynth {
 
   float noise();
   void startVoice(const Pending& p);
+
+  // The engines of the others: a firing pulse through two resonances, enough to tell what it is and how hard it works.
+  struct DistantVoice {
+    AudioFeed::Distant now;
+    double firing = 0, link = 0;
+    float pulse = 0, hit = 0, low = 0;
+    Svf a, b, rattle;
+  };
+  DistantVoice distant_[AudioFeed::kDistant];
 
   // Engine.
   double crank_ = 0;       // revolutions within the four-stroke cycle, 0..2

@@ -324,6 +324,43 @@ void AudioSynth::render(float* out, int frames) {
       R += g * amp;
     }
 
+    // ---- Everybody else's engine.
+    for (int i = 0; i < AudioFeed::kDistant; i++) {
+      DistantVoice& o = distant_[i];
+      const AudioFeed::Distant& want = tgt.distant[i];
+      o.now.gain += (want.gain - o.now.gain) * k * 0.15f;
+      if (o.now.gain < 0.0004f && want.gain <= 0.f) continue;
+      o.now.rpm += (want.rpm - o.now.rpm) * k * 0.3f;
+      o.now.load += (want.load - o.now.load) * k * 0.3f;
+      o.now.pan += (want.pan - o.now.pan) * k * 0.3f;
+      o.now.dull += (want.dull - o.now.dull) * k * 0.1f;
+      o.now.tracks += (want.tracks - o.now.tracks) * k * 0.3f;
+      o.now.cylinders = want.cylinders;
+      o.now.pitch = want.pitch;
+      if (o.now.rpm < 20.f) continue;
+      o.firing += double(o.now.rpm) / 60.0 * double(o.now.cylinders) * 0.5 / double(kRateF);
+      if (o.firing >= 1.0) {
+        o.firing -= std::floor(o.firing);
+        o.pulse += (0.25f + 0.75f * clamp01(o.now.load)) * (1.f + 0.12f * n1);
+      }
+      o.pulse *= 0.9975f - 0.0015f * clamp01(o.now.rpm / 5000.f);
+      float s = o.a.bandpass(o.pulse, fc(118.f * o.now.pitch), 0.6f) * 2.4f + o.b.bandpass(o.pulse, fc(265.f * o.now.pitch), 0.65f) * 1.5f * (1.f - 0.6f * o.now.dull);
+      if (o.now.tracks > 0.2f) {
+        o.link += double(o.now.tracks) / 0.19 / double(kRateF);
+        if (o.link >= 1.0) {
+          o.link -= std::floor(o.link);
+          o.hit = 1.f;
+        }
+        o.hit *= 0.997f;
+        s += o.rattle.bandpass(n2 * o.hit, fc(1050.f), 0.7f) * 0.6f * (1.f - 0.8f * o.now.dull) * std::min(o.now.tracks / 3.f, 1.f);
+      }
+      // Far off the air takes the top off everything.
+      o.low += (s - o.low) * (0.04f + 0.5f * (1.f - o.now.dull));
+      const float out = o.low * o.now.gain * 0.6f;
+      L += out * (1.f - 0.65f * std::max(o.now.pan, 0.f));
+      R += out * (1.f + 0.65f * std::min(o.now.pan, 0.f));
+    }
+
     // ---- Tank tracks: every link hitting the sprocket and the road wheels.
     if (now_.tracks > 0.01f) {
       trackPhase_ += double(v) / 0.20 / double(kRateF);

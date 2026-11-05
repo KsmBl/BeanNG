@@ -87,6 +87,8 @@ const char* kCamNames[CAM_COUNT] = {"Verfolger", "Orbit", "Bordkamera", "Fahrer"
 
 // Everything that tells the driver how fast and how rough it is, read from the running simulation.
 // Shared by the camera and the sound, so that what shakes is also what is heard.
+static constexpr double kBuggyRevs = 2.1;  // heard, not driven: its gearbox is built on the tanks' 2400 rpm
+
 struct DriveFeel {
   double fzLP[4] = {};
   double rough = 0;      // suspension activity, 0..1
@@ -276,6 +278,7 @@ struct CameraRig {
 struct SoundDriver {
   AudioSynth synth;
   double metalClock = 0, glassClock = 0, thumpClock = 0, crackClock = 0;
+  int distantSlot[AudioFeed::kDistant] = {-1, -1, -1, -1, -1, -1};
   int lastGear = 1;
   double scrapeLP = 0;
 
@@ -330,7 +333,55 @@ struct SoundDriver {
       f.tracks = float(clampd(f.speed / 2.0, 0, 1));
       f.skid = 0;
     }
+    if (s.tank && s.buggy && !s.foot.inCar) {
+      // A flat four behind the seat, revving where the tank's big diesel would be at idle.
+      f.cylinders = 4;
+      f.exhaustPitch = 1.25f;
+      f.rpm *= kBuggyRevs;
+      f.inputRpm *= kBuggyRevs;
+    }
     f.rotor = s.heliNoise;
+    // The others, nearest first. Whoever is in a slot stays there as long as it is heard, so that nothing clicks.
+    {
+      struct Heard {
+        const Snapshot::DrivenEngine* e;
+        double d;
+      };
+      std::vector<Heard> heard;
+      for (const Snapshot::DrivenEngine& e : s.drivenEngines) {
+        const double d = len(e.p - cam.eye);
+        if (d < 420.0) heard.push_back({&e, d});
+      }
+      std::sort(heard.begin(), heard.end(), [](const Heard& a, const Heard& b) { return a.d < b.d; });
+      if (heard.size() > size_t(AudioFeed::kDistant)) heard.resize(AudioFeed::kDistant);
+      int used[AudioFeed::kDistant];
+      std::fill(std::begin(used), std::end(used), -1);
+      for (const Heard& h : heard)
+        for (int i = 0; i < AudioFeed::kDistant; i++)
+          if (distantSlot[i] == h.e->vehicle) used[i] = h.e->vehicle;
+      for (const Heard& h : heard) {
+        int slot = -1;
+        for (int i = 0; i < AudioFeed::kDistant && slot < 0; i++)
+          if (used[i] == h.e->vehicle) slot = i;
+        for (int i = 0; i < AudioFeed::kDistant && slot < 0; i++)
+          if (used[i] < 0) {
+            slot = i;
+            used[i] = h.e->vehicle;
+          }
+        if (slot < 0) continue;
+        const V3 r = h.e->p - cam.eye;
+        AudioFeed::Distant& o = f.distant[slot];
+        o.rpm = h.e->rpm;
+        o.load = h.e->load;
+        o.cylinders = h.e->cylinders;
+        o.pitch = h.e->pitch;
+        o.tracks = h.e->tracks;
+        o.pan = float(clampd(dot(r, right) / std::max(h.d, 1.0), -1, 1));
+        o.gain = float(1.0 / (1.0 + h.d / 22.0) * clampd(1.0 - h.d / 420.0, 0, 1));
+        o.dull = float(clampd(h.d / 220.0, 0, 1));
+      }
+      for (int i = 0; i < AudioFeed::kDistant; i++) distantSlot[i] = used[i];
+    }
     synth.setFeed(f);
     metalClock -= dt;
     glassClock -= dt;
@@ -621,6 +672,31 @@ struct Game {
     s.pos = sim.pos;
     s.tank = true;
     s.buggy = myVehicle >= 0 && myVehicle < Duel::kTanks && duel.tanks[myVehicle].hull == HK_BUGGY;
+    s.drivenEngines.clear();
+    for (int v = 0; v < Duel::kVehicles; v++) {
+      if (v == myVehicle || !duel.occupied(v)) continue;
+      Snapshot::DrivenEngine e;
+      e.vehicle = v;
+      e.p = duel.frames[v].cog;
+      if (v < Duel::kTanks) {
+        const Tank& t = duel.tanks[v];
+        if (t.destroyed || t.mod[TM_ENGINE] <= 0 || t.fuel <= 0) continue;
+        const bool buggy = t.hull == HK_BUGGY;
+        e.rpm = float(t.rpm() * (buggy ? kBuggyRevs : 1.0));
+        e.load = float(t.throttleAct);
+        e.cylinders = buggy ? 4.f : 10.f;
+        e.pitch = buggy ? 1.25f : 0.55f;
+        e.tracks = float(std::fabs(duel.frames[v].speed));
+      } else {
+        const Vehicle& car = duel.cars[size_t(v - Duel::kTanks)];
+        if (car.exploded || !car.engineRunning) continue;
+        e.rpm = float(car.rpm());
+        e.load = float(clampd(car.throttleAct, 0, 1));
+        e.cylinders = 8.f;
+        e.pitch = car.spec.rpmMax < 5000 ? 0.72f : 1.15f;
+      }
+      s.drivenEngines.push_back(e);
+    }
     // The soldiers come between the vehicles and the wrecks in the mesh, and have no tracks.
     s.tankTracks.resize(Duel::kTanks + Duel::kWrecks);
     for (int i = 0; i < Duel::kTanks + Duel::kWrecks; i++) {

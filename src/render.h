@@ -98,6 +98,13 @@ struct Snapshot {
   V3 killShotFrom, killShotAt;
   double killShotFlight = 0;
   float heliNoise = 0;  // how loud a rotor is from here, 0..1
+  // Every vehicle somebody is driving that is not this player's own: each is heard for itself.
+  struct DrivenEngine {
+    int vehicle = -1;
+    V3 p;
+    float rpm = 0, load = 0, tracks = 0, cylinders = 8, pitch = 1;
+  };
+  std::vector<DrivenEngine> drivenEngines;
   bool buggy = false;  // the one being driven is the buggy, not a tank
   std::vector<PartState> heliParts;
   // One's own side, for the name and health over each of them.

@@ -61,7 +61,7 @@ if(BEANNG_RELEASE)
     target_link_options(beanng-server PRIVATE -static-libgcc -static-libstdc++)
   endif()
 else()
-  add_executable(beanng-test src/tests.cpp)
+  add_executable(beanng-test src/tests.cpp src/audio.cpp)
   target_link_libraries(beanng-test PRIVATE core)
 
   # The duel server: physics and network, nothing else, so it runs on a machine without a screen.

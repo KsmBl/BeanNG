@@ -14,6 +14,7 @@
 #include "duel.h"
 #include "props.h"
 #include "tank.h"
+#include "audio.h"
 #include "vehicle.h"
 
 namespace {
@@ -2456,6 +2457,47 @@ int main(int argc, char** argv) {
     d->build();
     const World::Bridge& br = d->world.bridgeSpans()[0];
     printf("Bruecke: Deck z %.1f, Wasser auf dem Deck %d, 1.3 m darueber %d, 3 m darueber %d, unter dem Deck am Fluss %d\n", br.at.z, int(d->world.isWater(br.at.x, br.at.y, br.at.z + 0.1)), int(d->world.isWater(br.at.x, br.at.y, br.at.z + 1.3)), int(d->world.isWater(br.at.x, br.at.y, br.at.z + 3.0)), int(d->world.isWater(br.at.x, br.at.y, 2.0)));
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "otherengine")) {
+    // How loud someone else's engine is against one's own, and which ear it is in.
+    const auto measure = [](const AudioFeed& f) {
+      AudioSynth synth;
+      synth.setFeed(f);
+      std::vector<float> out(48000 * 2 * 2);
+      synth.render(out.data(), 48000 * 2);
+      double l = 0, r = 0;
+      for (size_t i = 48000; i < out.size(); i += 2) {
+        l += out[i] * out[i];
+        r += out[i + 1] * out[i + 1];
+      }
+      const double n = double(out.size() - 48000) / 2.0;
+      printf("L %.4f R %.4f\n", std::sqrt(l / n), std::sqrt(r / n));
+    };
+    AudioFeed own;
+    own.rpm = 4000;
+    own.load = 1;
+    own.engineOn = true;
+    own.cylinders = 4;
+    own.exhaustPitch = 1.25f;
+    printf("Eigener Motor: ");
+    measure(own);
+    for (double d : {10.0, 30.0, 80.0, 200.0, 400.0}) {
+      for (int kind = 0; kind < 3; kind++) {
+        AudioFeed f;
+        AudioFeed::Distant& o = f.distant[0];
+        o.rpm = kind == 0 ? 4000 : (kind == 1 ? 1800 : 4500);
+        o.load = 1;
+        o.cylinders = kind == 0 ? 4 : (kind == 1 ? 10 : 8);
+        o.pitch = kind == 0 ? 1.25f : (kind == 1 ? 0.55f : 1.15f);
+        o.tracks = kind == 2 ? 0.f : 20.f;
+        o.pan = 0.5f;
+        o.gain = float(1.0 / (1.0 + d / 22.0) * clampd(1.0 - d / 420.0, 0, 1));
+        o.dull = float(clampd(d / 220.0, 0, 1));
+        printf("%3.0f m %-7s: ", d, kind == 0 ? "Buggy" : (kind == 1 ? "Panzer" : "Auto"));
+        measure(f);
+      }
+    }
     return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "buggytree")) {
