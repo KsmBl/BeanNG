@@ -3081,6 +3081,8 @@ static void runGame() {
   };
   // What this player is going to take into the match.
   u8 pickItems[IT_COUNT] = {};
+  pickItems[IT_PISTOL] = 1;  // what to start from: it can be taken off again
+  static const int kLoadoutOrder[IT_COUNT] = {IT_PISTOL, IT_AR, IT_SNIPER, IT_SMALL_AMMO, IT_SNIPER_AMMO, IT_REPAIR, IT_SMOKE, IT_GHILLIE, IT_NET, IT_FOOT_MINE, IT_AT_MINE};
   bool pickReady = false;
   int lastPhase = -1;
   bool chatting = false;
@@ -3224,8 +3226,7 @@ static void runGame() {
       }
       strikePending = false;
       if (phase == Duel::PLAYING) {
-        if (pickItems[IT_AR] > 0) weaponPick = WP_AR;
-        else weaponPick = WP_PISTOL;
+        weaponPick = pickItems[IT_AR] > 0 ? WP_AR : (pickItems[IT_PISTOL] > 0 ? WP_PISTOL : (pickItems[IT_SNIPER] > 0 ? WP_SNIPER : WP_KNIFE));
         // Looking across the yard towards the enemy. The camera's yaw is in the world.
         rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
         hasMark = false;
@@ -3266,24 +3267,26 @@ static void runGame() {
       });
       if (!netError.empty()) items.push_back({netError, "", -1.f, [](int) {}});
     } else if (panelKind == PANEL_LOADOUT) {
-      items.push_back({"Immer dabei", "Pistole, Messer", -1.f, [](int) {}});
-      for (int i = 0; i < IT_COUNT; i++) {
-        char name[64], b[16];
+      items.push_back({"Immer dabei", "Kampfmesser", -1.f, [](int) {}});
+      for (int row = 0; row < IT_COUNT; row++) {
+        const int i = kLoadoutOrder[row];
+        char name[80], b[16];
         snprintf(name, sizeof name, "%s  (%d %s)", kItems[i].name, kItems[i].slots, kItems[i].slots == 1 ? "Slot" : "Slots");
-        snprintf(b, sizeof b, "%d", pickItems[i]);
+        if (kItems[i].once) snprintf(b, sizeof b, "%s", pickItems[i] ? "[x]" : "[  ]");
+        else snprintf(b, sizeof b, "%d", pickItems[i]);
         items.push_back({name, b, -1.f, [&, i](int d) {
                            u8 next[IT_COUNT];
                            memcpy(next, pickItems, sizeof next);
-                           if (d < 0 && next[i] == 0) return;
-                           next[i] = u8(int(next[i]) + d);
+                           if (kItems[i].once) {
+                             // A box: whichever way it is pressed, it changes over.
+                             next[i] = next[i] ? 0 : 1;
+                           } else {
+                             if (d < 0 && next[i] == 0) return;
+                             next[i] = u8(int(next[i]) + d);
+                           }
                            if (slotsUsed(next) <= kLoadoutSlots) memcpy(pickItems, next, sizeof next);
                            pickReady = false;
                          }});
-      }
-      {
-        char b[32];
-        snprintf(b, sizeof b, "%d / %d", slotsUsed(pickItems), kLoadoutSlots);
-        items.push_back({"Belegte Slots", b, float(slotsUsed(pickItems)) / float(kLoadoutSlots), [](int) {}});
       }
       page("Bereit", [&] {
         pickReady = true;
@@ -5395,13 +5398,16 @@ static void runGame() {
             "Panzermine: reißt die Kette auf der Seite ab und richtet schweren Schaden an. Zu Fuß nichts zu befürchten. Liegt im Werkzeugmenü.",
             "Reparaturset: bringt ein Fahrzeug wieder zum Laufen. Dauert 6 Sekunden zu Fuß daneben, und es muss stillstehen. Liegt im Werkzeugmenü.",
             "Sturmgewehr: Dauerfeuer auf mittlere Entfernung. Schießt mit der Kleinmunition. Gegen Panzer fast wirkungslos.",
-            "Kleinmunition: 60 Schuss für Pistole und Sturmgewehr, zusätzlich zu den 24, die du immer hast.",
+            "Kleinmunition: 60 Schuss für Pistole und Sturmgewehr. Beide bringen schon 24 Schuss mit.",
             "Nebelgranate: eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen. Liegt im Werkzeugmenü. Jeder Panzer hat außerdem 3 Ladungen im Werfer.",
             "Ghillie-Anzug: ein zottiger Blätteranzug. Wer ihn trägt, ist im Gras und liegend kaum zu erkennen. Wirkt von selbst, solange du lebst.",
-            "Tarnnetz: im stehenden Panzer über das Werkzeugmenü drübergezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.",
+            "Tarnnetz: im stehenden Fahrzeug über das Werkzeugmenü drübergezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.",
+            "Pistole: 24 Schuss, klein und schnell gezogen. Ohne sie und ohne Sturmgewehr bleibt dir nur das Messer.",
+            "Scharfschützengewehr: trifft weit und hart und schießt aus jeder Haltung. Ohne Scharfschützenmunition ist es leer, die kostet eigene Slots.",
+            "Scharfschützenmunition: 20 Schuss für das Scharfschützengewehr. Das lässt sich auch in Kisten finden.",
         };
-        if (panelSel >= 1 && panelSel <= IT_COUNT) hud.panel.detail = kAbout[panelSel - 1];
-        else if (panelSel == 0) hud.panel.detail = "Das hast du immer dabei: Pistole mit 24 Schuss und Kampfmesser. Alles andere findest du in Kisten in Häusern und bei Wracks: Scharfschützengewehr, Raketenwerfer, Granaten und Bombencodes.";
+        if (panelSel >= 1 && panelSel <= IT_COUNT) hud.panel.detail = kAbout[kLoadoutOrder[panelSel - 1]];
+        else if (panelSel == 0) hud.panel.detail = "Das hast du immer dabei: dein Kampfmesser. Alles andere nimmst du für Slots mit oder findest es in Kisten in Häusern und bei Wracks, auch Raketenwerfer, Granaten und Bombencodes.";
         else hud.panel.detail = "20 Slots. Ist alles gewählt, wähle Bereit. Du startest zu Fuß in deiner Basis und nimmst dir dort ein Fahrzeug.";
         for (int k = 0; k < IT_COUNT; k++)
           for (int n = 0; n < pickItems[k] * kItems[k].slots; n++) hud.panel.slots.push_back(k);

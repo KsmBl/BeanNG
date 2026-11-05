@@ -46,7 +46,7 @@ build/beanng-server 27015       # auf dem Rechner, den alle erreichen können
 
 Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbinden**. Oder direkt mit `./run.sh --connect 1.2.3.4:27015`. Der Port ist UDP und muss von außen erreichbar sein.
 
-**Ablauf:** Sind alle da, wählt jeder seine Ausrüstung (20 Slots, 60 Sekunden): Tretmine 2 Slots, Panzermine 5, Reparaturset 10, Sturmgewehr 2, 60 Schuss Kleinmunition 1, Nebelgranate 1, Ghillie-Anzug 3, Tarnnetz 3. Du startest zu Fuß mit Pistole und Messer in deiner Basis. Eine Seite verliert, wenn von ihr niemand mehr lebt; nach 8 Sekunden geht es von vorn los. Ausrüstung und Beute gelten für ein Match.
+**Ablauf:** Sind alle da, wählt jeder seine Ausrüstung (20 Slots, 60 Sekunden). Das Messer ist immer dabei; Pistole 1 Slot, Sturmgewehr 2 (beide mit 24 Schuss), Scharfschützengewehr 5, 60 Schuss Kleinmunition 1, 20 Schuss Scharfschützenmunition 2, Reparaturset 10, Nebelgranate 1, Ghillie-Anzug 3, Tarnnetz 3, Tretmine 2, Panzermine 5. Was man nur einmal braucht, hat statt einer Zahl ein Kästchen. Du startest zu Fuß mit Pistole und Messer in deiner Basis. Eine Seite verliert, wenn von ihr niemand mehr lebt; nach 8 Sekunden geht es von vorn los. Ausrüstung und Beute gelten für ein Match.
 
 **Karte:** 2 km groß, ringsum Berge. Dazwischen Dörfer, Hügel, Wälder, Hecken, Erdwälle, Felsgruppen, alte Panzerwracks, ein Fluss mit drei Brücken, zwei flache Furten und zwei 10 m hohe Sperrmauern, über die nur die Artillerie schießt.
 

@@ -13,7 +13,7 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 45;
+constexpr u16 kProtocol = 46;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1400;  // safely under any path's MTU
 constexpr int kNameBytes = 24;
@@ -126,7 +126,7 @@ struct InputMsg {
   i8 requestGear = 0;  // 0 nothing, otherwise forward or reverse, for as long as it is wanted
   // What this player has chosen for the match, in every packet until the match has begun.
   u8 ready = 0;
-  u8 items[8] = {};
+  u8 items[11] = {};
   u32 ackBlasts = 0;  // blasts of this match this player has already set off
   u32 ackMatch = 0;
   u32 viewTick = 0;   // which server moment the player is looking at: hits by hand weapons will be judged there

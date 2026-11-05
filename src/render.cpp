@@ -3261,7 +3261,10 @@ struct Renderer::Impl {
         float ty = y - 1.05f * rowH;
         const float cell = (bw - 36 * sc) / 10.f;
         if (!P.slots.empty()) {
-          label(bx + 18 * sc, ty, "Slots", 17 * sc, white);
+          int taken = 0;
+          for (int k : P.slots) taken += k >= 0 ? 1 : 0;
+          snprintf(buf, sizeof buf, "Slots  %d / %zu", taken, P.slots.size());
+          label(bx + 18 * sc, ty, buf, 17 * sc, white);
           ty += rowH * .7f;
         }
         for (size_t i = 0; i < P.slots.size(); i++) {

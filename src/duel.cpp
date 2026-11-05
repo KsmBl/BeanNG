@@ -2277,15 +2277,15 @@ void Duel::placePlayers() {
     p.tapped = false;
     p.tapClock = p.fixWait = 0;
     for (Player::Fix& f : p.fixes) f = Player::Fix{};
-    p.weapon = WP_PISTOL;
-    p.smallAmmo = 24;
+    p.weapon = WP_KNIFE;
+    p.smallAmmo = 0;
     p.sniperAmmo = p.rpgAmmo = 0;
     p.tankShells = p.tankMissiles = p.strikeCodes = 0;
     p.medkits = 0;
     p.thermalSight = p.weakSight = false;
     p.shotClock = 0;
     p.wantProne = false;
-    for (int k = 0; k < WP_COUNT; k++) p.hasWeapon[k] = k <= WP_PISTOL;
+    for (int k = 0; k < WP_COUNT; k++) p.hasWeapon[k] = k == WP_KNIFE;
     if (giveAll) {
       for (bool& h : p.hasWeapon) h = true;
       p.sniperAmmo = 20;
@@ -2307,7 +2307,7 @@ bool Duel::choose(int player, const u8 items[IT_COUNT], bool ready) {
   if (phase != CHOOSING || player < 0 || player >= kMaxPlayers) return false;
   if (slotsUsed(items) > kLoadoutSlots) return false;
   Player& p = players[player];
-  for (int i = 0; i < IT_COUNT; i++) p.items[i] = items[i];
+  for (int i = 0; i < IT_COUNT; i++) p.items[i] = kItems[i].once ? u8(items[i] > 0 ? 1 : 0) : items[i];
   p.ready = ready;
   return true;
 }
@@ -2496,10 +2496,23 @@ void Duel::step(const Intent in[kMaxPlayers]) {
         restart();
         for (int i = 0; i < kMaxPlayers; i++) {
           memcpy(players[i].items, kept[i], IT_COUNT);
-          players[i].smallAmmo += 60 * players[i].items[IT_SMALL_AMMO];
-          if (players[i].items[IT_AR] > 0) {
-            players[i].hasWeapon[WP_AR] = true;
-            players[i].weapon = WP_AR;
+          Player& who = players[i];
+          who.smallAmmo += 60 * who.items[IT_SMALL_AMMO];
+          who.sniperAmmo += 20 * who.items[IT_SNIPER_AMMO];
+          // What one takes along is what one has: a knife, and whatever the slots were spent on. A gun comes with a first magazine,
+          // the big rifle's rounds are a matter of their own.
+          if (who.items[IT_PISTOL] > 0 || who.items[IT_AR] > 0) who.smallAmmo += 24;
+          if (who.items[IT_SNIPER] > 0) {
+            who.hasWeapon[WP_SNIPER] = true;
+            who.weapon = WP_SNIPER;
+          }
+          if (who.items[IT_PISTOL] > 0) {
+            who.hasWeapon[WP_PISTOL] = true;
+            who.weapon = WP_PISTOL;
+          }
+          if (who.items[IT_AR] > 0) {
+            who.hasWeapon[WP_AR] = true;
+            who.weapon = WP_AR;
           }
         }
         startMatch();

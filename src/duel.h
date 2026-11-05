@@ -8,10 +8,11 @@
 #include "vehicle.h"
 #include "world.h"
 
-enum ItemKind : u8 { IT_FOOT_MINE, IT_AT_MINE, IT_REPAIR, IT_AR, IT_SMALL_AMMO, IT_SMOKE, IT_GHILLIE, IT_NET, IT_COUNT };
+enum ItemKind : u8 { IT_FOOT_MINE, IT_AT_MINE, IT_REPAIR, IT_AR, IT_SMALL_AMMO, IT_SMOKE, IT_GHILLIE, IT_NET, IT_PISTOL, IT_SNIPER, IT_SNIPER_AMMO, IT_COUNT };
 struct ItemInfo {
   const char* name;
   int slots;
+  bool once = false;  // one of it is all that makes sense: a box to tick, not a number
 };
 inline constexpr ItemInfo kItems[IT_COUNT] = {
     {"Tretmine", 2}, {"Panzermine", 5}, {"Reparaturset", 10}, {"Sturmgewehr", 2}, {"Kleinmunition (60 Schuss)", 1}, {"Nebelgranate", 1}, {"Ghillie-Anzug", 3}, {"Tarnnetz", 3},

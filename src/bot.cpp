@@ -152,7 +152,7 @@ void Bot::chooseLoadout(Duel& d, int me) {
       items[IT_REPAIR] = 1, items[IT_NET] = 1, items[IT_AR] = 1, items[IT_SMALL_AMMO] = 3, items[IT_SMOKE] = 2;
       break;
     case SNIPER:  // the rifle itself has to be found
-      items[IT_GHILLIE] = 1, items[IT_AR] = 1, items[IT_SMALL_AMMO] = 6, items[IT_SMOKE] = 3;
+      items[IT_GHILLIE] = 1, items[IT_SNIPER] = 1, items[IT_SNIPER_AMMO] = 2, items[IT_AR] = 1, items[IT_SMALL_AMMO] = 4, items[IT_SMOKE] = 2;
       break;
     case SCAVENGE:  // travelling light: what it needs is out there
       items[IT_AR] = 1, items[IT_SMALL_AMMO] = 3, items[IT_SMOKE] = 2;
@@ -929,7 +929,7 @@ void Bot::onFoot(Duel& d, int me) {
   const bool foeInTank = seesFoe_ && d.players[foe_].vehicle >= 0;
   const bool hasRifle = pl.hasWeapon[WP_SNIPER] && pl.sniperAmmo > 0;
   const double foeDist = seesFoe_ ? len(foeAt_ - Duel::eyeOf(s)) : 1e9;
-  int gun = pl.hasWeapon[WP_AR] && pl.smallAmmo > 0 ? WP_AR : (pl.smallAmmo > 0 ? WP_PISTOL : WP_KNIFE);
+  int gun = pl.hasWeapon[WP_AR] && pl.smallAmmo > 0 ? WP_AR : (pl.hasWeapon[WP_PISTOL] && pl.smallAmmo > 0 ? WP_PISTOL : WP_KNIFE);
   if (foeInTank && pl.hasWeapon[WP_RPG] && pl.rpgAmmo > 0) gun = WP_RPG;
   else if (hasRifle && (foeDist > 35.0 || !seesFoe_)) gun = WP_SNIPER;
   held_.weapon = gun;
