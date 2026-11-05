@@ -15,6 +15,7 @@
 #include "props.h"
 #include "tank.h"
 #include "audio.h"
+#include "prof.h"
 #include "vehicle.h"
 
 namespace {
@@ -3081,6 +3082,7 @@ int main(int argc, char** argv) {
   if (argc > 1 && !strcmp(argv[1], "bots")) {
     // Two to six bots against each other, without a server: does it come to a fight, and to an end?
     const int count = argc > 2 ? std::clamp(atoi(argv[2]), 2, int(Duel::kMaxPlayers)) : 2;
+    gProfOn = getenv("BEANNG_PROFILE") != nullptr;
     const double most = argc > 3 ? atof(argv[3]) : 400.0;
     const bool cut = argc > 4 && (!strcmp(argv[4], "cut") || !strcmp(argv[4], "ford"));  // with every bridge down from the start
     const bool idle = argc > 4 && !strcmp(argv[4], "ford");  // and the other side just standing there, out of sight until one is close
@@ -3123,7 +3125,10 @@ int main(int argc, char** argv) {
           continue;
         }
         const double yawBefore = in[i].walk.yaw;
-        bots[size_t(i)].step(*d, i, in[i]);
+        {
+          ProfScope prof(PS_BOTS);
+          bots[size_t(i)].step(*d, i, in[i]);
+        }
         if (d->phase == Duel::PLAYING && t > 1.0) mostTurn = std::max(mostTurn, std::fabs(std::remainder(in[i].walk.yaw - yawBefore, 2.0 * PI)) / Duel::kDt * 57.2958);
       }
       d->step(in);
@@ -3171,6 +3176,10 @@ int main(int argc, char** argv) {
     }
     for (int i = 0; i < count; i++) printf("Bot %d (Gewehr %d, %d Schuss): Kills %d, Tode %d, Spuren gefolgt %d, Kisten %d, Rechner %d, Rettungen %d, Fluege %d\n", i, int(d->players[i].hasWeapon[WP_SNIPER]), d->players[i].sniperAmmo, int(d->scores[i].kills), int(d->scores[i].deaths), bots[size_t(i)].followedTracks(), bots[size_t(i)].cratesTaken(), bots[size_t(i)].computersTapped(), bots[size_t(i)].timesRescued(), bots[size_t(i)].flights());
     printf("Schnellste Drehung eines Bots: %.0f Grad/s\n", mostTurn);
+    if (gProfOn) {
+      static const char* const kStages[PS_COUNT] = {"Spieler", "Balken", "Fahrzeuge", "Paare", "Kontakte", "Boden", "Integration", "Schlaf", "Bots"};
+      for (int k = 0; k < PS_COUNT; k++) printf("  %-12s %7.2f s\n", kStages[k], gProf[k]);
+    }
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
   }

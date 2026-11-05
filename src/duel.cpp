@@ -1,4 +1,5 @@
 #include "duel.h"
+#include "prof.h"
 
 #include <algorithm>
 #include <cmath>
@@ -2413,7 +2414,10 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     calm[i] = quiet;
   }
   if (anyDead) in = calm;
-  stepPlayers(in);
+  {
+    ProfScope p(PS_PLAYERS);
+    stepPlayers(in);
+  }
   for (int h = 0; h < kHelis; h++) {
     heliDebt[h] += kDt;
     while (heliDebt[h] >= kWalkDt) {
@@ -2422,6 +2426,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     }
   }
   sim.forces(kDt);
+  ProfScope profVehicles(PS_VEHICLES);
   Controls still;
   still.brake = 1;
   for (int i = 0; i < kTanks; i++) {
@@ -2562,6 +2567,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     if (!sim.objs[a].awake) continue;
     for (u32 n : sim.objs[a].nodes) sim.force[n] -= sim.vel[n] * (sim.mass[n] * k);
   }
+  profVehicles.stop();
   stepCarRounds(kDt);
   sim.finish(kDt);
   updateFrames();

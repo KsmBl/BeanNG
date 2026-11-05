@@ -1,4 +1,5 @@
 #include "sim.h"
+#include "prof.h"
 #include <algorithm>
 #include <random>
 #include "world.h"
@@ -179,6 +180,7 @@ double Sim::maxEigenvalue(u32 obj, u32* worstNode) const {
 }
 
 void Sim::forces(double dt) {
+  ProfScope profBeams(PS_BEAMS);
   const V3 gv{0, 0, -g};
   for (u32 oi : active) {
     const Obj& o = objs[oi];
@@ -576,11 +578,26 @@ void Sim::breakBeam(Beam& b, bool notify, double f) {
 
 void Sim::finish(double dt) {
   stepCount++;
-  if (stepCount % kPairInterval == 1) rebuildPairs(dt);
-  collidePairs(dt);
-  collideWorld(dt);
-  integrate(dt);
-  if (stepCount % 64 == 0) sleepWake();
+  if (stepCount % kPairInterval == 1) {
+    ProfScope p(PS_PAIRS);
+    rebuildPairs(dt);
+  }
+  {
+    ProfScope p(PS_CONTACT);
+    collidePairs(dt);
+  }
+  {
+    ProfScope p(PS_WORLD);
+    collideWorld(dt);
+  }
+  {
+    ProfScope p(PS_INTEGRATE);
+    integrate(dt);
+  }
+  if (stepCount % 64 == 0) {
+    ProfScope p(PS_SLEEP);
+    sleepWake();
+  }
 }
 
 void Sim::event(EventKind k, V3 p, V3 v, float s) {
