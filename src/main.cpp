@@ -3188,6 +3188,7 @@ static void runGame() {
   HudOptions hud;
   enum { PANEL_NONE, PANEL_GAME, PANEL_MAIN, PANEL_KEYS, PANEL_ONLINE, PANEL_LOADOUT, PANEL_TOOLS, PANEL_CHAT, PANEL_TUTORIAL };
   int bindingKey = -1;  // the action waiting for its new key
+  size_t panelFirst = 0;  // the first row shown of a list longer than the window
   int tutorialPage = 0;
   // The first time, this comes first: back to the main menu from there.
   const bool firstTime = !gTutorialSeen && scriptMode == 0;
@@ -3903,11 +3904,13 @@ static void runGame() {
           int pw, ph;
           SDL_GetWindowSizeInPixels(window, &pw, &ph);
           float px, py, pwid, rowH;
-          panelLayout(pw, ph, items.size(), px, py, pwid, rowH, hud.panel.side);
+          const size_t shown = panelVisibleRows(ph, items.size());
+          panelLayout(pw, ph, shown, px, py, pwid, rowH, hud.panel.side);
           const float mxp = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.x : e.button.x;
           const float myp = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.y : e.button.y;
-          const int row = int(std::floor((myp - py) / rowH));
-          const bool inside = mxp >= px && mxp <= px + pwid && row >= 0 && row < int(items.size());
+          const int onScreen = int(std::floor((myp - py) / rowH));
+          const int row = int(panelFirst) + onScreen;
+          const bool inside = mxp >= px && mxp <= px + pwid && onScreen >= 0 && onScreen < int(shown) && row < int(items.size());
           if (inside) panelSel = row;
           if (inside && e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
             // In a value row: left half of the value down, right half up.
@@ -4531,6 +4534,8 @@ static void runGame() {
           case 5: printf("Vorwaerts jetzt: %s, gespeichert %d\n", keyName(KA_FORWARD).c_str(), int(gKeys[KA_FORWARD] == SDL_SCANCODE_I)); wantShot = true; break;
           case 6: items[0].change(1); break;
           case 7: ev.key.key = SDLK_S; ev.key.scancode = SDL_SCANCODE_S; SDL_PushEvent(&ev); break;
+          case 9: panelSel = int(items.size()) - 1; break;
+          case 10: wantShot = true; printf("Unten: Zeile %d von %zu, erste gezeigt %zu\n", panelSel, items.size(), panelFirst); fflush(stdout); break;
           case 8: printf("Vorwaerts %s, Rueckwaerts %s\n", keyName(KA_FORWARD).c_str(), keyName(KA_BACK).c_str()); for (int a = 0; a < KA_COUNT; a++) gKeys[a] = kKeyDefault[a]; printf("Zurueck: %s %s\n", keyName(KA_FORWARD).c_str(), keyName(KA_BACK).c_str()); fflush(stdout); break;
           default: break;
         }
@@ -5847,6 +5852,16 @@ static void runGame() {
       else if (panelKind == PANEL_TUTORIAL) hud.panel.foot = "ENTER weiter  ·  ESC schließen";
       else hud.panel.foot = panelKind == PANEL_CHAT ? "Pfeile wählen  ·  ENTER senden  ·  ESC schließen" : panelKind == PANEL_TOOLS ? "Zahl oder ENTER benutzen  ·  Q schließen" : panelKind == PANEL_ONLINE ? "Tippen  ·  Pfeile wählen  ·  ENTER weiter  ·  ESC zurück" : panelKind == PANEL_MAIN ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
       hud.panel.sel = panelSel;
+      {
+        // More rows than fit: a window over them that moves only when the selection would leave it.
+        int ww, wh;
+        SDL_GetWindowSizeInPixels(window, &ww, &wh);
+        const size_t shown = panelVisibleRows(wh, items.size());
+        if (size_t(std::max(panelSel, 0)) < panelFirst) panelFirst = size_t(std::max(panelSel, 0));
+        if (size_t(std::max(panelSel, 0)) >= panelFirst + shown) panelFirst = size_t(panelSel) - shown + 1;
+        panelFirst = std::min(panelFirst, items.size() - std::min(shown, items.size()));
+        hud.panel.first = panelFirst;
+      }
       hud.panel.rows.clear();
       hud.panel.values.clear();
       hud.panel.fill.clear();

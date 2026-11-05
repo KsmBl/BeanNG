@@ -229,12 +229,20 @@ struct UiPanel {
   std::vector<int> slots;    // a row of boxes, each the kind of thing filling that slot; -1 empty
   bool side = false;        // whether there is a box beside the list for those two
   int sel = 0;
+  size_t first = 0;  // of a list too long for the window: the first row shown
 };
 // Where a panel sits, shared by drawing it and clicking on it.
 // With a box beside the list the two together are centred, and the box gets what is left, up to a readable measure.
+inline float panelScale(int h) { return std::max(float(h) / 720.f, 1.f); }
+// How many rows of a list fit in a window this high, with the title and the line at the foot.
+inline size_t panelVisibleRows(int h, size_t rows) {
+  const float rowH = 31 * panelScale(h);
+  const size_t most = size_t(std::max(float(h) / rowH - 4.4f, 3.f));
+  return std::min(rows, most);
+}
 inline void panelLayout(int w, int h, size_t rows, float& x, float& y, float& pw, float& rowH, bool side = false, float* sideW = nullptr) {
   const float H = float(h), W = float(w);
-  const float scale = H / 720.f < 1.f ? 1.f : float(int(H / 720.f + 0.5f));
+  const float scale = panelScale(h);
   pw = 620 * scale;
   rowH = 31 * scale;
   const float gap = 14 * scale, box = side ? std::min(W - pw - 3 * gap, 320 * scale) : 0.f;

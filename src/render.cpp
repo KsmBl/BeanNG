@@ -3379,12 +3379,16 @@ struct Renderer::Impl {
       const UiPanel& P = o.panel;
       float x, y, pw, rowH;
       float sideW = 0;
-      panelLayout(w, h, P.rows.size(), x, y, pw, rowH, P.side, &sideW);
+      const size_t shown = panelVisibleRows(h, P.rows.size()), first = std::min(P.first, P.rows.size() - shown);
+      panelLayout(w, h, shown, x, y, pw, rowH, P.side, &sideW);
       const float sc = rowH / 27.f;
-      rrect(x, y - 2.0f * rowH, pw, (float(P.rows.size()) + 3.6f) * rowH, 18 * sc, {.04f, .045f, .055f, .88f});
+      rrect(x, y - 2.0f * rowH, pw, (float(shown) + 3.6f) * rowH, 18 * sc, {.04f, .045f, .055f, .88f});
       label(x + 22 * sc, y - 1.05f * rowH, P.title.c_str(), 25 * sc, white);
-      for (size_t i = 0; i < P.rows.size(); i++) {
-        const float ry = y + float(i) * rowH;
+      // Where there is more above or below, a small mark says so.
+      if (first > 0) labelRight(x + pw - 22 * sc, y - 1.05f * rowH, "mehr oben", 13 * sc, faint);
+      if (first + shown < P.rows.size()) labelRight(x + pw - 22 * sc, y + (float(shown) + .75f) * rowH, "mehr unten", 13 * sc, faint);
+      for (size_t i = first; i < first + shown; i++) {
+        const float ry = y + float(i - first) * rowH;
         const float mid = ry + rowH * .46f;
         const bool sel = int(i) == P.sel;
         if (sel) rrect(x + 8 * sc, ry, pw - 16 * sc, rowH - 2 * sc, 8 * sc, {.35f, .85f, .95f, .17f});
@@ -3408,11 +3412,11 @@ struct Renderer::Impl {
           }
         }
       }
-      label(x + 22 * sc, y + (float(P.rows.size()) + .75f) * rowH, P.foot.c_str(), 13 * sc, faint);
+      label(x + 22 * sc, y + (float(shown) + .75f) * rowH, P.foot.c_str(), 13 * sc, faint);
       if (P.side) {
         // Beside the list: what fills the slots, and what the selected thing is good for.
         const float bx = x + pw + 12 * sc, bw = sideW;
-        const float bh = (float(P.rows.size()) + 3.6f) * rowH;
+        const float bh = (float(shown) + 3.6f) * rowH;
         rrect(bx, y - 2.0f * rowH, bw, bh, 18 * sc, {.04f, .045f, .055f, .88f});
         static const Col kKinds[6] = {{.95f, .35f, .25f, 1}, {.95f, .65f, .2f, 1}, {.35f, .85f, .95f, 1}, {.45f, .85f, .45f, 1}, {.8f, .8f, .55f, 1}, {.7f, .6f, .95f, 1}};
         float ty = y - 1.05f * rowH;
