@@ -153,6 +153,8 @@ struct Snapshot {
     double prone = 0, crouch = 0;
     // Flying: where, and what one has left.
     bool heliOn = false, heliWatch = false;
+    double heliHeight = 0, heliClimb = 0, heliPower = 0, heliPitch = 0, heliRoll = 0;
+    float heliEngine = 1, heliRotor = 1, heliTail = 1;  // what is left of each, 0..1
     V3 heliP, heliFwd{1, 0, 0}, heliLeft{0, 1, 0}, heliUp{0, 0, 1};
     int heliAmmo = 0, heliInstance = 0;
     double heliSpeed = 0;

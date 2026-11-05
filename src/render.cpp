@@ -2612,12 +2612,19 @@ struct Renderer::Impl {
           row(IC_WRENCH, "LHM", float(s.accum / 170e5), s.accum > 90e5 ? green : red, buf);
         }
       } else {
+        if (s.buggy) {
+          // A belt of a thousand: what counts is how much is left of it, not the moment between two rounds.
+          const float left = float(std::max(s.tankAmmo, 0)) / 1000.f;
+          snprintf(buf, sizeof buf, "%d", std::max(s.tankAmmo, 0));
+          row(IC_SHELL, "MG", left, s.tankAmmo == 0 ? red : (left < 0.15f ? amber : green), buf);
+        } else {
         if (s.reload > 0) snprintf(buf, sizeof buf, "%.1f s", s.reload);
         else if (s.tankAmmo >= 0) snprintf(buf, sizeof buf, s.tankAmmo ? "bereit · %d" : "leer", s.tankAmmo);
         else snprintf(buf, sizeof buf, "bereit");
-        row(IC_SHELL, s.buggy ? "MG" : "Kanone", s.reload > 0 ? float(1.0 - s.reload / std::max(s.reloadTime, 0.1)) : 1.f, s.reload > 0 ? amber : green, buf);
+        row(IC_SHELL, "Kanone", s.reload > 0 ? float(1.0 - s.reload / std::max(s.reloadTime, 0.1)) : 1.f, s.reload > 0 ? amber : green, buf);
+        }
         snprintf(buf, sizeof buf, "%+.0f°", s.gunPitch * 57.3);
-        row(IC_TURRET, "Rohr", float((s.gunPitch * 57.3 + 9.0) / 29.0), teal, buf);
+        row(IC_TURRET, s.buggy ? "Lafette" : "Rohr", s.buggy ? float((s.gunPitch * 57.3 + 14.0) / 64.0) : float((s.gunPitch * 57.3 + 9.0) / 29.0), teal, buf);
         if (s.missiles > 0 || s.missileLive) {
           snprintf(buf, sizeof buf, s.missileLive ? "%d + fliegt" : "%d", s.missiles);
           row(IC_SHELL, "Raketen", float(s.missiles) / 8.f, teal, buf);
@@ -2684,7 +2691,69 @@ struct Renderer::Impl {
     }
 
     }
-    if (s.foot.onFoot) {
+    if (s.foot.onFoot && s.foot.heliOn) {
+      // In the air: what holds it up, what is left of it, how much gun there is, and which way up it is.
+      const float cw = 400 * u, ch = 214 * u, x = 22 * u, y = H - ch - 22 * u;
+      rrect(x, y, cw, ch, 14 * u, card);
+      float ry = y + 28 * u;
+      const float ix = x + 16 * u, tx = x + 44 * u, bx = x + 104 * u, bw = 100 * u, vx = x + 284 * u;
+      const auto row = [&](u32 ic, const char* name, float v, Col c, const char* value) {
+        icon(ic, ix, ry - 10 * u, 20 * u, Col{c.r, c.g, c.b, 1});
+        label(tx, ry, name, 13 * u, dim);
+        meter(bx, ry - 4 * u, bw, 8 * u, v, c);
+        labelRight(vx, ry, value, 15 * u, white);
+        ry += 28 * u;
+      };
+      const auto state = [&](float v) { return v <= 0 ? red : (v < 0.5f ? amber : green); };
+      const float ammo = float(s.foot.heliAmmo) / 200.f;
+      snprintf(buf, sizeof buf, "%d", s.foot.heliAmmo);
+      row(IC_SHELL, "Gatling", ammo, s.foot.heliAmmo == 0 ? red : (ammo < 0.15f ? amber : green), buf);
+      snprintf(buf, sizeof buf, "%.0f %%", s.foot.heliPower * 100.0);
+      row(IC_TURRET, "Rotor", float(s.foot.heliPower), teal, buf);
+      snprintf(buf, sizeof buf, "%.0f %%", s.foot.heliEngine * 100.0);
+      row(IC_ENGINE, "Motor", s.foot.heliEngine, state(s.foot.heliEngine), buf);
+      snprintf(buf, sizeof buf, "%.0f %%", s.foot.heliRotor * 100.0);
+      row(IC_WRENCH, "Blätter", s.foot.heliRotor, state(s.foot.heliRotor), buf);
+      snprintf(buf, sizeof buf, "%.0f %%", s.foot.heliTail * 100.0);
+      row(IC_WRENCH, "Heck", s.foot.heliTail, state(s.foot.heliTail), buf);
+      snprintf(buf, sizeof buf, "%.0f", std::max(s.foot.hp, 0.0));
+      row(IC_ENGINE, "Pilot", float(std::clamp(s.foot.hp / 100.0, 0.0, 1.0)), s.foot.hp < 34 ? red : green, buf);
+      // The horizon, on its side when it is, in the round thing at the end of the card.
+      const float gx = x + 344 * u, gy = y + 62 * u, gr = 40 * u;
+      circle(gx, gy, gr, {.1f, .2f, .32f, .9f});
+      const float roll = float(s.foot.heliRoll), lift = float(std::clamp(s.foot.heliPitch, -0.6, 0.6)) * gr * 1.4f;
+      const float c0 = std::cos(roll), s0 = std::sin(roll);
+      for (int k = 0; k <= 12; k++) {
+        // Ground, in strips across the circle: below the line, as far as the circle goes.
+        const float along = (float(k) / 12.f * 2.f - 1.f) * gr * .96f;
+        const float half = std::sqrt(std::max(gr * gr * .92f - along * along, 0.f));
+        const float mid = lift + half * 0.f;
+        const float low = std::max(mid, -half);
+        if (low >= half) continue;
+        const float a[2] = {low, half};
+        const float px0 = along * c0 - a[0] * s0, py0 = along * s0 + a[0] * c0, px1 = along * c0 - a[1] * s0, py1 = along * s0 + a[1] * c0;
+        const float wide = gr * .09f;
+        shape({{gx + px0 - c0 * wide, gy + py0 - s0 * wide}, {gx + px1 - c0 * wide, gy + py1 - s0 * wide}, {gx + px1 + c0 * wide, gy + py1 + s0 * wide}, {gx + px0 + c0 * wide, gy + py0 + s0 * wide}}, {.34f, .26f, .16f, .95f});
+      }
+      arc(gx, gy, gr, 1.4f * u, 0, kPi2, {1, 1, 1, .4f});
+      rrect(gx - 16 * u, gy - 1 * u, 12 * u, 2 * u, 0, amber);
+      rrect(gx + 4 * u, gy - 1 * u, 12 * u, 2 * u, 0, amber);
+      circle(gx, gy, 2 * u, amber);
+      // Height and climb beneath it.
+      snprintf(buf, sizeof buf, "%.0f m", std::max(s.foot.heliHeight, 0.0));
+      labelMid(gx, gy + gr + 18 * u, buf, 18 * u, white);
+      snprintf(buf, sizeof buf, "%+.1f m/s", s.foot.heliClimb);
+      labelMid(gx, gy + gr + 40 * u, buf, 13 * u, s.foot.heliClimb < -6.0 ? red : dim);
+      // How fast, lower right, as the other vehicles have it.
+      const float R = 84 * u, cx = W - R - 26 * u, cy = H - R - 26 * u;
+      circle(cx, cy, R + 10 * u, card);
+      const float a0 = 2.356f, a1 = a0 + 4.712f, share = float(std::clamp(s.foot.heliSpeed * 3.6 / 300.0, 0.0, 1.0));
+      arc(cx, cy, R - 4 * u, 9 * u, a0, a1, {1, 1, 1, .12f});
+      arc(cx, cy, R - 4 * u, 9 * u, a0, a0 + (a1 - a0) * share, teal);
+      snprintf(buf, sizeof buf, "%.0f", s.foot.heliSpeed * 3.6);
+      labelMid(cx, cy - 6 * u, buf, 46 * u, white);
+      labelMid(cx, cy + 22 * u, "km/h", 14 * u, dim);
+    } else if (s.foot.onFoot) {
       // On foot there is less to read: how one is doing, and what one carries.
       const float cw = 300 * u, ch = 74 * u, cx0 = 24 * u, cy0 = H - ch - 24 * u;
       rrect(cx0, cy0, cw, ch, 14 * u, card);
@@ -2697,13 +2766,9 @@ struct Renderer::Impl {
       static const char* kNames[5] = {"Kampfmesser", "Pistole", "Sturmgewehr", "Scharfschützengewehr", "Raketenwerfer"};
       const float wx = cx0, wy = cy0 - 58 * u;
       rrect(wx, wy, cw, 50 * u, 14 * u, card);
-      if (s.foot.heliOn) snprintf(buf, sizeof buf, "Gatling");
-      else snprintf(buf, sizeof buf, "%d  %s", s.foot.weapon + 1, kNames[std::clamp(s.foot.weapon, 0, 4)]);
+      snprintf(buf, sizeof buf, "%d  %s", s.foot.weapon + 1, kNames[std::clamp(s.foot.weapon, 0, 4)]);
       label(wx + 16 * u, wy + 20 * u, buf, 15 * u, white);
-      if (s.foot.heliOn) {
-        snprintf(buf, sizeof buf, "%d", s.foot.heliAmmo);
-        labelRight(wx + cw - 16 * u, wy + 20 * u, buf, 18 * u, s.foot.heliAmmo == 0 ? red : white);
-      } else if (s.foot.ammo >= 0) {
+      if (s.foot.ammo >= 0) {
         snprintf(buf, sizeof buf, "%d", s.foot.ammo);
         labelRight(wx + cw - 16 * u, wy + 20 * u, buf, 18 * u, s.foot.ammo == 0 ? red : white);
       }

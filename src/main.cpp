@@ -339,7 +339,6 @@ struct SoundDriver {
       // A flat four behind the seat, revving where the tank's big diesel would be at idle.
       f.cylinders = 4;
       f.exhaustPitch = 1.25f;
-      f.rpm *= kBuggyRevs;
       f.inputRpm *= kBuggyRevs;
     }
     f.rotor = s.heliNoise;
@@ -816,6 +815,12 @@ struct Game {
     s.rpm = myVehicle >= 0 ? (s.foot.inCar ? duel.cars[size_t(myVehicle - Duel::kTanks)].rpm() : tank.rpm()) : 0;
     s.rpmMax = s.foot.inCar ? 7000 : 2500;
     s.rpmRed = s.foot.inCar ? 6100 : 2300;
+    if (s.buggy) {
+      // Its small engine as it is heard, and on a scale that goes with that.
+      s.rpm *= kBuggyRevs;
+      s.rpmMax *= kBuggyRevs;
+      s.rpmRed *= kBuggyRevs;
+    }
     // The instruments of what one is in: a tank standing about has its brakes on, and that is nothing to do with a car.
     const Vehicle* car = s.foot.inCar ? &duel.cars[size_t(myVehicle - Duel::kTanks)] : nullptr;
     const bool inTankNow = myVehicle >= 0 && !car;
@@ -2381,6 +2386,14 @@ struct Game {
           snap.foot.heliUp = seat.up();
           snap.foot.heliSpeed = len(seat.v);
           snap.foot.heliAmmo = duel.helis[myHeli].ammo;
+          snap.foot.heliHeight = seat.p.z - duel.world.groundUnder(seat.p.x, seat.p.y, seat.p.z + 1.0);
+          snap.foot.heliClimb = seat.v.z;
+          snap.foot.heliPower = seat.power;
+          snap.foot.heliPitch = seat.pitch;
+          snap.foot.heliRoll = seat.roll;
+          snap.foot.heliEngine = float(duel.helis[myHeli].engine) / float(Heli::kEngineHits);
+          snap.foot.heliRotor = float(duel.helis[myHeli].rotor) / float(Heli::kRotorHits);
+          snap.foot.heliTail = float(duel.helis[myHeli].tail) / float(Heli::kTailHits);
           // The same picture as for any vehicle: from above, nose up, each part in the colour of its state.
           const Heli& state = duel.helis[myHeli];
           const float engineHurt = 1.f - float(state.engine) / float(Heli::kEngineHits);
