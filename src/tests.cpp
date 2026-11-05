@@ -3224,6 +3224,59 @@ int main(int argc, char** argv) {
     printf("Im Panzer %d, Schaden %.2f | Marker: Schuetze %d, sein Kamerad %d, Insasse %d, dessen Kamerad %d | getroffen: Insasse %d\n", int(d->players[1].vehicle == v), d->tanks[v].damage, int(d->players[0].hitsLanded), int(d->players[2].hitsLanded), int(d->players[1].hitsLanded), int(d->players[3].hitsLanded), int(d->players[1].hitsTaken));
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "tankrest")) {
+    // Someone in a tank, doing nothing: does it go to sleep, and does it come back for a pedal, the sights and a blast?
+    auto* d = new Duel();
+    d->playersWanted = 2;
+    d->build();
+    d->players[0].present = d->players[1].present = true;
+    Duel::Intent in[Duel::kMaxPlayers];
+    const auto run = [&](double seconds) {
+      for (double t = 0; t < seconds; t += Duel::kDt) {
+        d->step(in);
+        std::vector<SimEvent> ev;
+        d->drainEvents(ev);
+      }
+    };
+    u8 none[IT_COUNT] = {};
+    while (d->phase != Duel::CHOOSING) run(0.1);
+    d->choose(0, none, true);
+    d->choose(1, none, true);
+    while (d->phase != Duel::PLAYING) run(0.05);
+    const int v = Duel::tankIndex(0, TK_STANDARD, HK_MEDIUM);
+    const Tank& T = d->tanks[v];
+    d->players[0].soldier.p = d->frames[v].cog + d->frames[v].left * 2.5;
+    in[0].use = true;
+    run(Duel::kDt * 0.5);
+    in[0].use = false;
+    in[0].c.aimPoint = T.muzzle + T.gunDir * 200.0;
+    const auto say = [&](const char* what) { printf("%-24s Fz %d wach %d, %.1f km/h, Turm %.3f, Schaden %.2f, Rohr %.3f\n", what, d->players[0].vehicle, int(d->sim.objs[T.hullObj].awake), T.speed * 3.6, T.turretYaw, T.damage, T.gunPitch); };
+    run(0.5);
+    say("eingestiegen");
+    run(6.0);
+    say("6 s nichts");
+    const V3 side = T.left * 60.0 + T.fwd * 60.0;
+    in[0].c.aimPoint = T.muzzle + side;
+    run(0.02);
+    say("Blick weg, 20 ms");
+    run(2.0);
+    say("nach 2 s");
+    run(6.0);
+    say("wieder 6 s nichts");
+    in[0].c.throttle = 1;
+    run(1.5);
+    say("Gas 1,5 s");
+    in[0].c.throttle = 0;
+    in[0].c.brake = 1;
+    run(7.0);
+    in[0].c.brake = 0;
+    say("steht wieder");
+    d->sim.blastBy = 1;
+    d->sim.explode(T.cog + T.up * 1.5, 2200.0, 15.0);
+    run(0.1);
+    say("Treffer");
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "rearm")) {
     // A rotor over friend and foe, the green patch for a tank and a helicopter, and an intruder at a bot's computer.
     auto* d = new Duel();

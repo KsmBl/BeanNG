@@ -2450,8 +2450,15 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     }
     const Controls* c = &crew;
     const bool owned = driver >= 0 || gunner >= 0;
-    if (owned || sim.objs[t.hullObj].awake || sim.objs[t.turretObj].awake) {
-      if (!t.destroyed) {
+    // Someone in it, standing and wanting nothing, as one lying in wait does for minutes at a time: it can sleep like
+    // any parked tank, until the first touch on a pedal or the sights. A blast wakes it as it wakes the others.
+    const bool resting = owned && t.nothingToDo(*c);
+    if (owned && !t.destroyed) {
+      sim.objs[t.hullObj].alwaysAwake = !resting;
+      sim.objs[t.turretObj].alwaysAwake = !resting;
+    }
+    if ((owned && !resting) || sim.objs[t.hullObj].awake || sim.objs[t.turretObj].awake) {
+      if (!t.destroyed && !resting) {
         sim.wake(t.hullObj);
         sim.wake(t.turretObj);
       }

@@ -91,6 +91,7 @@ class Tank {
   const HullSpec& hullSpec() const { return ::hullSpec(hull); }
   const TurretSpec& spec() const { return turretSpec(kind); }
   double turnRate(double absV) const;  // rad/s at full lock, at this speed
+  bool nothingToDo(const Controls& in) const;  // stands, and nobody wants anything of it: it may as well sleep with someone in it
 
   struct Shell {
     V3 p, v;

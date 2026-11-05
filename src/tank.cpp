@@ -614,6 +614,15 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   }
 }
 
+bool Tank::nothingToDo(const Controls& in) const {
+  if (destroyed || reload > 0 || missileLive || !shells.empty() || recoilTime < 0.2) return false;
+  if (in.fire || in.launch || std::fabs(in.throttle) > 0.02 || std::fabs(in.steer) > 0.02) return false;
+  if (throttleAct > 0.02 || std::fabs(speed) > 0.15) return false;
+  double wantYaw = turretYaw, wantPitch = gunPitch;
+  aimAngles(ring_, in, wantYaw, wantPitch);
+  return std::fabs(std::remainder(wantYaw - turretYaw, 2.0 * PI)) < 0.004 && std::fabs(wantPitch - gunPitch) < 0.004;
+}
+
 double Tank::turnRate(double absV) const {
   // The buggy's: as tight as about 1.1 g allows. A tank's: about 0.8 g, and it has no steering lock to hold it back.
   if (hull == HK_BUGGY) return absV < 5.0 ? 1.8 : clampd(11.0 / absV, 0.26, 1.8);
