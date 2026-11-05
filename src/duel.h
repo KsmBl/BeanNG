@@ -189,12 +189,14 @@ class Duel {
     int owner = 0;
     int kind = WP_PISTOL;
     double age = 0, lag = 0;
+    int by = -1;  // whose it is, for what flies with nobody as its owner
   };
   std::vector<Bullet> bullets;
   // Rockets ordered by a strike code, on their way. They come one after the other, each somewhere near the point.
   struct Incoming {
     V3 at;
     double in = 0;
+    int by = -1;
   };
   std::vector<Incoming> incoming;
   static constexpr double kStrikeDelay = 6.0, kStrikeSpread = 38.0, kStrikeGap = 1.4;
@@ -262,6 +264,16 @@ class Duel {
   static V3 eyeOf(const Soldier& s);
 
   Player players[kMaxPlayers];
+  // The score, over all the matches of a server. A slot starts again when someone new takes it.
+  struct Score {
+    u16 kills = 0, deaths = 0;
+  };
+  Score scores[kMaxPlayers];
+  // Who last hurt each player, and how long ago: it only counts as their kill if it is still fresh.
+  static constexpr double kKillCredit = 30.0;
+  int hurtBy[kMaxPlayers] = {-1, -1, -1, -1, -1, -1};
+  double hurtByAge[kMaxPlayers] = {};
+  int carHitBy[kCars] = {-1, -1, -1, -1, -1, -1};
   int playersWanted = 2;  // how many it takes for a match, half on each side
   Phase phase = WAITING;
   int winner = -1;  // -1 until decided; a draw stays -1 through FINISHED
@@ -339,7 +351,10 @@ class Duel {
   void fireWeapon(int p, const Intent& in);
   void stepBullets(double dt);
   // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
-  bool bulletInCar(int k, V3 from, V3 dir, int kind);
+  bool bulletInCar(int k, V3 from, V3 dir, int kind, int owner);
+  void creditHurt(int victim, int by);
+  void countDeaths();
+  bool deathCounted[kMaxPlayers] = {};
   void placeMine(int p, int kind);
   u32 bridgeFallsSeen = 0;
   void noteHit(int victim, int attacker, V3 from);

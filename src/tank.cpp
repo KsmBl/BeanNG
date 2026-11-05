@@ -482,6 +482,7 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   // ---- Fire.
   reload -= dt;
   if (in.fire && missileLive) {
+    sim.blastBy = missileBy;
     sim.explode(missileP, 5000.0, 20.0);
     missileLive = false;
   } else if (in.fire && reload <= 0 && ammo != 0 && mod[TM_GUN] > 0) {
@@ -491,6 +492,7 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
     shotsFired += 1;
     Shell s;
     s.p = muzzle + gF * 0.2;
+    s.by = gunner;
     // Without its sight the gunner lays it by eye, and it shows.
     V3 shot = gF;
     if (mod[TM_SIGHT] <= 0) {
@@ -678,6 +680,7 @@ void Tank::updateShells(Sim& sim, double dt) {
     if (hit) {
       // The 105 mm: a high-explosive round, about the 2.3 kg of filler of a HESH shell.
       sim.blastDir = norm(s.v);
+      sim.blastBy = s.by;
       sim.explode(at, spec().blastImpulse, spec().blastRadius);
       shells[i] = shells.back();
       shells.pop_back();
@@ -738,6 +741,7 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
     missiles--;
     missileLive = true;
     missileAge = 0;
+    missileBy = gunner;
     const double cy = std::cos(turretYaw), sy = std::sin(turretYaw);
     const V3 eF = fwd * cy + left * sy;
     missileP = ring_ + up * 1.4;
@@ -769,6 +773,7 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   // Enough fuel for the whole map and back; then it comes down wherever it is.
   if (hit || missileAge > 60.0) {
     sim.blastDir = norm(missileV);
+    sim.blastBy = missileBy;
     sim.explode(at, 5000.0, 20.0);
     missileLive = false;
   }
@@ -987,6 +992,7 @@ void Tank::checkDamage(Sim& sim, double dt) {
     for (u16 oi : {hullObj, turretObj})
       for (u32 n : sim.objs[oi].nodes) dmin = std::min(dmin, len(sim.pos[n] - c));
     if (sim.lastBlastRadius > 0 && dmin < sim.lastBlastRadius) {
+      if (sim.lastBlastBy >= 0) hitBy = sim.lastBlastBy;
       // A heavy shell does not need to touch: anywhere close enough, and that is the end of the tank.
       const double core = sim.lastBlastImpulse >= 10000.0 ? 4.5 : 1.3;
       const double reach = std::min(core / std::max(dmin, 0.3), 1.0);
@@ -1052,6 +1058,7 @@ void Tank::destroy(Sim& sim) {
   for (u32 n : turretNodes) tc += sim.pos[n];
   tc = tc / std::max<size_t>(turretNodes.size(), 1);
   for (u32 n : sim.objs[turretObj].nodes) sim.vel[n] += kick + cross(spin, sim.pos[n] - tc);
+  sim.blastBy = hitBy;
   sim.explode(O + up * 0.2, 3500.0, 9.0);
   blastSeen_ = sim.blastCount;
 }

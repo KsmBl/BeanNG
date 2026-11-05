@@ -3023,6 +3023,54 @@ struct Renderer::Impl {
       }
     }
 
+    // ---- The score, for as long as the key is held: each side with its wins, each player with kills and deaths.
+    if (o.showBoard && !s.board.empty()) {
+      static const char* const kTeamName[2] = {"Team West", "Team Ost"};
+      const float colW = 330 * u, gap = 20 * u, rowH = 30 * u;
+      int most = 1;
+      for (int t = 0; t < 2; t++) {
+        int n = 0;
+        for (const Snapshot::BoardRow& r : s.board) n += r.team == t ? 1 : 0;
+        most = std::max(most, n);
+      }
+      const float tw = colW * 2 + gap, th = 138 * u + rowH * float(most);
+      const float x0 = (W - tw) * .5f, y0 = (H - th) * .42f;
+      rrect(x0 - 18 * u, y0 - 14 * u, tw + 36 * u, th + 28 * u, 12 * u, {.03f, .035f, .045f, .88f});
+      snprintf(buf, sizeof buf, "%u  :  %u", s.boardWins[0], s.boardWins[1]);
+      labelMid(W * .5f, y0 + 18 * u, buf, 30 * u, white);
+      for (int t = 0; t < 2; t++) {
+        const float cx = x0 + float(t) * (colW + gap);
+        const float killX = cx + colW - 88 * u, deathX = cx + colW - 26 * u;
+        const Col dim{1, 1, 1, .55f};
+        const Col side = t == 0 ? Col{.45f, .72f, 1.f, 1.f} : Col{1.f, .62f, .38f, 1.f};
+        label(cx + 8 * u, y0 + 52 * u, kTeamName[t], 20 * u, side);
+        label(cx + 8 * u, y0 + 88 * u, "Spieler", 14 * u, dim);
+        labelMid(killX, y0 + 88 * u, "Kills", 14 * u, dim);
+        labelMid(deathX, y0 + 88 * u, "Tode", 14 * u, dim);
+        rrect(cx, y0 + 102 * u, colW, 1.5f * u, 0, {1, 1, 1, .25f});
+        float y = y0 + 122 * u;
+        for (const Snapshot::BoardRow& r : s.board) {
+          if (r.team != t) continue;
+          if (r.me) rrect(cx, y - rowH * .46f, colW, rowH * .92f, 5 * u, {1, 1, 1, .12f});
+          const Col ink = r.alive ? white : Col{1, 1, 1, .45f};
+          // Cut off at a whole character, should a long name not fit.
+          std::string name = r.name;
+          const float room = killX - 28 * u - (cx + 8 * u);
+          while (!name.empty() && textWidth(name.c_str(), 17 * u) > room) {
+            do name.pop_back();
+            while (!name.empty() && (static_cast<unsigned char>(name.back()) & 0xC0) == 0x80);
+            if (!name.empty() && static_cast<unsigned char>(name.back()) >= 0xC0) name.pop_back();
+          }
+          label(cx + 8 * u, y, name.c_str(), 17 * u, ink);
+          snprintf(buf, sizeof buf, "%d", r.kills);
+          labelMid(killX, y, buf, 17 * u, ink);
+          snprintf(buf, sizeof buf, "%d", r.deaths);
+          labelMid(deathX, y, buf, 17 * u, ink);
+          y += rowH;
+        }
+      }
+    }
+
     // ---- The keyboard on the screen, over everything else.
     const auto drawOsk = [&] {
       const UiOsk& K = o.osk;

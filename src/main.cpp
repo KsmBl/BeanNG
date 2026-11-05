@@ -581,6 +581,7 @@ struct Game {
   int netState = NET_OFF;
   std::string netError;
   std::string names[Duel::kMaxPlayers];
+  Duel::Score scores[Duel::kMaxPlayers];
   int phase = Duel::WAITING;
   double phaseClock = 0;
   int slot = 0;
@@ -1564,6 +1565,12 @@ struct Game {
             name[net::kNameBytes - 1] = 0;
             if (r.ok()) names[i] = name;
           }
+          for (Duel::Score& sc : scores) {
+            u16 kills = 0, deaths = 0;
+            r.get(kills);
+            r.get(deaths);
+            if (r.ok()) sc = Duel::Score{kills, deaths};
+          }
         } else if (kind == net::P_SELF) {
           r.get(wins[0]);
           r.get(wins[1]);
@@ -2235,7 +2242,7 @@ struct Game {
         snprintf(msg, sizeof msg, "%s", alert.c_str());
       } else if (state == NET_IN) {
         const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
-        if (watching >= 0) snprintf(msg, sizeof msg, "Gefallen  ·  Du siehst %s  ·  TAB wechselt", names[watching].c_str());
+        if (watching >= 0) snprintf(msg, sizeof msg, "Gefallen  ·  Du siehst %s  ·  Linksklick wechselt", names[watching].c_str());
         else if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf Spieler  ·  %d von %d da", hereNow, wantedNow);
         else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
         else if (phaseNow == Duel::FINISHED) {
@@ -2271,7 +2278,7 @@ struct Game {
       }
       if (gPadHints.load()) {
         // The same words, with the buttons of the controller in them.
-        static const char* const kSwap[][2] = {{"E: ", "X: "}, {"Q: ", "RB: "}, {"K zeigt", "LB zeigt"}, {"TAB wechselt", "X wechselt"}, {"[ ] Tempo", "LB RB Tempo"}, {"Maus lenkt", "Rechter Stick lenkt"}, {"Feuer ", "RT "}};
+        static const char* const kSwap[][2] = {{"E: ", "X: "}, {"Q: ", "RB: "}, {"K zeigt", "LB zeigt"}, {"TAB wechselt", "X wechselt"}, {"Linksklick wechselt", "X wechselt"}, {"[ ] Tempo", "LB RB Tempo"}, {"Maus lenkt", "Rechter Stick lenkt"}, {"Feuer ", "RT "}};
         std::string said = msg;
         for (const auto& swap : kSwap) {
           const size_t at = said.find(swap[0]);
@@ -2372,6 +2379,22 @@ struct Game {
       }
       fillSnapshot(msg);
       snap.watchOn = watching >= 0;
+      // The table of the score: on each side, whoever has the most kills first.
+      snap.board.clear();
+      for (int k = 0; k < Duel::kMaxPlayers; k++) {
+        if (names[k].empty()) continue;
+        Snapshot::BoardRow row;
+        row.name = names[k];
+        row.team = Duel::teamOf(k);
+        row.kills = scores[k].kills;
+        row.deaths = scores[k].deaths;
+        row.alive = phaseNow == Duel::PLAYING || phaseNow == Duel::FINISHED ? drawnSoldier[k].hp > 0 : true;
+        row.me = k == mySlot;
+        snap.board.push_back(row);
+      }
+      std::stable_sort(snap.board.begin(), snap.board.end(), [](const Snapshot::BoardRow& a, const Snapshot::BoardRow& b) { return a.kills != b.kills ? a.kills > b.kills : a.deaths < b.deaths; });
+      snap.boardWins[0] = wins[0];
+      snap.boardWins[1] = wins[1];
       if (watching >= 0) {
         const int inside = drawnVehicle[watching];
         snap.watchP = inside >= 0 ? duel.frames[inside].cog : drawnSoldier[watching].p + V3{0, 0, 1.2};
@@ -2688,6 +2711,8 @@ static void runGame() {
   bool strikePending = false;  // a strike code chosen: the next click on the map says where
   // The controller's part of all that.
   bool padActive = false, padAim = false, padFire = false, padScopeHeld = false, padSprint = false;
+  bool backDown = false, boardOn = false;
+  double backHeld = 0;
   double padLx = 0, padLy = 0;
   V3 mapCursor;
   bool mapWasOpen = false;
@@ -3302,10 +3327,10 @@ static void runGame() {
               else openTools();
               break;
             case SDL_GAMEPAD_BUTTON_BACK:
+              // Tapped it opens the chat, held it shows the score: which of the two is only clear once it is let go.
               if (netState == Game::NET_IN) {
-                panelKind = PANEL_CHAT;
-                panelSel = 0;
-                fromMain = false;
+                backDown = true;
+                backHeld = 0;
               }
               break;
             case SDL_GAMEPAD_BUTTON_LEFT_STICK: padSprint = true; break;
@@ -3338,7 +3363,6 @@ static void runGame() {
           switch (e.key.key) {
             case SDLK_TAB:
               if (replayOn) replayNext();
-              else if (view.watchOn) G.teamWatch++;
               break;
             case SDLK_LEFTBRACKET: if (replayOn) G.replaySpeed = std::max(25, G.replaySpeed.load() / 2); break;
             case SDLK_RIGHTBRACKET: if (replayOn) G.replaySpeed = std::min(800, G.replaySpeed.load() * 2); break;
@@ -3369,7 +3393,10 @@ static void runGame() {
           }
           break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
-          if (e.button.button == SDL_BUTTON_LEFT) edges.fire = true;
+          if (e.button.button == SDL_BUTTON_LEFT) {
+            if (view.watchOn) G.teamWatch++;
+            else edges.fire = true;
+          }
           if (e.button.button == SDL_BUTTON_RIGHT && onFoot && weaponPick == WP_SNIPER && view.foot.prone > 0.99) scoped = !scoped;
           break;
         case SDL_EVENT_MOUSE_MOTION: {
@@ -3520,6 +3547,24 @@ static void runGame() {
     // While a panel is open the pedals rest: its keys are the same ones.
     if (panelKind != 0 || chatting || osk.open) gas = brake = steer = hb = 0;
     {
+      // The score, while TAB or the controller's back button is held.
+      {
+        constexpr double kBackHold = 0.28;
+        const bool stillDown = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK);
+        if (backDown) {
+          backHeld += dt;
+          if (!stillDown) {
+            backDown = false;
+            if (backHeld < kBackHold && netState == Game::NET_IN && panelKind == 0) {
+              panelKind = PANEL_CHAT;
+              panelSel = 0;
+              fromMain = false;
+            }
+          }
+        }
+        const bool tabDown = SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_TAB];
+        boardOn = netState == Game::NET_IN && !replayOn && panelKind == 0 && !chatting && !osk.open && (tabDown || (backDown && backHeld >= kBackHold));
+      }
       const bool wantRelative = panelKind == 0 && !mapOpen && !osk.open && !loadingShown && scriptMode == 0;
       if (wantRelative != relativeMouse) {
         SDL_SetWindowRelativeMouseMode(window, wantRelative);
@@ -3550,6 +3595,27 @@ static void runGame() {
         if (view.foot.prone > 0.99) scoped = true;
         scopeZoom = 6.0;
         if (std::fmod(tNow, 2.5) < dt) sendC.fire = true;
+      }
+    }
+    if (scriptMode == 76 && gTestPad && netState == Game::NET_IN) {
+      // The table of the score on the controller: held it shows, tapped it is the chat as ever.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      if (!gamepad) gamepad = SDL_OpenGamepad(SDL_GetJoystickID(gTestPad));
+      static double wake = 0;
+      static int stage = 0;
+      if (inMatch && wake == 0) wake = tNow + 25.0;
+      if (inMatch && tNow > wake && stage < 6) {
+        switch (stage++) {
+          case 0: SDL_SetJoystickVirtualButton(gTestPad, SDL_GAMEPAD_BUTTON_BACK, true); wake = tNow + 1.0; break;
+          case 1: printf("gehalten: Tabelle %d Panel %d Zeilen %zu\n", int(boardOn), panelKind, view.board.size()); wantShot = true; wake = tNow + 0.5; break;
+          case 2: SDL_SetJoystickVirtualButton(gTestPad, SDL_GAMEPAD_BUTTON_BACK, false); wake = tNow + 0.5; break;
+          case 3: printf("losgelassen: Tabelle %d Panel %d\n", int(boardOn), panelKind); SDL_SetJoystickVirtualButton(gTestPad, SDL_GAMEPAD_BUTTON_BACK, true); wake = tNow + 0.05; break;
+          case 4: SDL_SetJoystickVirtualButton(gTestPad, SDL_GAMEPAD_BUTTON_BACK, false); wake = tNow + 0.5; break;
+          case 5: printf("getippt: Tabelle %d Panel %d (Chat %d)\n", int(boardOn), panelKind, int(PANEL_CHAT)); fflush(stdout); break;
+        }
       }
     }
     if ((scriptMode == 61 || scriptMode == 62) && gTestPad) {
@@ -4378,6 +4444,9 @@ static void runGame() {
       view.selfOnFoot = G.snap.selfOnFoot;
       view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
+      view.board = G.snap.board;
+      view.boardWins[0] = G.snap.boardWins[0];
+      view.boardWins[1] = G.snap.boardWins[1];
       view.foot = G.snap.foot;
       memcpy(view.parkedHeat, G.snap.parkedHeat, sizeof view.parkedHeat);
       view.weakSpots = G.snap.weakSpots;
@@ -4569,6 +4638,7 @@ static void runGame() {
     hud.map.noRadio = view.foot.noRadio;
     hud.map.meYaw = std::atan2(view.carFwd.y, view.carFwd.x);
     hud.cameraName = kCamNames[rig.mode];
+    hud.showBoard = boardOn;
     feel.update(view, dt);
     rig.update(view, dt, cam, G.world, feel, gSet.shake);
     cam.fovY += gSet.fov * PI / 180.0;
@@ -4987,7 +5057,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
   }
-  if (scriptMode == 61 || scriptMode == 62) {
+  if (scriptMode == 61 || scriptMode == 62 || scriptMode == 76) {
     SDL_VirtualJoystickDesc desc;
     SDL_INIT_INTERFACE(&desc);
     desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;

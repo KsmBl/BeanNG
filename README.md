@@ -89,7 +89,9 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Mehr Spieler:** `beanng-server --players 4` oder `6` macht daraus 2v2 oder 3v3, ein Team pro Basis. Im Panzer gibt es zwei Plätze: Wer zuerst einsteigt, fährt, der zweite ist Richtschütze und führt Turm und Kanone. Eine Seite verliert, wenn von ihr niemand mehr lebt.
 
-**Zuschauen:** Wer im Team fällt, sieht danach einem Mitspieler über die Schulter, der noch lebt. Maus oder rechter Stick drehen die Kamera, TAB (Controller: X) wechselt zum nächsten. Dem Gegner schaut niemand zu.
+**Zuschauen:** Wer im Team fällt, sieht danach einem Mitspieler über die Schulter, der noch lebt. Maus oder rechter Stick drehen die Kamera, Linksklick (Controller: X) wechselt zum nächsten. Dem Gegner schaut niemand zu.
+
+**Punktestand:** Solange TAB gehalten wird (Controller: Back gedrückt halten), zeigt eine Tabelle den Stand der Teams und alle Spieler mit ihren Kills und Toden. Kurz auf Back getippt öffnet wie bisher den Chat. Ein Kill zählt für den Gegner, der einen zuletzt getroffen hat, wenn das nicht länger als 30 Sekunden her ist. Wer in seinem Fahrzeug stirbt, zählt für den, der das Fahrzeug zuletzt getroffen hat. Teamkills zählen nicht als Kill, der Tod zählt aber trotzdem. Die Zahlen gelten über alle Matches eines Servers und beginnen neu, wenn jemand Neues einen Platz übernimmt.
 
 **Bots:** `beanng-server --bots 1` lässt dich gegen den Rechner antreten, `--players 4 --bots 3` ergibt zwei gegen zwei mit einem Bot an deiner Seite. Fehlen Plätze, erhöht `--bots` die Spielerzahl von selbst, und auf der Serverkonsole geht es mit `/bot add` und `/bot remove` auch mitten im Spiel. Verbindet sich ein Mensch und alle Plätze sind belegt, übernimmt er den Platz eines Bots, und zwar dort, wo der gerade steht. Bots nehmen sich einen Panzer mit 105 mm (notfalls die leichte Kanone), folgen den Straßen, weichen bei gesprengten Brücken auf die Furten aus, reparieren mit ihrem Set und kämpfen zu Fuß weiter, wenn es sein muss. Artillerie, Lenkraketen, Autos, Minen und Drohnen benutzen sie nicht. Sie spielen nach denselben Regeln wie alle anderen, nur wissen sie alle 30 Sekunden ungefähr, wo der nächste Gegner ist, damit ein Match nicht ewig dauert, wenn sich jemand versteckt. Sie treffen nicht immer, sehen aber auch durch Bäume und Büsche.
 
@@ -145,11 +147,12 @@ Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom V
 | Visier auf Entfernung einstellen | Pfeil hoch, runter | Steuerkreuz hoch, runter |
 | Zielfernrohr: normal, thermal, Schwachstellen | T | Y |
 | Kamera, Abstand | C, Mausrad | Y, Steuerkreuz hoch, runter |
-| Chat | Enter | Back: Schnellnachrichten oder Bildschirmtastatur |
+| Chat | Enter | Back kurz tippen: Schnellnachrichten oder Bildschirmtastatur |
+| Punktestand zeigen | TAB halten | Back halten |
 | Menü | ESC | Start |
 | Im Menü wählen, ändern, bestätigen, zurück | Pfeile, ENTER, ESC | Steuerkreuz oder linker Stick, A, B |
 | Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | X, LB RB |
-| Gefallen: Mitspieler wechseln | TAB | X |
+| Gefallen: Mitspieler wechseln | Linksklick | X |
 | Screenshot | F12 | – |
 
 **Texteingabe am Controller:** A auf einem Feld im Online-Menü oder **Eigener Text...** im Chat öffnet die Bildschirmtastatur.

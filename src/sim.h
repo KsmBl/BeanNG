@@ -142,10 +142,13 @@ class Sim {
   double lastBlastRadius = 0, lastBlastImpulse = 0;
   // Which way what went off was flying, for armour to judge the angle. Set just before explode(); nothing for a mine.
   V3 blastDir, lastBlastDir;
+  // And whose it was, set the same way: for the score, and for a bot to know who is after it. -1 for nobody.
+  int blastBy = -1, lastBlastBy = -1;
   // For the duel server: what went off, for the players' machines to set off as well.
   struct BlastRecord {
     V3 c;
     double impulse, radius, hole;
+    int by = -1;
   };
   bool logBlasts = false;
   std::vector<BlastRecord> blastLog;

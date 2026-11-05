@@ -291,6 +291,7 @@ int main(int argc, char** argv) {
       clients[i].used = true;
       clients[i].bot = true;
       snprintf(clients[i].name, kNameBytes, "Bot %d", i + 1);
+      duel->scores[i] = Duel::Score{};
       bots[i] = Bot(botSeed++);
       have++;
     }
@@ -355,6 +356,7 @@ int main(int argc, char** argv) {
           }
           clients[slot] = Client{};
           clients[slot].used = true;
+          duel->scores[slot] = Duel::Score{};
           for (int k = 0; k < kNameBytes; k++) {
             char ch = 0;
             r.get(ch);
@@ -1046,6 +1048,10 @@ int main(int argc, char** argv) {
           w.put(duel->matchId);
           for (const Client& who : clients)
             for (int k = 0; k < kNameBytes; k++) w.put(who.used ? who.name[k] : char(0));
+          for (const Duel::Score& sc : duel->scores) {
+            w.put(sc.kills);
+            w.put(sc.deaths);
+          }
           post(c, w);
         }
         // The tanks in play every time, and now and then the others, should a packet have gone astray.

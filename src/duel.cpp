@@ -958,6 +958,7 @@ void Duel::fireWeapon(int p, const Intent& in) {
     if (foe >= 0 && players[foe].vehicle < 0 && len(V3{target.x - s.p.x, target.y - s.p.y, target.z - s.p.z}) < 2.2) {
       Soldier& other = players[foe].soldier;
       other.hp -= kWeapons[w].damage;
+      creditHurt(foe, p);
       players[foe].lastBlow = norm(target - s.p + V3{0, 0, 0.3}) * 2.0;
       noteHit(foe, p, s.p);
       sim.event(EV_BLOOD, target + V3{0, 0, 1.1}, norm(target - s.p) * 2.0, 0.7f);
@@ -992,7 +993,7 @@ void Duel::fireWeapon(int p, const Intent& in) {
   }
 }
 
-bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind) {
+bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind, int owner) {
   Vehicle& car = cars[size_t(k)];
   const VehicleFrame& f = frames[kTanks + k];
   const auto middle = [&](const std::vector<u32>& nodes, V3 fallback) {
@@ -1056,6 +1057,7 @@ bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind) {
       for (Player& pl : players)
         if (pl.vehicle == kTanks + k) {
           pl.soldier.hp -= kWeapons[kind].damage * 0.8;
+          creditHurt(int(&pl - players), owner);
           sim.event(EV_BLOOD, first->at, dir * 2.0, 0.7f);
           noteHit(int(&pl - players), -1, first->at - dir * 5.0);
         }
@@ -1144,6 +1146,7 @@ void Duel::stepBullets(double dt) {
             // In the head it counts for more than in the boots.
             const double z = near.z - foot.z;
             players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
+            creditHurt(q, b.owner);
             players[q].lastBlow = norm(b.v) * (b.kind == WP_SNIPER ? 11.0 : 2.5);
             noteHit(q, b.owner, from);
             sim.event(EV_BLOOD, near, b.v * 0.02, b.kind == WP_SNIPER ? 1.f : 0.45f);
@@ -1163,6 +1166,7 @@ void Duel::stepBullets(double dt) {
           stop = true;
           at = b.p;
           noteHit(-1, b.owner, from);
+          tanks[v].hitBy = b.owner;
           for (int who = 0; who < kMaxPlayers; who++)
             if (players[who].vehicle == v) noteHit(who, -1, from);
         }
@@ -1183,7 +1187,8 @@ void Duel::stepBullets(double dt) {
           at = p;
           if (v >= kTanks && !vehicleDead(v) && b.kind < WP_RPG) {
             inCar = true;
-            bulletInCar(v - kTanks, p - norm(seg) * 0.5, norm(seg), b.kind);
+            carHitBy[v - kTanks] = b.owner;
+            bulletInCar(v - kTanks, p - norm(seg) * 0.5, norm(seg), b.kind, b.owner);
           }
         }
       }
@@ -1210,6 +1215,7 @@ void Duel::stepBullets(double dt) {
     }
     if (stop) {
       if (b.kind == WP_RPG || b.kind == kKindStrike) sim.blastDir = norm(b.v);
+      sim.blastBy = b.kind == kKindStrike ? b.by : b.owner;
       if (b.kind == WP_RPG) sim.explode(at, 2800.0, 10.0);
       else if (b.kind == kKindStrike) sim.explode(at, 6500.0, 24.0);
       else if (b.kind == WP_SNIPER && b.age < 6.0) {
@@ -1220,6 +1226,7 @@ void Duel::stepBullets(double dt) {
         sim.event(EV_IMPACT, at, V3{double(b.owner), 0, 0}, 1.f);
       }
       else if (b.age < 6.0) sim.event(EV_SPARK, at, b.v * -0.01, 0.3f);
+      sim.blastBy = -1;  // for all those that set nothing off
       bullets[i] = bullets.back();
       bullets.pop_back();
       continue;
@@ -1241,7 +1248,30 @@ void Duel::callStrike(int p, V3 at) {
     Incoming in;
     in.at = at + V3{std::cos(a) * r, std::sin(a) * r, 0};
     in.in = kStrikeDelay + k * kStrikeGap;
+    in.by = p;
     incoming.push_back(in);
+  }
+}
+
+void Duel::creditHurt(int victim, int by) {
+  if (by < 0 || by == victim) return;
+  hurtBy[victim] = by;
+  hurtByAge[victim] = 0;
+}
+
+// Whoever has just gone down: one more death for them, and a kill for whoever it was, if that was an enemy and not long ago.
+void Duel::countDeaths() {
+  for (int i = 0; i < kMaxPlayers; i++) {
+    hurtByAge[i] += kDt;
+    if (!players[i].present || players[i].soldier.hp > 0) {
+      deathCounted[i] = false;
+      continue;
+    }
+    if (deathCounted[i] || (phase != PLAYING && phase != FINISHED)) continue;
+    deathCounted[i] = true;
+    scores[i].deaths++;
+    const int by = hurtBy[i];
+    if (by >= 0 && by != i && hurtByAge[i] < kKillCredit && teamOf(by) != teamOf(i)) scores[by].kills++;
   }
 }
 
@@ -1345,6 +1375,7 @@ void Duel::stepMines(double dt) {
       if (!off) continue;
       m.live = false;
       moveMarker(sim, mineFirst[kind][i], V3{0, 0, kMarkerDepth});
+      sim.blastBy = m.owner;
       if (kind == 0) sim.explode(m.p + V3{0, 0, 0.2}, 1400.0, 10.0);
       else {
         // Right under it, so the track on that side is gone whatever the armour makes of the blast.
@@ -1422,6 +1453,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
         // Even the small shells: what barely scratches a tank still goes off right next to a person.
         const double share = (1.0 - d / kill) * clampd(b.impulse / 1000.0, 0.5, 1.0);
         pl.soldier.hp -= 140.0 * share;
+        creditHurt(int(&pl - players), b.by);
         noteHit(int(&pl - players), -1, b.c);
         // Thrown away from it, and up.
         pl.lastBlow = norm(pl.soldier.p + V3{0, 0, 0.9} - b.c + V3{0, 0, 0.7}) * clampd(5.0 + 14.0 * share, 0.0, 18.0);
@@ -1465,6 +1497,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       b.v = norm(g - b.p) * 190.0;
       b.kind = kKindStrike;
       b.owner = 0;
+      b.by = incoming[k].by;
       bullets.push_back(b);
       incoming[k] = incoming.back();
       incoming.pop_back();
@@ -1549,6 +1582,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     if (pl.vehicle >= 0) {
       // Inside what goes up, one goes up with it.
       if (vehicleDead(pl.vehicle)) {
+        if (s.hp > 0) creditHurt(i, pl.vehicle < kTanks ? tanks[pl.vehicle].hitBy : carHitBy[pl.vehicle - kTanks]);
         s.hp = 0;
         s.p = frames[pl.vehicle].cog;
       }
@@ -1629,6 +1663,8 @@ void Duel::restart() {
   cars = carsStart;
   winner = -1;
   phaseClock = 0;
+  for (int i = 0; i < kMaxPlayers; i++) hurtBy[i] = -1;
+  for (int i = 0; i < kCars; i++) carHitBy[i] = -1;
   bullets.clear();
   incoming.clear();
   smoke.clear();
@@ -1733,6 +1769,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     Controls crew = still;
     const int driver = seatHolder(i, 0), gunner = seatHolder(i, 1);
     const int aimer = gunner >= 0 ? gunner : driver;
+    t.gunner = aimer;
     if (driver >= 0) {
       crew = in[driver].c;
     } else if (gunner >= 0) {
@@ -1797,7 +1834,10 @@ void Duel::step(const Intent in[kMaxPlayers]) {
   for (size_t i = 0; i < cars.size(); i++) {
     Vehicle& v = cars[i];
     // What a shell has torn open right beside it no longer works as a vehicle.
-    if (blast && !v.exploded && len(v.cog - sim.lastBlast) < sim.lastBlastRadius * 0.30) v.wreck(sim);
+    if (blast && !v.exploded && len(v.cog - sim.lastBlast) < sim.lastBlastRadius * 0.30) {
+      if (sim.lastBlastBy >= 0) carHitBy[i] = sim.lastBlastBy;
+      v.wreck(sim);
+    }
     Controls driven = parked;
     for (int p = 0; p < kMaxPlayers; p++)
       if (players[p].vehicle == kTanks + int(i)) {
@@ -1817,6 +1857,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
   }
   sim.finish(kDt);
   updateFrames();
+  countDeaths();
   phaseClock += kDt;
 
   int here = 0, readyNow = 0;

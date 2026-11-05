@@ -77,6 +77,14 @@ struct Snapshot {
   };
   std::vector<WeakSpot> weakSpots;  // only while someone looks for them
   std::vector<std::string> chat;  // the last lines, oldest first
+  // Everyone on the server, for the table of the score.
+  struct BoardRow {
+    std::string name;
+    int team = 0, kills = 0, deaths = 0;
+    bool alive = true, me = false;
+  };
+  std::vector<BoardRow> board;
+  u32 boardWins[2] = {};
   std::string chatInput;
   bool chatOpen = false;
   // The one playing, when not inside a tank.
@@ -232,6 +240,7 @@ struct HudOptions {
   int scopeZero = 100;
   int scopeView = SV_PLAIN;
   std::string scopeHint;  // which view the scope shows, and how to change it
+  bool showBoard = false;  // the table of the score, for as long as its key is held
   float hurt = 0;  // being hit: how red the picture goes
   float hitMark = 0;   // a hit landed
   // Something heard: which way, how loud, and how long ago it faded.
