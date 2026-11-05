@@ -38,6 +38,40 @@ struct GameSettings {
   bool rumble = true;
 };
 static GameSettings gSet;
+// The keys that can be changed. What is left out goes by the same key for everyone: the arrows, the number keys, ESC.
+enum KeyAction { KA_FORWARD, KA_BACK, KA_LEFT, KA_RIGHT, KA_JUMP, KA_SPRINT, KA_CROUCH, KA_PRONE, KA_USE, KA_FIRE, KA_TOOLS, KA_MAP, KA_LAUNCH, KA_CAMERA, KA_SCOPEVIEW, KA_COUNT };
+static const SDL_Scancode kKeyDefault[KA_COUNT] = {SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D, SDL_SCANCODE_SPACE, SDL_SCANCODE_LSHIFT, SDL_SCANCODE_LCTRL, SDL_SCANCODE_X, SDL_SCANCODE_E, SDL_SCANCODE_F, SDL_SCANCODE_Q, SDL_SCANCODE_K, SDL_SCANCODE_G, SDL_SCANCODE_C, SDL_SCANCODE_T};
+static const char* const kKeyFile[KA_COUNT] = {"key_forward", "key_back", "key_left", "key_right", "key_jump", "key_sprint", "key_crouch", "key_prone", "key_use", "key_fire", "key_tools", "key_map", "key_launch", "key_camera", "key_scopeview"};
+static const char* const kKeyLabel[KA_COUNT] = {"Vorwärts, Gas", "Rückwärts, Bremse", "Links", "Rechts", "Bremse, zu Fuß springen", "Rennen", "Ducken ein, aus", "Hinlegen, aufstehen", "Einsteigen, nehmen, anzapfen", "Feuer, neben der linken Maustaste", "Werkzeuge", "Karte", "Rakete starten", "Kamera", "Zielfernrohr: Ansicht"};
+static SDL_Scancode gKeys[KA_COUNT];
+static bool gTutorialSeen = false;
+static std::string keyName(int action);
+static constexpr int kTutorialPages = 7;
+// What a new player needs to know, in the keys they really have.
+static std::string tutorialText(int page, bool pad) {
+  const auto k = [&](int a, const char* onPad) { return pad ? std::string(onPad) : keyName(a); };
+  const std::string move = pad ? std::string("dem linken Stick") : keyName(KA_FORWARD) + " " + keyName(KA_LEFT) + " " + keyName(KA_BACK) + " " + keyName(KA_RIGHT);
+  switch (page) {
+    case 0:
+      return "Zwei Teams, eine große Karte, jede Basis an einem Ende. Dein Team gewinnt die Runde, wenn vom anderen niemand mehr lebt.\n\nFast alles hier ist ein weicher Körper: Fahrzeuge verbiegen sich, Bäume brechen, Brücken stürzen ein.";
+    case 1:
+      return "Vor der Runde hast du 60 Sekunden für deine Ausrüstung und 20 Slots. Das Messer ist immer dabei.\n\nOhne Pistole, Sturmgewehr oder Scharfschützengewehr bleibt es beim Messer. Ein Reparaturset kostet viel, rettet aber ein liegengebliebenes Fahrzeug.";
+    case 2:
+      return "Du läufst mit " + move + ", rennst mit " + k(KA_SPRINT, "dem linken Stick") + ", duckst dich mit " + k(KA_CROUCH, "dem rechten Stick") + " und legst dich mit " + k(KA_PRONE, "B") + " hin.\n\nGeschossen wird mit " + std::string(pad ? "RT" : "der linken Maustaste") + ", gezielt mit " + std::string(pad ? "LT" : "der rechten") + ". Waffen wählst du mit " + std::string(pad ? "dem Steuerkreuz" : "1 bis 5") + ", Werkzeuge mit " + k(KA_TOOLS, "RB") + ".";
+    case 3:
+      return "Am Hof stehen Panzer, Autos, Kettenbuggys und Helikopter für alle. Mit " + k(KA_USE, "X") + " steigst du ein und aus.\n\nIm Panzer zielst du mit der Maus, das Rohr folgt. Wer zuerst einsteigt, fährt, der Zweite schießt. Allein machst du beides. Mit " + k(KA_CAMERA, "Y") + " wechselst du die Kamera.";
+    case 4:
+      return "Der Kettenbuggy ist schnell und schießt mit dem MG, solange du die Taste hältst, aber ein Panzertreffer beendet ihn.\n\nDer Helikopter steigt mit " + k(KA_JUMP, "A") + " und sinkt mit " + k(KA_CROUCH, "B") + ". Ein Panzertreffer ist auch sein Ende, und einen Fallschirm gibt es nicht.";
+    case 5:
+      return "Hinter jedem Kommandozentrum liegt eine grüne Fläche. Stehst du dort 5 Sekunden still, wird die Munition deines Fahrzeugs aufgefüllt.\n\nAm gegnerischen Hauptcomputer kannst du mit " + k(KA_USE, "X") + " anzapfen und erfährst dann, wo die Gegner stehen. Das Gleiche versuchen sie bei dir.";
+    default:
+      return "Die Karte öffnest du mit " + k(KA_MAP, "LB") + ", die Punktetafel mit " + std::string(pad ? "Back" : "Tab") + ", den Chat mit " + std::string(pad ? "Back" : "Enter") + ".\n\nFahrspuren bleiben im Gras liegen, und Motoren hört man weit: Beides verrät dich, und beides verrät die anderen.\n\nTasten kannst du unter Steuerung ändern. Dieses Tutorial findest du jederzeit im Menü.";
+  }
+}
+static std::string keyName(int action) {
+  const char* name = SDL_GetScancodeName(gKeys[action]);
+  return name && *name ? name : "?";
+}
 // Whether the last thing touched was the controller: the hints on screen name its buttons then.
 static std::atomic<bool> gPadHints{false};
 // A controller made up for the test scripts: everything behind it is the real input path.
@@ -47,12 +81,16 @@ static FILE* gPlayLog = nullptr;
 static constexpr const char* kSettingsFile = "settings.cfg";
 
 static void loadSettings() {
+  for (int a = 0; a < KA_COUNT; a++) gKeys[a] = kKeyDefault[a];
   FILE* f = fopen(kSettingsFile, "r");
   if (!f) return;
   char key[64];
   double v;
   while (fscanf(f, "%63s %lf", key, &v) == 2) {
     const std::string k = key;
+    for (int a = 0; a < KA_COUNT; a++)
+      if (k == kKeyFile[a]) gKeys[a] = SDL_Scancode(int(v));
+    if (k == "tutorial_seen") gTutorialSeen = v != 0;
     if (k == "motion_blur") gSet.motionBlur = v != 0;
     else if (k == "camera_shake") gSet.shake = v != 0;
     else if (k == "damage_view") gSet.damageView = v != 0;
@@ -76,7 +114,8 @@ static void saveSettings() {
   if (!f) return;
   fprintf(f, "motion_blur %d\ncamera_shake %d\ndamage_view %d\nstats %d\nmuted %d\nfullscreen %d\nvsync %d\nfar_shadows %d\nvolume %.2f\nfov %.0f\nmouse %.2f\n",
           gSet.motionBlur, gSet.shake, gSet.damageView, gSet.stats, gSet.muted, gSet.fullscreen, gSet.vsync, gSet.farShadows, gSet.volume, gSet.fov, gSet.mouse);
-  fprintf(f, "pad_sensitivity %g\nrumble %d\ngrass %g\n", gSet.padSens, gSet.rumble, gSet.grass);
+  fprintf(f, "pad_sensitivity %g\nrumble %d\ngrass %g\ntutorial_seen %d\n", gSet.padSens, gSet.rumble, gSet.grass, gTutorialSeen ? 1 : 0);
+  for (int a = 0; a < KA_COUNT; a++) fprintf(f, "%s %d\n", kKeyFile[a], int(gKeys[a]));
   fclose(f);
 }
 
@@ -2678,6 +2717,15 @@ struct Game {
         // The same words, with the buttons of the controller in them.
         static const char* const kSwap[][2] = {{"E: ", "X: "}, {"Q: ", "RB: "}, {"K zeigt", "LB zeigt"}, {"Leertaste steigt", "A steigt"}, {"TAB wechselt", "X wechselt"}, {"Linksklick wechselt", "X wechselt"}, {"[ ] Tempo", "LB RB Tempo"}, {"Maus lenkt", "Rechter Stick lenkt"}, {"Feuer ", "RT "}};
         std::string said = msg;
+        // With keys of one's own the prompts say so.
+        if (!gPadHints.load()) {
+          static const struct { const char* token; int action; } kNamed[] = {{"E: ", KA_USE}, {"Q: ", KA_TOOLS}, {"K zeigt", KA_MAP}, {"X: ", KA_PRONE}, {"G: ", KA_LAUNCH}};
+          for (const auto& n : kNamed) {
+            if (gKeys[n.action] == kKeyDefault[n.action]) continue;
+            const size_t at = said.find(n.token);
+            if (at != std::string::npos) said.replace(at, 1, keyName(n.action));
+          }
+        }
         for (const auto& swap : kSwap) {
           const size_t at = said.find(swap[0]);
           if (at != std::string::npos) said.replace(at, strlen(swap[0]), swap[1]);
@@ -3140,11 +3188,19 @@ static void runGame() {
   rig.dist = 8.0;
   Camera cam;
   HudOptions hud;
-  enum { PANEL_NONE, PANEL_GAME, PANEL_MAIN, PANEL_KEYS, PANEL_ONLINE, PANEL_LOADOUT, PANEL_TOOLS, PANEL_CHAT };
-  int panelKind = PANEL_MAIN;
+  enum { PANEL_NONE, PANEL_GAME, PANEL_MAIN, PANEL_KEYS, PANEL_ONLINE, PANEL_LOADOUT, PANEL_TOOLS, PANEL_CHAT, PANEL_TUTORIAL };
+  int bindingKey = -1;  // the action waiting for its new key
+  int tutorialPage = 0;
+  // The first time, this comes first: back to the main menu from there.
+  const bool firstTime = !gTutorialSeen && scriptMode == 0;
+  if (firstTime) {
+    gTutorialSeen = true;
+    saveSettings();
+  }
+  int panelKind = firstTime ? PANEL_TUTORIAL : PANEL_MAIN;
   bool textEntry = false;
   int panelSel = 0;
-  bool fromMain = false;  // a page opened from the main menu goes back to it
+  bool fromMain = firstTime;  // a page opened from the main menu goes back to it
   struct Item {
     std::string label, value;
     float fill;
@@ -3485,6 +3541,10 @@ static void runGame() {
       }
       page("Spiel-Einstellungen", [&] { openPage(PANEL_GAME); });
       page("Steuerung", [&] { openPage(PANEL_KEYS); });
+      page("Tutorial", [&] {
+        tutorialPage = 0;
+        openPage(PANEL_TUTORIAL);
+      });
       page("Beenden", [&] { quit = true; });
     } else if (panelKind == PANEL_GAME) {
       toggle("Vollbild", gSet.fullscreen, [&] {
@@ -3512,30 +3572,49 @@ static void runGame() {
       percent("Controller-Empfindlichkeit", gSet.padSens, 0.3, 2.5, 0.1);
       toggle("Vibration", gSet.rumble, [&] { gSet.rumble = !gSet.rumble; });
     } else if (panelKind == PANEL_KEYS) {
+      // What can be changed, on the keyboard. Choose it, and the next key that is pressed is it.
+      if (!padActive) {
+        for (int a = 0; a < KA_COUNT; a++) {
+          const int action = a;
+          items.push_back({kKeyLabel[a], bindingKey == a ? "Taste drücken..." : keyName(a), -1.f, [&bindingKey, action](int) { bindingKey = action; }});
+        }
+        page("Alle Tasten zurücksetzen", [&] {
+          for (int a = 0; a < KA_COUNT; a++) gKeys[a] = kKeyDefault[a];
+          saveSettings();
+        });
+      }
       // The list of whatever is in the hands right now.
       auto key = [&](const char* what, const char* k, const char* p) { items.push_back({what, padActive ? p : k, -1.f, [&](int) {}}); };
-      key("Gehen, Lenken", "W A S D", "Linker Stick");
-      key("Panzer: Gas und Rückwärts", "W S", "Linker Stick");
-      key("Auto: Gas und Bremse", "W S", "RT, LT");
-      key("Bremse, zu Fuß springen", "Leertaste", "A");
-      key("Rennen", "Umschalt", "Linken Stick drücken");
+      if (padActive) {
+        key("Gehen, Lenken", "", "Linker Stick");
+        key("Panzer: Gas und Rückwärts", "", "Linker Stick");
+        key("Auto: Gas und Bremse", "", "RT, LT");
+        key("Bremse, zu Fuß springen", "", "A");
+        key("Rennen", "", "Linken Stick drücken");
+      }
       key("Zielen, umsehen", "Maus", "Rechter Stick");
-      key("Feuer", "Linke Maustaste, F", "RT");
-      key("Anvisieren, in jedem Panzer und mit jedem Gewehr", "Rechte Maustaste halten", "LT halten");
-      key("Einsteigen, aussteigen, nehmen, anzapfen", "E", "X");
+      if (padActive) key("Feuer", "", "RT");
+      key("Anvisieren", "Rechte Maustaste halten", "LT halten");
+      if (padActive) key("Einsteigen, aussteigen, nehmen, anzapfen", "", "X");
       key("Waffe wählen", "1 2 3 4 5", "Steuerkreuz links, rechts");
-      key("Werkzeuge: Minen, Medikit, Nebel, Drohne, Bombencode", "Q", "RB");
-      key("Karte, Ziel für die Artillerie", "K", "LB");
-      key("Rakete starten, fliegt mit dem Blick", "G", "B");
-      key("Hinlegen, aufstehen", "X", "B");
-      key("Ducken ein, aus", "Strg", "rechter Stick");
+      if (padActive) {
+        key("Werkzeuge: Minen, Medikit, Nebel, Drohne, Bombencode", "", "RB");
+        key("Karte, Ziel für die Artillerie", "", "LB");
+        key("Rakete starten, fliegt mit dem Blick", "", "B");
+        key("Hinlegen, aufstehen", "", "B");
+        key("Ducken ein, aus", "", "rechter Stick");
+      }
       key("Zielfernrohr, Zoom", "Rechte Maustaste, Mausrad", "LT, Steuerkreuz links, rechts");
       key("Visier auf Entfernung einstellen", "Pfeil hoch, runter", "Steuerkreuz hoch, runter");
-      key("Zielfernrohr: normal, thermal, Schwachstellen", "T", "Y");
-      key("Kamera, Abstand", "C, Mausrad", "Y, Steuerkreuz hoch, runter");
+      if (padActive) key("Zielfernrohr: normal, thermal, Schwachstellen", "", "Y");
+      if (padActive) key("Kamera, Abstand", "", "Y, Steuerkreuz hoch, runter");
       key("Chat", "Enter", "Back");
       key("Menü", "ESC", "Start");
-      if (!padActive) key("Screenshot", "F12", "");
+    } else if (panelKind == PANEL_TUTORIAL) {
+      if (tutorialPage + 1 < kTutorialPages) page("Weiter", [&] { tutorialPage++; panelSel = 0; });
+      else page("Fertig", [&] { panelKind = fromMain ? PANEL_MAIN : PANEL_NONE; panelSel = 0; });
+      if (tutorialPage > 0) page("Zurück", [&] { tutorialPage--; panelSel = tutorialPage > 0 ? 1 : 0; });
+      page("Tutorial schließen", [&] { panelKind = fromMain ? PANEL_MAIN : PANEL_NONE; panelSel = 0; });
     } else if (panelKind == PANEL_CHAT) {
       page("Eigener Text...", [&] {
         panelKind = PANEL_NONE;
@@ -3566,7 +3645,7 @@ static void runGame() {
 
     auto choosePanel = [&] {
       if (panelKind == PANEL_ONLINE && panelSel < 3) panelSel = 3;  // from a field, ENTER goes on to the button
-      else if (panelKind != PANEL_KEYS && panelSel < int(items.size())) items[size_t(panelSel)].change(1);
+      else if (panelSel < int(items.size())) items[size_t(panelSel)].change(1);
     };
     auto closePanel = [&] {
       saveSettings();
@@ -3653,6 +3732,18 @@ static void runGame() {
       // Any key ends the kill cam, and does nothing else.
       if (killPlaying && ((e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)) {
         killSkip = true;
+        continue;
+      }
+      if (bindingKey >= 0 && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
+        // The new key for it. Whatever had that key until now takes the old one, so that nothing is left without.
+        if (e.key.key != SDLK_ESCAPE && e.key.scancode != SDL_SCANCODE_UNKNOWN) {
+          const SDL_Scancode old = gKeys[bindingKey];
+          for (SDL_Scancode& other : gKeys)
+            if (other == e.key.scancode) other = old;
+          gKeys[bindingKey] = e.key.scancode;
+          saveSettings();
+        }
+        bindingKey = -1;
         continue;
       }
       if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_WHEEL) padActive = false;
@@ -3774,7 +3865,7 @@ static void runGame() {
             panelSel = row;
             choosePanel();
           }
-        } else if (e.type == SDL_EVENT_KEY_DOWN && panelKind == PANEL_TOOLS && e.key.key == SDLK_Q) {
+        } else if (e.type == SDL_EVENT_KEY_DOWN && panelKind == PANEL_TOOLS && e.key.scancode == gKeys[KA_TOOLS]) {
           if (!e.key.repeat) panelKind = PANEL_NONE;
         } else if (e.type == SDL_EVENT_KEY_DOWN) {
           switch (e.key.key) {
@@ -3912,6 +4003,26 @@ static void runGame() {
           break;
         case SDL_EVENT_KEY_DOWN:
           if (e.key.repeat) break;
+          {
+            // Those that can be changed. A pressed key from the test scripts only says what it means.
+            const SDL_Scancode sc = e.key.scancode != SDL_SCANCODE_UNKNOWN ? e.key.scancode : SDL_GetScancodeFromKey(e.key.key, nullptr);
+            if (sc == gKeys[KA_TOOLS]) openTools();
+            else if (sc == gKeys[KA_LAUNCH]) edges.launch = true;
+            else if (sc == gKeys[KA_MAP]) {
+              mapOpen = !mapOpen;
+              strikePending = false;
+            } else if (sc == gKeys[KA_CAMERA]) {
+              rig.mode = CamMode((rig.mode + 1) % CAM_COUNT);
+              rig.pitch = 0.22;
+            } else if (sc == gKeys[KA_FIRE]) edges.fire = true;
+            else if (sc == gKeys[KA_SCOPEVIEW]) {
+              if (scoped) nextScopeView();
+            } else if (sc == gKeys[KA_USE]) edges.use = true;
+            else if (sc == gKeys[KA_PRONE]) edges.setup = true;
+            else if (sc == gKeys[KA_CROUCH] || (sc == SDL_SCANCODE_RCTRL && gKeys[KA_CROUCH] == SDL_SCANCODE_LCTRL)) {
+              if (onFoot && !view.foot.heliOn) crouchOn = !crouchOn;
+            }
+          }
           switch (e.key.key) {
             case SDLK_TAB:
               if (replayOn) replayNext();
@@ -3919,13 +4030,6 @@ static void runGame() {
             case SDLK_LEFTBRACKET: if (replayOn) G.replaySpeed = std::max(25, G.replaySpeed.load() / 2); break;
             case SDLK_RIGHTBRACKET: if (replayOn) G.replaySpeed = std::min(800, G.replaySpeed.load() * 2); break;
             case SDLK_ESCAPE: openMenu(); break;
-            case SDLK_Q: openTools(); break;
-            case SDLK_G: edges.launch = true; break;
-            case SDLK_K:
-              mapOpen = !mapOpen;
-              strikePending = false;
-              break;
-            case SDLK_C: rig.mode = CamMode((rig.mode + 1) % CAM_COUNT); rig.pitch = 0.22; break;
             case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5: {
               const int pick = int(e.key.key - SDLK_1);
               if (view.foot.has & (1 << pick)) weaponPick = pick;
@@ -3934,11 +4038,6 @@ static void runGame() {
             case SDLK_RETURN: case SDLK_KP_ENTER:
               if (netState == Game::NET_IN) chatting = true;
               break;
-            case SDLK_F: edges.fire = true; break;
-            case SDLK_T: if (scoped) nextScopeView(); break;
-            case SDLK_E: edges.use = true; break;
-            case SDLK_X: edges.setup = true; break;
-            case SDLK_LCTRL: case SDLK_RCTRL: if (onFoot && !view.foot.heliOn) crouchOn = !crouchOn; break;
             case SDLK_UP: if (scoped) scopeZero = std::min(scopeZero + 50, 2000); break;
             case SDLK_DOWN: if (scoped) scopeZero = std::max(scopeZero - 50, 100); break;
             case SDLK_F12: wantShot = true; break;
@@ -3980,10 +4079,10 @@ static void runGame() {
     // Continuous inputs.
     const bool* keys = SDL_GetKeyboardState(nullptr);
     double keyDir = 0;
-    if (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]) keyDir += 1;
-    if (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]) keyDir -= 1;
-    double gas = (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) ? 1.0 : 0.0;
-    double brake = (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]) ? 1.0 : 0.0;
+    if (keys[gKeys[KA_LEFT]] || keys[SDL_SCANCODE_LEFT]) keyDir += 1;
+    if (keys[gKeys[KA_RIGHT]] || keys[SDL_SCANCODE_RIGHT]) keyDir -= 1;
+    double gas = (keys[gKeys[KA_FORWARD]] || keys[SDL_SCANCODE_UP]) ? 1.0 : 0.0;
+    double brake = (keys[gKeys[KA_BACK]] || keys[SDL_SCANCODE_DOWN]) ? 1.0 : 0.0;
     // In a car keyboard steering goes like a driver's hands, and narrower with speed: at 100 km/h a key press must not
     // slam on more lock than the tyres can use. A tank just turns, and someone on foot just steps aside.
     {
@@ -3992,8 +4091,8 @@ static void runGame() {
       const double keyRate = (keyDir != 0 && keyDir * keySteer >= 0) ? 2.4 : 4.0;
       keySteer += clampd(keyTarget - keySteer, -keyRate * dt, keyRate * dt);
     }
-    bool sprint = keys[SDL_SCANCODE_LSHIFT] || sprintScript;
-    double steer = inVehicle && myVehicle >= Duel::kTanks ? keySteer : keyDir, hb = keys[SDL_SCANCODE_SPACE] ? 1.0 : 0.0;
+    bool sprint = keys[gKeys[KA_SPRINT]] || sprintScript;
+    double steer = inVehicle && myVehicle >= Duel::kTanks ? keySteer : keyDir, hb = keys[gKeys[KA_JUMP]] ? 1.0 : 0.0;
 
     hud.gamepad = false;
     padFire = false;
@@ -4374,6 +4473,28 @@ static void runGame() {
             wantShot = true;
             arrived88 = 1e9;
           }
+        }
+      }
+    }
+    if (scriptMode == 89) {
+      // The tutorial, a new key for going forward, and whether it then goes.
+      static int stage89 = 0;
+      static double next89 = 1.0;
+      if (tNow > next89) {
+        next89 = tNow + 0.8;
+        SDL_Event ev{};
+        ev.type = SDL_EVENT_KEY_DOWN;
+        switch (stage89++) {
+          case 0: panelKind = PANEL_TUTORIAL; fromMain = true; tutorialPage = 3; break;
+          case 1: wantShot = true; printf("Tutorial Zeilen: %s, %s, %s\n", items[0].label.c_str(), items.size() > 1 ? items[1].label.c_str() : "", items.size() > 2 ? items[2].label.c_str() : ""); tutorialPage = 0; panelKind = PANEL_KEYS; panelSel = 0; break;
+          case 2: wantShot = true; break;
+          case 3: items[0].change(1); printf("Warte auf Taste: %d\n", bindingKey); break;
+          case 4: ev.key.key = SDLK_I; ev.key.scancode = SDL_SCANCODE_I; SDL_PushEvent(&ev); break;
+          case 5: printf("Vorwaerts jetzt: %s, gespeichert %d\n", keyName(KA_FORWARD).c_str(), int(gKeys[KA_FORWARD] == SDL_SCANCODE_I)); wantShot = true; break;
+          case 6: items[0].change(1); break;
+          case 7: ev.key.key = SDLK_S; ev.key.scancode = SDL_SCANCODE_S; SDL_PushEvent(&ev); break;
+          case 8: printf("Vorwaerts %s, Rueckwaerts %s\n", keyName(KA_FORWARD).c_str(), keyName(KA_BACK).c_str()); for (int a = 0; a < KA_COUNT; a++) gKeys[a] = kKeyDefault[a]; printf("Zurueck: %s %s\n", keyName(KA_FORWARD).c_str(), keyName(KA_BACK).c_str()); fflush(stdout); break;
+          default: break;
         }
       }
     }
@@ -5337,7 +5458,7 @@ static void runGame() {
       G.input.sprint = sprint;
       // Ducking stays on until it is pressed again. In a helicopter the same keys are for going down, as long as they are held.
       if (!onFoot || view.foot.hp <= 0 || view.foot.heliOn) crouchOn = false;
-      const bool heliDown = view.foot.heliOn && (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL] || (gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_EAST)));
+      const bool heliDown = view.foot.heliOn && (keys[gKeys[KA_CROUCH]] || (gKeys[KA_CROUCH] == SDL_SCANCODE_LCTRL && keys[SDL_SCANCODE_RCTRL]) || (gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_EAST)));
       G.input.crouch = panelKind == 0 && !chatting && !osk.open && (crouchOn || heliDown || gScriptCrouch);
       G.input.weapon = weaponPick;
       G.input.scoped = scoped;
@@ -5671,14 +5792,21 @@ static void runGame() {
     }
     hud.panel.open = panelKind != 0;
     if (hud.panel.open) {
-      static const char* titles[8] = {"", "Spiel-Einstellungen", "BeanNG", "Steuerung", "Online spielen", "Ausrüstung", "Werkzeug", "Chat"};
+      static const char* titles[9] = {"", "Spiel-Einstellungen", "BeanNG", "Steuerung", "Online spielen", "Ausrüstung", "Werkzeug", "Chat", "Tutorial"};
       hud.panel.title = titles[panelKind];
+      if (panelKind == PANEL_TUTORIAL) {
+        char b[64];
+        snprintf(b, sizeof b, "Tutorial  ·  %d von %d", tutorialPage + 1, kTutorialPages);
+        hud.panel.title = b;
+      }
       if (panelKind == PANEL_LOADOUT) {
         char b[64];
         snprintf(b, sizeof b, "Ausrüstung  ·  noch %.0f s", std::max(0.0, Duel::kChooseTime - phaseClock));
         hud.panel.title = b;
       }
       if (padActive) hud.panel.foot = panelKind == PANEL_TOOLS ? "A benutzen  ·  B schließen" : panelKind == PANEL_CHAT ? "A senden  ·  B schließen" : panelKind == PANEL_ONLINE ? "A bearbeiten, verbinden  ·  B zurück" : panelKind == PANEL_MAIN ? "A bestätigen  ·  B zurück" : panelKind == PANEL_KEYS ? "B zurück" : panelKind == PANEL_LOADOUT ? "A mehr  ·  X weniger  ·  B Menü" : "Links, rechts ändern  ·  B zurück";
+      else if (panelKind == PANEL_KEYS) hud.panel.foot = bindingKey >= 0 ? "Neue Taste drücken  ·  ESC abbrechen" : "ENTER neue Taste  ·  ESC zurück";
+      else if (panelKind == PANEL_TUTORIAL) hud.panel.foot = "ENTER weiter  ·  ESC schließen";
       else hud.panel.foot = panelKind == PANEL_CHAT ? "Pfeile wählen  ·  ENTER senden  ·  ESC schließen" : panelKind == PANEL_TOOLS ? "Zahl oder ENTER benutzen  ·  Q schließen" : panelKind == PANEL_ONLINE ? "Tippen  ·  Pfeile wählen  ·  ENTER weiter  ·  ESC zurück" : panelKind == PANEL_MAIN ? "Pfeile wählen  ·  ENTER bestätigen  ·  ESC zurück" : (panelKind == PANEL_KEYS ? "ESC zurück" : "Pfeile wählen und ändern  ·  ESC zurück");
       hud.panel.sel = panelSel;
       hud.panel.rows.clear();
@@ -5686,7 +5814,8 @@ static void runGame() {
       hud.panel.fill.clear();
       hud.panel.detail.clear();
       hud.panel.slots.clear();
-      hud.panel.side = panelKind == PANEL_LOADOUT || panelKind == PANEL_TOOLS;
+      hud.panel.side = panelKind == PANEL_LOADOUT || panelKind == PANEL_TOOLS || panelKind == PANEL_TUTORIAL;
+      if (panelKind == PANEL_TUTORIAL) hud.panel.detail = tutorialText(tutorialPage, padActive);
       if (panelKind == PANEL_LOADOUT) {
         static const char* kAbout[IT_COUNT] = {
             "Tretmine: liegt flach am Boden und ist nach 3 Sekunden scharf. Wer drauftritt, stirbt meist. Auch ein Fahrzeug löst sie aus. Liegt im Werkzeugmenü.",
