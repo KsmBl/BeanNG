@@ -90,6 +90,7 @@ class Tank {
   HullKind hull = HK_MEDIUM;
   const HullSpec& hullSpec() const { return ::hullSpec(hull); }
   const TurretSpec& spec() const { return turretSpec(kind); }
+  double turnRate(double absV) const;  // rad/s at full lock, at this speed
 
   struct Shell {
     V3 p, v;

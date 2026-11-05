@@ -2001,7 +2001,7 @@ struct Game {
           const double h1 = heading(last);
           const double seen = std::remainder(h1 - heading(before), 2.0 * PI) * (net::kStepRate / ticks);
           const double absV = len(vel);
-          const double want = double(in.c.steer) * (absV < 5.0 ? 1.1 : clampd(7.5 / absV, 0.32, 1.1));
+          const double want = double(in.c.steer) * t.turnRate(absV);
           // How old the frame is against the server's steady clock, not when this one happened to come in: a packet held
           // up on the way must not move the tank, and the whole world around the camera with it.
           const double age = clampd(shownNow - timeOffset - double(last.tick) / net::kStepRate, -0.03, 0.1);

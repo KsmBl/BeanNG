@@ -614,11 +614,18 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   }
 }
 
+double Tank::turnRate(double absV) const {
+  // The buggy's: as tight as about 1.1 g allows. A tank's: about 0.8 g, and it has no steering lock to hold it back.
+  if (hull == HK_BUGGY) return absV < 5.0 ? 1.8 : clampd(11.0 / absV, 0.26, 1.8);
+  return absV < 5.0 ? kPivotYawRate : clampd(7.5 / absV, 0.32, kPivotYawRate);
+}
+
 void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   const double absV = std::fabs(speed);
   throttleAct += clampd(in.throttle - throttleAct, -3.0 * dt, 2.0 * dt);
   brakeAct += clampd(in.brake - brakeAct, -6.0 * dt, 6.0 * dt);
-  steerAct += clampd(in.steer - steerAct, -3.0 * dt, 3.0 * dt);
+  const double steerRate = hull == HK_BUGGY ? 8.0 : 3.0;
+  steerAct += clampd(in.steer - steerAct, -steerRate * dt, steerRate * dt);
 
   if (in.requestGear == -1 && absV < 1.0) gear = -1;
   if (in.requestGear == 1 && absV < 1.0) gear = 1;
@@ -669,7 +676,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   const double Tdrive = Tconv * multiply * ratio * 0.88;
   const double B = 2.7 * hullSpec().sizeY;  // distance between the tracks
   // As tight as the grip allows at speed, about 0.8 g; a tank has no steering lock to hold it back.
-  const double yawWant = steerAct * (absV < 5.0 ? kPivotYawRate : clampd((hull == HK_BUGGY ? 12.0 : 7.5) / absV, hull == HK_BUGGY ? 0.26 : 0.32, kPivotYawRate));
+  const double yawWant = steerAct * turnRate(absV);
   const double dWant = yawWant * B / kSprocketR;  // right minus left track speed
   const double dNow = trackOmega[1] - trackOmega[0];
   const double Tsteer = clampd((dWant - dNow) * 60000.0, -520000.0, 520000.0);
@@ -746,6 +753,21 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     double onGround = 0;
     for (const RoadWheel& w : wheels) onGround += w.Fn > 0 ? 1.0 : 0.0;
     addToHull(sim, cog, fwd * (-std::copysign(1.0, speed) * 22000.0 * clampd(1.0 - throttleAct / 0.15, 0.0, 1.0) * clampd(onGround / 7.0, 0.0, 1.0) * clampd(std::fabs(speed) / 3.0, 0.0, 1.0)));
+  }
+  // Two tracks alone turn slowly at speed, and the light thing slides on across its line. The buggy is meant to go where
+  // it is pointed: the hull is brought to the wanted rate of turn, and what it moves sideways is held back, as far as it
+  // has tracks on the ground to do that with. At its middle, so that neither of them tips it over.
+  if (hull == HK_BUGGY) {
+    double onGround = 0;
+    for (const RoadWheel& w : wheels) onGround += w.Fn > 0 ? 1.0 : 0.0;
+    const double grip = clampd(onGround / 7.0, 0.0, 1.0);
+    const V3 vFront = (sim.vel[refFL] + sim.vel[refFR]) * 0.5, vRear = (sim.vel[refRL] + sim.vel[refRR]) * 0.5;
+    const V3 pFront = (sim.pos[refFL] + sim.pos[refFR]) * 0.5, pRear = (sim.pos[refRL] + sim.pos[refRR]) * 0.5;
+    const double yawNow = dot(vFront - vRear, left) / std::max(len(pFront - pRear), 0.5);
+    const double twist = clampd((yawWant - yawNow) * 200000.0, -32000.0, 32000.0) * grip;
+    addToHull(sim, cog + fwd * 1.5, left * twist);
+    addToHull(sim, cog - fwd * 1.5, left * -twist);
+    if (absV > 2.0) addToHull(sim, cog, left * (-clampd(dot(vCog, left) * 30000.0, -58000.0, 58000.0) * grip));
   }
   // What goes round in the tracks. On the buggy little: on a tank's it would run on for as long as a tank.
   const double kTrackInertia = hull == HK_BUGGY ? 120.0 : 900.0;

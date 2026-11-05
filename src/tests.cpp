@@ -2500,6 +2500,59 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "buggysteer")) {
+    // Full lock from a steady speed: how quickly it comes round, how far it slides, and whether it stays on its tracks.
+    for (double kmh : {15.0, 30.0, 60.0, 100.0, 140.0}) {
+      auto* w = new World();
+      auto* s = new Sim();
+      CarRig r;
+      w->build();
+      w->clearBoxes();
+      w->flatten();
+      w->pave();
+      s->world = w;
+      Tank t = buildLeopard(*s, V3{-600, 0, 0}, &r, TK_MG, HK_BUGGY);
+      s->finalize();
+      t.settle(*s, 3.0);
+      Controls c;
+      const auto step = [&] {
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+      };
+      c.throttle = 1;
+      for (int k = 0; k < 2000 * 30 && t.speed * 3.6 < kmh; k++) step();
+      c.throttle = 0.5;
+      c.steer = 1;
+      double to45 = -1, to90 = -1, most = 0, lean = 1, total = 0, last = std::atan2(t.fwd.y, t.fwd.x), driftSum = 0;
+      int driftN = 0;
+      for (int k = 0; k < 2000 * 8; k++) {
+        step();
+        const double h = std::atan2(t.fwd.y, t.fwd.x);
+        total += std::fabs(std::remainder(h - last, 2.0 * PI));
+        last = h;
+        V3 vc{};
+        double m = 0;
+        for (u32 n : s->objs[t.hullObj].nodes) {
+          vc += s->vel[n] * s->mass[n];
+          m += s->mass[n];
+        }
+        vc = vc / m;
+        const double drift = std::atan2(std::fabs(dot(vc, t.left)), std::max(std::fabs(dot(vc, t.fwd)), 1.0)) * 57.3;
+        if (k > 1000) {
+          driftSum += drift;
+          driftN++;
+          most = std::max(most, drift);
+        }
+        lean = std::min(lean, t.up.z);
+        if (to45 < 0 && total >= PI / 4) to45 = k * kDt;
+        if (to90 < 0 && total >= PI / 2) to90 = k * kDt;
+      }
+      s->events.clear();
+      printf("%3.0f km/h: 45 Grad in %5.2f s, 90 Grad in %5.2f s, Drift im Schnitt %4.1f hoechstens %4.1f Grad, Hochachse min %.2f, am Ende %.0f km/h, Ketten ab %d %d\n", kmh, to45, to90, driftSum / std::max(driftN, 1), most, lean, t.speed * 3.6, int(t.trackOff[0]), int(t.trackOff[1]));
+    }
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "buggycoast")) {
     // Flat out, and the foot off.
     auto* w = new World();
