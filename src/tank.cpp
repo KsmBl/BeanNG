@@ -747,6 +747,8 @@ bool Tank::pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at, const Tank*
 
 void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   if (in.launch && !missileLive && missiles > 0) {
+    missileFlown = 0;
+    missileJammed = missileSpent = false;
     missiles--;
     missileLive = true;
     missileAge = 0;
@@ -763,14 +765,27 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
   constexpr double kCruise = 95.0, kAccel = 40.0, kTurn = 1.15;
   const double sp = std::max(len(missileV), 1.0);
   V3 dir = missileV / sp;
-  if (missileAge > 0.8 && len2(in.aimPoint) > 1.0) {
+  missileFlown += sp * dt;
+  missileSpent = missileFlown > kMissileRange;
+  missileJammed = !missileSpent && jammed(missileP);
+  if (missileJammed && missileAge > 0.8) {
+    // The jammers: the hand on it is gone, and it wanders about by itself, sharply.
+    const double t = missileAge;
+    const V3 wander{std::sin(t * 2.3 + 1.1) + std::sin(t * 5.1), std::sin(t * 1.9 + 4.0) + std::sin(t * 4.3 + 2.0), 0.6 * std::sin(t * 3.1 + 0.5) + 0.5 * std::sin(t * 6.7)};
+    const V3 want = norm(dir + wander * 0.9);
+    const double cosA = clampd(dot(dir, want), -1, 1);
+    const double angle = std::acos(cosA);
+    if (angle > 1e-5) dir = norm(dir + (want - dir * cosA) * (std::min(kTurn * 1.4 * dt, angle) / std::max(std::sin(angle), 1e-3)));
+  } else if (!missileSpent && missileAge > 0.8 && len2(in.aimPoint) > 1.0) {
     const V3 want = norm(in.aimPoint - missileP);
     const double cosA = clampd(dot(dir, want), -1, 1);
     const double angle = std::acos(cosA);
     if (angle > 1e-5) dir = norm(dir + (want - dir * cosA) * (std::min(kTurn * dt, angle) / std::max(std::sin(angle), 1e-3)));
   }
-  const double newSpeed = std::min(sp + kAccel * dt, kCruise);
+  // Motor out: what it has left it still has, and it comes down.
+  const double newSpeed = missileSpent ? std::max(sp - 8.0 * dt, 35.0) : std::min(sp + kAccel * dt, kCruise);
   missileV = dir * newSpeed;
+  if (missileSpent) missileV.z -= 9.81 * dt;
   const V3 from = missileP;
   missileP += missileV * dt;
   if ((sim.stepCount & 7) == 0) sim.event(EV_TRACER, missileP, missileV, 1.f);
@@ -1157,6 +1172,8 @@ Tank::NetState Tank::netState() const {
   n.netOn = netOn;
   n.netClock = float(netClock);
   n.missileLive = missileLive;
+  n.missileJammed = missileJammed;
+  n.missileSpent = missileSpent;
   n.missileP = missileP;
   n.missileV = missileV;
   return n;
@@ -1202,6 +1219,8 @@ void Tank::applyNetState(Sim& sim, const NetState& n, double dt) {
   netOn = n.netOn;
   netClock = n.netClock;
   missileLive = n.missileLive;
+  missileJammed = n.missileJammed;
+  missileSpent = n.missileSpent;
   missileP = n.missileP;
   missileV = n.missileV;
 }

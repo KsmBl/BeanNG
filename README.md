@@ -91,6 +91,18 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Zuschauen:** Wer im Team fällt, sieht danach einem Mitspieler über die Schulter, der noch lebt. Maus oder rechter Stick drehen die Kamera, Linksklick (Controller: X) wechselt zum nächsten. Dem Gegner schaut niemand zu.
 
+**Helikopter:** Neben jedem der drei Spawnplätze einer Basis steht einer, links und rechts zwischen Kommandozentrum und erster Panzerreihe, auch die des Gegners lassen sich nehmen. Er fliegt dorthin, wohin du schaust. W, A, S und D bewegen ihn, Shift gibt mehr Tempo, Leertaste steigt und Strg sinkt. Wer Strg hält, wird zum Boden hin von selbst langsam und landet. Die Gatling unter der Nase hat 200 Schuss und feuert, solange die Feuertaste gehalten wird; jeder Schuss zieht eine kurze Rauchspur hinter sich her. Mit der Kamerataste (C, Controller: Y) hängt die Kamera in der Einstellung „Haube“ direkt neben der Gatling, in „Fahrer“ im vorderen Cockpit. Die Zustandsanzeige rechts zeigt Rotoren, Motor, Kabine und Munition von oben.
+
+Jeder Panzerschuss in seiner Nähe, jede Rakete und jede schwere Explosion lassen ihn sofort explodieren. Normale Schusswaffen brauchen sechs Treffer auf Motor oder Hauptrotor oder vier auf den Heckrotor, das Scharfschützengewehr zählt dreifach. Dann stürzt er ab und explodiert beim Aufschlag. Treffer ins Cockpit verletzen den Piloten. Am Boden bringt ein Reparaturset beschädigte Teile in 6 Sekunden wieder auf 60 %, solange er nicht schon explodiert ist.
+
+Fahrzeuge, Wracks, Bäume, Häuser und andere Helikopter bringen ihn zum Absturz, auch mit dem Rotor; fährt ein Fahrzeug in einen stehenden Helikopter, explodiert er ebenfalls. Wer in einen laufenden Rotor gerät, stirbt, auch aufrecht darunter am Boden; geduckt kommt man unter ihm durch. Einen Fallschirm gibt es nicht: Wer in der Luft aussteigt, stirbt beim Aufprall, außer aus geringer Höhe.
+
+**Lenkraketen:** Sie reichen 1100 m; danach ist der Motor aus, die Verbindung weg, und sie fallen. Um jede Basis stehen Störsender (240 m, auf der Karte eingezeichnet): Darin bricht das Bild ab und die Rakete fliegt zufällig umher, bis sie die Zone wieder verlässt. Mit Feuer lässt sie sich jederzeit sprengen.
+
+**Ducken:** Solange Strg gehalten wird (Controller: Klick auf den rechten Stick schaltet um), bist du niedriger, schwerer zu treffen und langsamer. Rennen und Springen gehen dabei nicht.
+
+**Tarnnetz:** Das Tarnnetz lässt sich jetzt auch als Plane über ein stehendes Auto ziehen. Das dauert 3 Sekunden, beim Losfahren bleibt es zurück.
+
 **Mitspieler:** Über jedem Mitspieler stehen sein Name in der Farbe des Teams (West blau, Ost orange) und seine Leben, auch durch Wände und über Fahrzeugen. Auf der Karte sind lebende Mitspieler mit Namen in derselben Farbe zu sehen. Namen dürfen keine Leerzeichen enthalten, im Menü lassen sie sich gar nicht erst eintippen. Der Server macht aus einem Leerzeichen sonst einen Unterstrich und hängt bei doppelten Namen eine Zahl an.
 
 **Punktestand:** Solange TAB gehalten wird (Controller: Back gedrückt halten), zeigt eine Tabelle den Stand der Teams und alle Spieler mit ihren Kills und Toden. Kurz auf Back getippt öffnet wie bisher den Chat. Ein Kill zählt für den Gegner, der einen zuletzt getroffen hat, wenn das nicht länger als 30 Sekunden her ist. Wer in seinem Fahrzeug stirbt, zählt für den, der das Fahrzeug zuletzt getroffen hat. Teamkills zählen nicht als Kill, der Tod zählt aber trotzdem. Die Zahlen gelten über alle Matches eines Servers und beginnen neu, wenn jemand Neues einen Platz übernimmt.

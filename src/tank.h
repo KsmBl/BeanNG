@@ -147,6 +147,17 @@ class Tank {
   int missiles = 0;
   bool missileLive = false;
   V3 missileP, missileV;
+  // How far it has flown: past the range its motor is out and the link gone, it just comes down. And over a base
+  // the jammers cut the picture, and it goes wherever it goes.
+  static constexpr double kMissileRange = 1100.0, kJamRadius = 240.0;
+  static inline std::vector<V3> jammers;
+  static bool jammed(V3 p) {
+    for (const V3& j : jammers)
+      if (std::hypot(p.x - j.x, p.y - j.y) < kJamRadius) return true;
+    return false;
+  }
+  double missileFlown = 0;
+  bool missileJammed = false, missileSpent = false;
   double missileAge = 0;
 
   V3 trackWidthDir(int side) const { return trackOff[side] ? thrownLeft_[side] : left; }
@@ -172,7 +183,7 @@ class Tank {
     bool netOn = false;
     float netClock = 0;
     u16 bounces = 0;
-    bool missileLive = false;
+    bool missileLive = false, missileJammed = false, missileSpent = false;
     V3 missileP, missileV;
   };
   NetState netState() const;

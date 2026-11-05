@@ -1146,8 +1146,9 @@ void Bot::fightInTank(Duel& d, int me) {
     const V3 wanted = norm(flat(held_.c.aimPoint - t.muzzle));
     const V3 lay = norm(flat(t.gunDir));
     const double off = std::acos(clampd(dot(wanted, lay), -1.0, 1.0));
-    const bool ready = seenFor_ > kReaction * reactSkill_ && !holdFire && shotClock_ <= 0;
-    if (ready && t.missiles > 0 && dist > 90.0) {
+    const bool ready = seenFor_ > kReaction * reactSkill_ * (foeFlying ? 2.5 : 1.0) && !holdFire && shotClock_ <= 0;
+    // No use against what sits under the jammers, or further than it reaches.
+    if (ready && t.missiles > 0 && dist > 90.0 && dist < Tank::kMissileRange * 0.9 && !foeFlying && !Tank::jammed(foeAt_)) {
       pulse_.c.launch = true;
       shotClock_ = 4.0;
     } else if (ready && off < 0.012 && t.reload <= 0 && t.ammo != 0 && !gunGone) {

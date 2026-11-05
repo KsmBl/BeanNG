@@ -749,6 +749,7 @@ struct Game {
     s.gunDir = tank.gunDir;
     s.sight = tank.sight;
     s.missileLive = tank.missileLive;
+    s.missileJammed = tank.missileLive && tank.missileJammed;
     s.missileP = tank.missileP;
     s.missileV = tank.missileV;
     s.missiles = tank.missiles;
@@ -2477,6 +2478,9 @@ struct Game {
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
         else if (droneShown[mySlot].live) snprintf(msg, sizeof msg, "Drohne  ·  Akku %.0f s  ·  Feuer markiert den Gegner  ·  Q: zurückholen", droneShown[mySlot].battery);
         else if (mine && mine->netClock > 0) snprintf(msg, sizeof msg, "Tarnnetz wird aufgezogen  ·  %.0f s", mine->netClock);
+        else if (vehicleNow >= Duel::kTanks && duel.cars[size_t(vehicleNow - Duel::kTanks)].netClock > 0) snprintf(msg, sizeof msg, "Tarnplane wird aufgezogen");
+        else if (mine && mine->missileLive && mine->missileJammed) snprintf(msg, sizeof msg, "Störsender  ·  kein Signal zur Rakete  ·  Feuer sprengt sie");
+        else if (mine && mine->missileLive && mine->missileSpent) snprintf(msg, sizeof msg, "Reichweite erreicht  ·  Rakete fällt  ·  Feuer sprengt sie");
         else if (mine && mine->missileLive) snprintf(msg, sizeof msg, "Rakete in der Luft  ·  Maus lenkt  ·  Feuer sprengt");
         else if (vehicleNow >= 0) snprintf(msg, sizeof msg, seatNow == 0 ? "E: aussteigen" : "E: aussteigen  ·  Du bist Richtschütze");
         else if (duel.players[mySlot].tapClock > 0) snprintf(msg, sizeof msg, "Hauptcomputer wird angezapft  ·  %.0f s", duel.players[mySlot].tapClock);
@@ -3876,6 +3880,224 @@ static void runGame() {
         if (std::fmod(tNow, 2.5) < dt) sendC.fire = true;
       }
     }
+    if (scriptMode == 81 && netState == Game::NET_IN) {
+      // The helicopter from all round, close up, for a look at the model.
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      static int view81 = 0;
+      static double stageAt = 0;
+      if (inMatch && view81 < 7) {
+        const Heli& H = G.duel.helis[0];
+        const V3 f = H.fwd(), l = H.left();
+        const V3 spots[7] = {f * 8.0 + l * 5.0 + V3{0, 0, 1.8}, f * 0.5 + l * 11.0 + V3{0, 0, 1.6}, f * -11.0 + l * 6.0 + V3{0, 0, 3.0}, f * 6.0 + V3{0, 0, 0.9}, f * 3.0 + l * 2.2 + V3{0, 0, 1.0}, f * -2.5 + l * -7.5 + V3{0, 0, 5.5}, f * -5.0 + l * 7.0 + V3{0, 0, 2.2}};
+        gScriptCamOn = true;
+        gScriptEye = H.p + spots[view81];
+        gScriptAt = H.at(view81 == 4 ? 2.5 : (view81 == 2 ? -3.0 : -0.8), 0, 1.5);
+        if (tNow > stageAt + 1.2) {
+          wantShot = true;
+          view81++;
+          stageAt = tNow;
+        }
+      }
+    }
+    if (scriptMode == 80) {
+      // Flown about for a while, and then the same again in the replay, from outside and from the pilot's seat.
+      static double stageAt = 0;
+      static int stage = 0;
+      if (netState == Game::NET_IN && phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      if (stage < 3) panelKind = PANEL_NONE;
+      if (stage == 0 && inMatch) {
+        const Heli& H = G.duel.helis[slot];
+        const V3 to = H.p - view.foot.p;
+        rig.yaw = std::atan2(-to.y, -to.x);
+        gas = 1.0;
+        watchLater = slot;
+        if (len(V3{to.x, to.y, 0}) < 4.5) {
+          sendC.use = true;
+          stage = 1;
+          stageAt = tNow;
+        }
+      } else if (stage == 1) {
+        if (tNow > stageAt + 12.0 && tNow < stageAt + 12.0 + dt * 1.5) wantShot = true;
+        if (tNow > stageAt + 14.0) {
+          rig.mode = CAM_HOOD;
+          scriptGun = true;
+        }
+        if (tNow > stageAt + 19.0 && tNow < stageAt + 19.0 + dt * 1.5) wantShot = true;
+        rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI + std::sin(tNow * 0.7) * 0.8;
+        rig.pitch = 0.2;
+        if (tNow < stageAt + 7.0) hb = 1.0;
+        gas = 1.0;
+        steer = std::sin(tNow * 1.3);
+        if (tNow > stageAt + 20.0) {
+          printf("geflogen: an Bord %d, Pos %.0f %.0f %.0f\n", int(view.foot.heliOn), view.foot.heliP.x, view.foot.heliP.y, view.foot.heliP.z);
+          fflush(stdout);
+          wantShot = true;
+          scriptGun = false;
+          rig.mode = CAM_CHASE;
+          leave();
+          stage = 2;
+          stageAt = tNow;
+        }
+      } else if (stage == 2 && tNow > stageAt + 2.0) {
+        G.command = Game::CMD_REPLAY;
+        G.replayWatch = watchLater;
+        stage = 3;
+        stageAt = tNow;
+      } else if (stage == 3 && tNow > stageAt + 16.0) {
+        printf("Replay: Sicht an Bord %d, Pos %.0f %.0f %.0f\n", int(view.foot.heliOn), view.foot.heliP.x, view.foot.heliP.y, view.foot.heliP.z);
+        fflush(stdout);
+        wantShot = true;
+        stage = 4;
+      }
+    }
+    if (scriptMode == 82 && netState == Game::NET_IN) {
+      // A missile tank at home: a missile straight out, through the jammers, and a look at the picture.
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      static int stage = 0;
+      static double stageAt = 0;
+      if (inMatch) {
+        const int want = Duel::tankIndex(Duel::teamOf(slot), TK_MISSILE, HK_MEDIUM);
+        if (stage == 0) {
+          const V3 to = G.duel.frames[want].cog - view.foot.p;
+          rig.yaw = std::atan2(-to.y, -to.x);
+          gas = 1.0;
+          if (myVehicle == want) {
+            stage = 1;
+            stageAt = tNow;
+          } else if (len(V3{to.x, to.y, 0}) < 4.5 && std::fmod(tNow, 1.0) < dt) {
+            sendC.use = true;
+          }
+        } else if (stage == 1 && tNow > stageAt + 1.0) {
+          sendC.launch = true;
+          stage = 2;
+          stageAt = tNow;
+        } else if (stage == 2 && tNow > stageAt + 2.5) {
+          printf("Rakete: Stoerung %d\n", int(view.missileJammed));
+          fflush(stdout);
+          wantShot = true;
+          stage = 3;
+        } else if (stage == 3 && !view.missileJammed && view.missileLive) {
+          printf("Rakete: Signal wieder da nach %.1f s\n", tNow - stageAt);
+          fflush(stdout);
+          wantShot = true;
+          stage = 4;
+        }
+      }
+    }
+    if (scriptMode == 79 && netState == Game::NET_IN) {
+      // Into the helicopter and up, with the gun going for a moment.
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      static double stageAt = 0;
+      static int stage = 0;
+      if (inMatch) {
+        const Heli& H = G.duel.helis[Duel::teamOf(slot)];
+        const V3 to = H.p - view.foot.p;
+        if (stage == 0) {
+          rig.yaw = std::atan2(-to.y, -to.x);
+          gas = 1.0;
+          if (len(V3{to.x, to.y, 0}) < 4.5) {
+            sendC.use = true;
+            printf("Am Helikopter: %.1f m\n", len(to));
+            fflush(stdout);
+            wantShot = true;
+            stage = 1;
+            stageAt = tNow;
+          }
+        } else if (stage == 1) {
+          hb = 1.0;
+          rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
+          rig.pitch = 0.2;
+          if (tNow > stageAt + 9.0) {
+            printf("Oben: an Bord %d, Hoehe %.1f, Leistung %.2f, Munition %d\n", int(view.foot.heliOn), view.foot.heliP.z, H.power, H.ammo);
+            fflush(stdout);
+            wantShot = true;
+            stage = 2;
+            stageAt = tNow;
+          }
+        } else if (stage == 2) {
+          gas = 1.0;
+          scriptGun = true;
+          rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
+          rig.pitch = 0.2;
+          if (tNow > stageAt + 4.0) {
+            printf("Vorwaerts: Pos %.0f %.0f %.0f, Munition %d\n", view.foot.heliP.x, view.foot.heliP.y, view.foot.heliP.z, H.ammo);
+            fflush(stdout);
+            wantShot = true;
+            scriptGun = false;
+            stage = 3;
+            stageAt = tNow;
+          }
+        } else if (stage == 3 && tNow > stageAt + 3.0) {
+          sendC.use = true;
+          printf("Ausgestiegen in %.0f m\n", view.foot.heliP.z - G.world.height(view.foot.heliP.x, view.foot.heliP.y));
+          fflush(stdout);
+          stage = 4;
+          stageAt = tNow;
+        } else if (stage == 4 && tNow > stageAt + 6.0) {
+          printf("Nach dem Sprung: Leben %.0f, an Bord %d, Fuss %.0f ueber Boden, Phase %d\n", view.foot.hp, int(view.foot.heliOn), view.foot.p.z - G.world.height(view.foot.p.x, view.foot.p.y), int(phase));
+          fflush(stdout);
+          stage = 5;
+        }
+      }
+    }
+    if (scriptMode == 78 && netState == Game::NET_IN) {
+      // A tarpaulin over a car, then down on the haunches beside it.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickItems[IT_NET] = 1;
+        pickReady = true;
+      }
+      panelKind = PANEL_NONE;
+      static double stageAt = 0;
+      static int stage = 0;
+      if (inMatch) {
+        const V3 to = G.world.base(Duel::teamOf(slot)).slot(12) - view.foot.p;
+        if (stage == 0 && onFoot) {
+          rig.yaw = std::atan2(-to.y, -to.x);
+          gas = 1.0;
+          if (len(V3{to.x, to.y, 0}) < 4.0) sendC.use = true;
+        } else if (stage == 0) {
+          stage = 1;
+          stageAt = tNow;
+        } else if (stage == 1) {
+          if (std::fmod(tNow, 2.0) < dt) sendC.net = true;
+          if (tNow > stageAt + 6.0) {
+            printf("Tarnplane: Netze uebrig %d\n", int(view.foot.items[IT_NET]));
+            fflush(stdout);
+            wantShot = true;
+            sendC.use = true;
+            stage = 2;
+            stageAt = tNow;
+          }
+        } else if (stage == 2 && tNow > stageAt + 2.0) {
+          gScriptCrouch = true;
+          if (tNow > stageAt + 4.0) {
+            printf("Geduckt: %.2f\n", view.foot.crouch);
+            fflush(stdout);
+            wantShot = true;
+            stage = 3;
+            stageAt = tNow;
+          }
+        } else if (stage == 3) {
+          // Away from it, for a look at the whole thing.
+          rig.yaw = std::atan2(to.y, to.x);
+          gas = 1.0;
+          if (tNow > stageAt + 6.0) {
+            stage = 4;
+            stageAt = tNow;
+          }
+        } else if (stage == 4) {
+          rig.yaw = std::atan2(-to.y, -to.x);
+          rig.pitch = 0.15;
+          if (tNow > stageAt + 1.0) {
+            wantShot = true;
+            stage = 5;
+          }
+        }
+      }
+    }
     if (scriptMode == 77 && netState == Game::NET_IN) {
       // What one's own side looks like over their heads, then where a tapped computer says the others are.
       if (phase == Duel::CHOOSING && !pickReady) {
@@ -4752,6 +4974,7 @@ static void runGame() {
       memcpy(view.parkedHeat, G.snap.parkedHeat, sizeof view.parkedHeat);
       view.weakSpots = G.snap.weakSpots;
       view.missileLive = G.snap.missileLive;
+      view.missileJammed = G.snap.missileJammed;
       view.missileP = G.snap.missileP;
       view.missileV = G.snap.missileV;
       view.missiles = G.snap.missiles;
@@ -4932,6 +5155,9 @@ static void runGame() {
     hud.map.strike = strikePending;
     hud.map.mark = markPoint;
     hud.map.fixes = view.foot.fixes;
+    hud.map.jammers[0] = G.world.base(0).centre;
+    hud.map.jammers[1] = G.world.base(1).centre;
+    hud.map.jamRadius = float(Tank::kJamRadius);
     hud.map.fixWait = view.foot.tapped ? view.foot.fixWait : -1.0;
     hud.map.me = view.carCog;
     hud.map.noRadio = view.foot.noRadio;

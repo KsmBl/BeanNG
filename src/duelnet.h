@@ -83,7 +83,7 @@ inline void writeState(Writer& w, const Tank::NetState& n, V3 cog, bool slow) {
   w.put(i8(std::clamp(std::lround(n.lonAcc * 3.0f), -127L, 127L)));
   w.put(i16(std::clamp(std::lround(n.reload * 100.0f), -32767L, 32767L)));
   w.put(i8(n.gear));
-  w.put(u8((n.destroyed ? 1 : 0) | (n.trackOff[0] ? 2 : 0) | (n.trackOff[1] ? 4 : 0) | (n.missileLive ? 16 : 0) | (slow ? 32 : 0)));
+  w.put(u8((n.destroyed ? 1 : 0) | (n.trackOff[0] ? 2 : 0) | (n.trackOff[1] ? 4 : 0) | (n.missileLive ? 16 : 0) | (n.missileJammed ? 8 : 0) | (n.missileSpent ? 64 : 0) | (slow ? 32 : 0)));
   if (n.missileLive) {
     w.putV3(n.missileP);
     w.putV3(n.missileV);
@@ -144,6 +144,8 @@ inline void readState(Reader& r, Tank::NetState& n, V3 cog) {
   n.trackOff[0] = flags & 2;
   n.trackOff[1] = flags & 4;
   n.missileLive = flags & 16;
+  n.missileJammed = flags & 8;
+  n.missileSpent = flags & 64;
   if (n.missileLive) {
     n.missileP = r.getV3();
     n.missileV = r.getV3();

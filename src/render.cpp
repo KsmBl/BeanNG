@@ -2756,6 +2756,26 @@ struct Renderer::Impl {
       }
     }
 
+    // ---- The missile's picture under the jammers: gone, nothing but snow.
+    if (s.missileJammed) {
+      rrect(0, 0, W, H, 0, {.05f, .05f, .06f, .97f});
+      static u32 snow = 1;
+      for (int i = 0; i < 1400; i++) {
+        snow = snow * 1664525u + 1013904223u;
+        const float sx = float(snow >> 16) / 65535.f * W;
+        snow = snow * 1664525u + 1013904223u;
+        const float sy = float(snow >> 16) / 65535.f * H;
+        snow = snow * 1664525u + 1013904223u;
+        const float g = .25f + .6f * float(snow >> 24) / 255.f;
+        rrect(sx, sy, (2.f + float((snow >> 12) & 15)) * u, 1.6f * u, 0, {g, g, g, .8f});
+      }
+      for (int i = 0; i < 5; i++) {
+        snow = snow * 1664525u + 1013904223u;
+        rrect(0, float(snow >> 16) / 65535.f * H, W, 3 * u, 0, {1, 1, 1, .12f});
+      }
+      labelMid(W * .5f, H * .5f, "KEIN SIGNAL", 34 * u, red);
+    }
+
     // ---- The scope: the world through a round hole, with its marks and the wind written beside them.
     if (o.scope > 0) {
       const float cx = W * .5f, cy = H * .5f, r = H * .46f;
@@ -2915,6 +2935,15 @@ struct Renderer::Impl {
           labelMid(mx0 - 13 * u, my0 + (float(i) + .5f) * part, number, 17 * u, edge);
           labelMid(mx0 + ms + 13 * u, my0 + (float(i) + .5f) * part, number, 17 * u, edge);
         }
+      }
+      // The jammers round each base: no guided missile gets through there.
+      for (int j = 0; j < 2 && o.map.jamRadius > 0; j++) {
+        float sx, sy;
+        toMap(o.map.jammers[j].x, o.map.jammers[j].y, sx, sy);
+        const float radius = float(o.map.jamRadius / (2.0 * kMapHalf)) * ms;
+        circle(sx, sy, radius, {.95f, .75f, .15f, .08f});
+        arc(sx, sy, radius, 1.2f * u, 0, kPi2, {.95f, .75f, .15f, .6f});
+        labelMid(sx, sy + radius + 9 * u, "Störsender", 12 * u, {.95f, .8f, .3f, .9f});
       }
       for (const Snapshot::Foot::Fix& fix : o.map.fixes) {
         // Only roughly: a patch, not a point, and it gets stale.

@@ -135,7 +135,7 @@ struct Snapshot {
     V3 p;
   } foot;
   // The match, as far as the instruments care.
-  bool missileLive = false;
+  bool missileLive = false, missileJammed = false;
   V3 missileP, missileV;
   int missiles = -1, repairKits = 0;
   double tankArmour = 1;
@@ -227,6 +227,8 @@ struct UiMap {
   V3 mark, me;
   double meYaw = 0;
   std::vector<Snapshot::Foot::Fix> fixes;
+  V3 jammers[2];       // where the jammers stand round each base
+  float jamRadius = 0;
   bool noRadio = false;
   double fixWait = -1;  // until the next question may be asked; negative while the computer has not been tapped
 };

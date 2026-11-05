@@ -2248,6 +2248,9 @@ void Duel::startMatch() {
 
 void Duel::step(const Intent in[kMaxPlayers]) {
   Tank::fleet = tanks;
+  Tank::jammers.clear();
+  Tank::jammers.push_back(world.base(0).centre);
+  Tank::jammers.push_back(world.base(1).centre);
   Tank::fleetSize = kTanks;
   // The fallen do nothing more, whatever their hands are still sending. They only go on looking around.
   Intent calm[kMaxPlayers];
