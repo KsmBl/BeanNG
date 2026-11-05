@@ -133,7 +133,7 @@ void write(Writer& w, const InputMsg& m) {
   w.put(m.strikeY);
   w.put(m.yaw);
   w.put(m.pitch);
-  w.put(u8((m.sprint ? 1 : 0) | (m.fireHeld ? 2 : 0) | (m.aiming ? 4 : 0)));
+  w.put(u8((m.sprint ? 1 : 0) | (m.fireHeld ? 2 : 0) | (m.aiming ? 4 : 0) | (m.crouch ? 8 : 0)));
   w.put(m.weapon);
   w.put(u8(m.indirect ? 1 : 0));
   w.put(m.requestGear);
@@ -178,6 +178,7 @@ bool read(Reader& r, InputMsg& m) {
   u8 sprint = 0;
   r.get(sprint);
   m.sprint = (sprint & 1) != 0;
+  m.crouch = (sprint & 8) != 0;
   m.fireHeld = (sprint & 2) != 0;
   m.aiming = (sprint & 4) != 0;
   r.get(m.weapon);

@@ -638,6 +638,7 @@ int main(int argc, char** argv) {
       w.put(i16(std::clamp(std::ceil(pl.soldier.hp * 10.0), -32000.0, 32000.0)));
       w.put(float(pl.soldier.stride));
       w.put(packShare(pl.soldier.prone));
+      w.put(packShare(pl.soldier.crouch));
       w.put(u8(pl.weapon));
       const bool dead = pl.soldier.hp <= 0;
       w.put(u8((pl.items[IT_GHILLIE] > 0 ? 1 : 0) | (pl.droneLive ? 2 : 0) | (dead ? 4 : 0)));
@@ -994,6 +995,7 @@ int main(int argc, char** argv) {
         in[i].walk.yaw = c.in.yaw;
         in[i].walk.jump = c.in.handbrake > 0.5;
         in[i].walk.sprint = c.in.sprint;
+        in[i].walk.crouch = c.in.crouch;
         c.fire = c.launch = c.repair = c.use = c.setup = c.mineFoot = c.mineTank = c.strike = c.query = c.smoke = c.net = c.drone = c.medkit = false;
       }
       for (int i = 0; i < Duel::kMaxPlayers; i++) duel->players[i].present = clients[i].used;

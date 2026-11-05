@@ -303,7 +303,8 @@ BodyLimbs bodyPose(const Soldier& s, int weapon) {
   static constexpr Pose kHands{0.45, 0.34, -1.05, 0.20, 1.10, 1.00, 1.15, 0.60, 1.15};
   static constexpr Pose kFlat{0.88, 0.20, -1.30, -1.50, 0.12, 1.05, 1.50, 0.95, 1.45};
   const auto between = [&](double from, double kneel, double hands, double flat) {
-    const double p = s.prone;
+    // Down on the haunches is most of the way to kneeling, with room left for the legs to go on walking.
+    const double p = std::max(s.prone, s.crouch * 0.27);
     if (p <= 0) return from;
     if (p < 0.35) return lerpd(from, kneel, smooth01(p / 0.35));
     if (p < 0.7) return lerpd(kneel, hands, smooth01((p - 0.35) / 0.35));
@@ -628,7 +629,7 @@ void Duel::walk(Soldier& s, const WalkInput& in, double dt) const {
   const double wl = len(want);
   if (wl > 1.0) want = want / wl;
   // Wading is hard going.
-  const double top = (in.sprint ? 8.5 : 5.0) * (world.isWater(s.p.x, s.p.y, s.p.z) ? 0.45 : 1.0);
+  const double top = (in.crouch ? 2.4 : (in.sprint ? 8.5 : 5.0)) * (world.isWater(s.p.x, s.p.y, s.p.z) ? 0.45 : 1.0);
   const double rate = s.grounded ? 40.0 : 6.0;
   const V3 flat{s.v.x, s.v.y, 0};
   V3 dv = want * top - flat;
@@ -865,7 +866,7 @@ bool Duel::give(int player, const char* name, int count) {
 V3 Duel::eyeOf(const Soldier& s) {
   // Standing, or stretched out on the ground with the head towards the enemy.
   const double cy = std::cos(s.yaw), sy = std::sin(s.yaw);
-  return s.p + V3{-cy, -sy, 0} * (1.5 * s.prone) + V3{0, 0, lerpd(1.45, 0.42, s.prone)};
+  return s.p + V3{-cy, -sy, 0} * (1.5 * s.prone) + V3{0, 0, lerpd(1.45 - 0.55 * s.crouch, 0.42, s.prone)};
 }
 
 V3 Duel::soldierAt(int p, double lag) const {
@@ -1124,7 +1125,7 @@ void Duel::stepBullets(double dt) {
         const V3 foot = soldierAt(q, b.lag);
         const double t = clampd(dot(V3{foot.x - from.x, foot.y - from.y, 0}, V3{seg.x, seg.y, 0}) / std::max(seg.x * seg.x + seg.y * seg.y, 1e-9), 0, 1);
         V3 near = from + seg * t;
-        bool struck = std::hypot(near.x - foot.x, near.y - foot.y) < 0.38 && near.z > foot.z && near.z < foot.z + Soldier::kHeight;
+        bool struck = std::hypot(near.x - foot.x, near.y - foot.y) < 0.38 && near.z > foot.z && near.z < foot.z + Soldier::kHeight * (1.0 - 0.32 * players[q].soldier.crouch);
         const Soldier& target = players[q].soldier;
         if (target.prone > 0.5) {
           // Stretched out along the ground, from the feet to the head: low, and long.
@@ -1145,7 +1146,7 @@ void Duel::stepBullets(double dt) {
           if (b.kind < WP_RPG) {
             // In the head it counts for more than in the boots.
             const double z = near.z - foot.z;
-            players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
+            players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 - 0.55 * players[q].soldier.crouch ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
             creditHurt(q, b.owner);
             players[q].lastBlow = norm(b.v) * (b.kind == WP_SNIPER ? 11.0 : 2.5);
             noteHit(q, b.owner, from);
@@ -1623,6 +1624,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
         }
       }
     }
+    s.crouch = clampd(s.crouch + (in[i].walk.crouch && s.prone <= 0 ? 1.0 : -1.0) * kDt * 6.0, 0.0, 1.0);
     pl.walkDebt += kDt;
     while (pl.walkDebt >= kWalkDt) {
       pl.walkDebt -= kWalkDt;
@@ -1633,6 +1635,8 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       // Before and after the match itself one waits where one stands.
       if (phase != PLAYING) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
       if (s.prone > 0) wi.forward = wi.strafe = 0, wi.jump = false, wi.sprint = false;
+      if (wi.crouch) wi.sprint = wi.jump = false;
+      const double fallingAt = s.v.z;
       walk(s, wi, kWalkDt);
       if (pl.walkedSinceInput < 255) pl.walkedSinceInput++;
     }

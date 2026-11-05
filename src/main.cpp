@@ -523,6 +523,7 @@ struct SharedInput {
   Controls c;
   bool ready = false;
   bool sprint = false;
+  bool crouch = false;
   bool fireHeld = false;
   bool aiming = false;
   bool scoped = false;
@@ -1395,15 +1396,17 @@ struct Game {
             sd.v = net::getCmV3(r);
             i16 yaw = 0, pitch = 0, hp = 0;
             float stride = 0;
-            u8 prone = 0, weapon = 0, flags = 0;
+            u8 prone = 0, crouchShare = 0, weapon = 0, flags = 0;
             r.get(yaw);
             r.get(pitch);
             r.get(hp);
             r.get(stride);
             r.get(prone);
+            r.get(crouchShare);
             r.get(weapon);
             r.get(flags);
             sd.prone = prone / 255.0;
+            sd.crouch = crouchShare / 255.0;
             weaponShown[i] = std::min<int>(weapon, WP_COUNT - 1);
             ghillieShown[i] = flags & 1;
             if (flags & 4) blowShown[i] = net::getCmV3(r);
@@ -1972,6 +1975,7 @@ struct Game {
           s.pitch = lerpd(fa.s.pitch, fb.s.pitch, a);
           s.stride = lerpd(fa.s.stride, fb.s.stride, a);
           s.prone = lerpd(fa.s.prone, fb.s.prone, a);
+          s.crouch = lerpd(fa.s.crouch, fb.s.crouch, a);
         }
         drawnSoldier[i] = s;
         drawnVehicle[i] = a >= 1.0 ? fb.vehicle : fa.vehicle;
@@ -2011,6 +2015,8 @@ struct Game {
           wi.strafe = in.c.steer * aimSlow;
           wi.jump = in.c.handbrake > 0.5;
           wi.sprint = in.sprint && !in.aiming;
+          wi.crouch = in.crouch;
+          if (in.crouch) wi.sprint = wi.jump = false;
           if (shownSoldier[mySlot].prone > 0) wi.forward = wi.strafe = 0, wi.jump = wi.sprint = false;
         }
         wi.yaw = in.yaw;
@@ -2045,6 +2051,7 @@ struct Game {
         me.p += walkOffset + walkTrue.v * walkDebt;
         me.pitch = in.pitch;
         me.prone = shownSoldier[mySlot].prone;
+        me.crouch = shownSoldier[mySlot].crouch;
       } else {
         me = duel.players[mySlot].soldier;
       }
@@ -2155,6 +2162,7 @@ struct Game {
         out.yaw = float(in.yaw);
         out.pitch = float(in.pitch);
         out.sprint = in.sprint;
+        out.crouch = in.crouch;
         out.fireHeld = in.fireHeld;
         out.aiming = in.aiming;
         out.weapon = u8(in.weapon);
@@ -2295,6 +2303,7 @@ struct Game {
         snap.foot.weapon = in.weapon;
         snap.foot.slot = mySlot;
         snap.foot.prone = me.prone;
+        snap.foot.crouch = me.crouch;
         snap.foot.wind = duel.wind;
         const Duel::Player& who = duel.players[mySlot];
         snap.foot.hitsLanded = who.hitsLanded;
@@ -2728,7 +2737,7 @@ static void runGame() {
   bool strikePending = false;  // a strike code chosen: the next click on the map says where
   // The controller's part of all that.
   bool padActive = false, padAim = false, padFire = false, padScopeHeld = false, padSprint = false;
-  bool backDown = false, boardOn = false;
+  bool backDown = false, boardOn = false, padCrouch = false;
   double backHeld = 0;
   double padLx = 0, padLy = 0;
   V3 mapCursor;
@@ -3353,6 +3362,7 @@ static void runGame() {
               }
               break;
             case SDL_GAMEPAD_BUTTON_LEFT_STICK: padSprint = true; break;
+            case SDL_GAMEPAD_BUTTON_RIGHT_STICK: padCrouch = !padCrouch; break;
             case SDL_GAMEPAD_BUTTON_DPAD_UP:
               if (scoped) scopeZero = std::min(scopeZero + 50, 2000);
               else rig.dist = clampd(rig.dist * 0.85, 2.5, 40.0);
@@ -4713,6 +4723,7 @@ static void runGame() {
       at.p = view.foot.p;
       at.yaw = rig.yaw;
       at.prone = view.foot.prone;
+      at.crouch = view.foot.crouch;
       // Looking up, further out to the side: from below the figure would fill half the picture.
       const V3 head = Duel::eyeOf(at) + V3{0, 0, 0.12} + right * (0.42 + 0.45 * smooth01(clampd((-rig.pitch - 0.3) / 0.8, 0, 1)));
       const double wanted = lerpd(1.9, 1.5, view.foot.prone);
@@ -4792,6 +4803,7 @@ static void runGame() {
       eyeAt.p = view.foot.p;
       eyeAt.yaw = rig.yaw;
       eyeAt.prone = view.foot.prone;
+      eyeAt.crouch = view.foot.crouch;
       cam.eye = Duel::eyeOf(eyeAt);
       cam.target = cam.eye - back * 100.0;
       cam.up = {0, 0, 1};

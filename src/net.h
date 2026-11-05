@@ -119,6 +119,7 @@ struct InputMsg {
   bool sprint = false;
   bool fireHeld = false;
   bool aiming = false;
+  bool crouch = false;
   u8 weapon = 1;
   bool indirect = false;  // aim is a point marked on the map
   i8 requestGear = 0;  // 0 nothing, otherwise forward or reverse, for as long as it is wanted

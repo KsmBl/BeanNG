@@ -124,7 +124,7 @@ struct Snapshot {
       std::string name;
     };
     std::vector<Fix> fixes;
-    double prone = 0;
+    double prone = 0, crouch = 0;
     V3 wind;
     V3 p;
   } foot;

@@ -31,6 +31,7 @@ struct Soldier {
   double hp = 100;
   double stride = 0;          // how far the legs have walked, for drawing them
   double prone = 0;           // 0 standing .. 1 flat on the ground, behind the big rifle
+  double crouch = 0;          // 0 standing .. 1 down on the haunches
   bool grounded = true;
   static constexpr double kRadius = 0.32, kHeight = 1.8;
 };
@@ -46,7 +47,7 @@ struct Ragdoll {
 struct WalkInput {
   double forward = 0, strafe = 0;  // -1..1; strafe positive to the left
   double yaw = 0;
-  bool jump = false, sprint = false;
+  bool jump = false, sprint = false, crouch = false;
 };
 
 // Where a vehicle is, as far as those on foot are concerned. The same on the server and on a player's machine.
