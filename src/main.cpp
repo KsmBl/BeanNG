@@ -971,6 +971,8 @@ struct Game {
     V3 blowShown[Duel::kMaxPlayers];
     bool ghillieShown[Duel::kMaxPlayers] = {};
     double heliHeardAt[Duel::kHelis] = {};
+    int killerNow = -1;
+    bool killerMissileNow = false;
     // One's own, ahead of the server the way walking is: flown here at once, and put right as the answers come.
     Heli heliPred;
     int heliPredOf = -1;
@@ -1496,6 +1498,12 @@ struct Game {
           r.get(onGround);
           r.get(duel.players[mySlot].hitsLanded);
           r.get(duel.players[mySlot].hitsTaken);
+          i8 killerSaid = -1;
+          u8 missileSaid = 0;
+          r.get(killerSaid);
+          r.get(missileSaid);
+          killerNow = killerSaid;
+          killerMissileNow = missileSaid != 0;
           u32 first = 0;
           u8 count = 0;
           r.get(first);
@@ -2603,6 +2611,40 @@ struct Game {
       }
       fillSnapshot(msg);
       snap.watchOn = watching >= 0;
+      // Everyone's view, as it would be if one were looking over their shoulder.
+      for (int k = 0; k < Duel::kMaxPlayers; k++) {
+        const Soldier& sd = drawnSoldier[k];
+        const double cy = std::cos(sd.yaw), sy = std::sin(sd.yaw), cp = std::cos(sd.pitch), sp = std::sin(sd.pitch);
+        V3 look{-cy * cp, -sy * cp, -sp};
+        V3 eye;
+        const int inside = drawnVehicle[k];
+        const int flown = duel.players[k].heli;
+        bool missileOn = false;
+        if (flown >= 0) {
+          eye = heliShown[flown].p + V3{0, 0, Heli::kCameraUp} - look * Heli::kCameraBack;
+        } else if (inside >= 0 && inside < Duel::kTanks) {
+          const Tank& t = duel.tanks[inside];
+          look = len2(t.gunDir) > 0.5 ? norm(t.gunDir) : look;
+          eye = duel.frames[inside].cog - V3{look.x, look.y, 0} * 11.0 + V3{0, 0, 4.5};
+          missileOn = t.missileLive;
+          if (missileOn) {
+            snap.track.missileP[k] = t.missileP;
+            snap.track.missileV[k] = t.missileV;
+          }
+        } else if (inside >= 0) {
+          look = duel.frames[inside].fwd;
+          eye = duel.frames[inside].cog - look * 7.0 + V3{0, 0, 2.6};
+        } else {
+          const V3 right{-sy, cy, 0};
+          eye = Duel::eyeOf(sd) + right * 0.42 - look * 1.9;
+        }
+        snap.track.eye[k] = eye;
+        snap.track.look[k] = look;
+        snap.track.missileOn[k] = missileOn;
+      }
+      snap.killer = state == NET_IN ? killerNow : -1;
+      snap.killerMissile = killerMissileNow;
+      snap.killerName = killerNow >= 0 ? names[killerNow] : std::string();
       // Over the heads of one's own side. In a vehicle over that, one above the other if two sit in it.
       snap.mates.clear();
       if (state == NET_IN && !replaying && (phaseNow == Duel::PLAYING || phaseNow == Duel::FINISHED)) {
@@ -2955,6 +2997,37 @@ static void runGame() {
   int shotCount = 0;
   bool wantShot = false;
   Snapshot view;
+  // ---- The kill cam: what the screen has shown lately, kept as what changed from one moment to the next. On one's own
+  // death the same again, seen from whoever did it, and all the while the world on the server goes on.
+  struct KillFrame {
+    double t = 0;
+    Snapshot snap;  // all but the nodes
+    Camera cam;
+    struct Moved {
+      u32 node;
+      float x, y, z;
+    };
+    std::vector<Moved> moved;
+  };
+  static constexpr double kKillSeconds = 7.0, kKillStep = 1.0 / 30.0, kKillDelay = 0.9;
+  std::deque<KillFrame> killFrames;
+  std::vector<V3> killBase, killLast, killNow;  // at the oldest frame, at the newest, and while playing
+  std::vector<SimEvent> killEvents;
+  double killNext = 0, killDiedAt = -1, killStart = 0, killFrom = 0;
+  size_t killAt = 0;
+  bool killPlaying = false, killThisLife = false, killSkip = false;
+  int killerShown = -1;
+  bool killerMissileShown = false;
+  std::string killerNameShown;
+  V3 killMissileP, killMissileV;
+  bool killMissileSeen = false;
+  const auto killForget = [&] {
+    killFrames.clear();
+    killBase.clear();
+    killLast.clear();
+    killEvents.clear();
+    killPlaying = false;
+  };
   // What this player is going to take into the match.
   u8 pickItems[IT_COUNT] = {};
   bool pickReady = false;
@@ -3386,6 +3459,11 @@ static void runGame() {
       }
     };
     while (SDL_PollEvent(&e)) {
+      // Any key ends the kill cam, and does nothing else.
+      if (killPlaying && ((e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)) {
+        killSkip = true;
+        continue;
+      }
       if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_WHEEL) padActive = false;
       if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(e.gaxis.value)) > 12000)) padActive = true;
       if (loadingShown && netState != Game::NET_OFF && ((e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE) || (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e.gbutton.button == SDL_GAMEPAD_BUTTON_EAST))) {
@@ -3984,6 +4062,29 @@ static void runGame() {
           wantShot = true;
           stage = 4;
         }
+      }
+    }
+    if (scriptMode == 83 && netState == Game::NET_IN) {
+      // Waiting to be killed, and pictures from the kill cam when that happens.
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      static double seenAt = -1;
+      static int shots83 = 0;
+      if (killPlaying) {
+        if (seenAt < 0) {
+          seenAt = tNow;
+          printf("Kill-Cam laeuft: Taeter %d (%s), Rakete %d, Bilder %zu, Speicher ca. %.0f MB\n", killerShown, killerNameShown.c_str(), int(killerMissileShown), killFrames.size(), [&] { size_t b = 0; for (const KillFrame& f : killFrames) b += f.moved.size() * sizeof(KillFrame::Moved) + sizeof(KillFrame); return double(b) / 1e6; }());
+          fflush(stdout);
+        }
+        if (shots83 < 4 && tNow > seenAt + 1.0 + shots83 * 1.8) {
+          wantShot = true;
+          shots83++;
+        }
+      } else if (seenAt >= 0 && shots83 >= 0) {
+        printf("Kill-Cam vorbei nach %.1f s\n", tNow - seenAt);
+        fflush(stdout);
+        shots83 = -100;
+        wantShot = true;
       }
     }
     if (scriptMode == 79 && netState == Game::NET_IN) {
@@ -4858,6 +4959,9 @@ static void runGame() {
     G.askForFrame();
     // A new match starts on clean ground.
     if (G.resetVisuals.exchange(false)) {
+      killForget();
+      killThisLife = false;
+      killDiedAt = -1;
       if (netState == Game::NET_IN) newMatchUntil = tNow + 0.9;
       renderer.resetDamage();
       renderer.clearSkidMarks();
@@ -4967,6 +5071,10 @@ static void runGame() {
       view.chat = G.snap.chat;
       view.heliNoise = G.snap.heliNoise;
       view.board = G.snap.board;
+      view.track = G.snap.track;
+      view.killer = G.snap.killer;
+      view.killerMissile = G.snap.killerMissile;
+      view.killerName = G.snap.killerName;
       view.mates = G.snap.mates;
       view.boardWins[0] = G.snap.boardWins[0];
       view.boardWins[1] = G.snap.boardWins[1];
@@ -5005,6 +5113,87 @@ static void runGame() {
       if (scriptMode == 65 && size_t(first) < view.pos.size()) {
         const V3 q = view.pos[first] - at;
         figureOff = std::remainder(std::atan2(q.y, q.x) - rig.yaw, 2.0 * PI) * 180.0 / PI;
+      }
+    }
+    // Playing it back: the view is the one from then, and what is live goes on unseen.
+    {
+      const bool shooting = netState == Game::NET_IN && (phase == Duel::PLAYING || phase == Duel::FINISHED);
+      if (!shooting) {
+        if (killPlaying) killForget();
+      } else if (view.foot.hp > 0) {
+        killThisLife = false;
+        killDiedAt = -1;
+      } else if (!killThisLife && !replayOn) {
+        if (killDiedAt < 0) killDiedAt = tNow;
+        if (tNow > killDiedAt + kKillDelay && !killPlaying && !killFrames.empty()) {
+          killThisLife = true;
+          killPlaying = true;
+          killSkip = false;
+          killerShown = view.killer;
+          killerMissileShown = view.killerMissile;
+          killerNameShown = view.killerName;
+          killMissileSeen = false;
+          killFrom = std::max(killFrames.front().t, killFrames.back().t - kKillSeconds);
+          killStart = tNow;
+          killNow = killBase;
+          killAt = 0;
+          while (killAt + 1 < killFrames.size() && killFrames[killAt + 1].t <= killFrom) {
+            for (const KillFrame::Moved& m : killFrames[killAt + 1].moved) killNow[m.node] = V3{m.x, m.y, m.z};
+            killAt++;
+          }
+        }
+      }
+      if (killPlaying) {
+        const double when = killFrom + (tNow - killStart);
+        std::vector<SimEvent> happened;
+        while (killAt + 1 < killFrames.size() && killFrames[killAt + 1].t <= when) {
+          killAt++;
+          for (const KillFrame::Moved& m : killFrames[killAt].moved) killNow[m.node] = V3{m.x, m.y, m.z};
+          happened.insert(happened.end(), killFrames[killAt].snap.events.begin(), killFrames[killAt].snap.events.end());
+        }
+        if (killSkip || killAt + 1 >= killFrames.size()) {
+          // Over: on from what is live, and start keeping it again from here.
+          killForget();
+          killSkip = false;
+        } else {
+          const KillFrame& fr = killFrames[killAt];
+          const KillFrame& nx = killFrames[killAt + 1];
+          const double a = clampd((when - fr.t) / std::max(nx.t - fr.t, 1e-3), 0, 1);
+          std::vector<float> liveForce = std::move(view.beamForce);
+          std::vector<u16> liveObj = std::move(view.nodeObj);
+          std::vector<World::Crater> liveCraters = std::move(view.craters);
+          const u32 liveSplit = view.splitGeneration;
+          std::vector<V3> shownPos = std::move(view.pos);
+          view = fr.snap;
+          shownPos = killNow;
+          for (const KillFrame::Moved& m : nx.moved) {
+            const V3 from = killNow[m.node];
+            shownPos[m.node] = from + (V3{m.x, m.y, m.z} - from) * a;
+          }
+          view.pos = std::move(shownPos);
+          view.beamForce = std::move(liveForce);
+          view.nodeObj = std::move(liveObj);
+          view.craters = std::move(liveCraters);
+          view.splitGeneration = liveSplit;
+          view.events = std::move(happened);
+          view.scrapes.clear();
+          view.foot.onFoot = false;
+          view.foot.heliOn = false;
+          view.foot.droneLive = false;
+          view.missileLive = false;
+          view.missileJammed = false;
+          view.watchOn = false;
+          view.tank = false;
+          view.mates.clear();
+          view.weakSpots.clear();
+          view.selfInstance = -1;
+          view.selfOnFoot = false;
+          char said[128];
+          if (killerShown < 0) snprintf(said, sizeof said, "Kill-Cam  ·  Du warst es selbst  ·  Taste überspringt");
+          else snprintf(said, sizeof said, "Kill-Cam  ·  %s%s  ·  Taste überspringt", killerNameShown.c_str(), killerMissileShown ? " mit einer Lenkrakete" : "");
+          view.damageMsg = said;
+          view.damageAge = 0;
+        }
       }
     }
     if (gPlayLog) {
@@ -5239,6 +5428,38 @@ static void runGame() {
       cam.inside = false;
       cam.fovY = 66.0 * PI / 180.0 + gSet.fov * PI / 180.0;
     }
+    if (killPlaying && !killFrames.empty() && killAt + 1 < killFrames.size()) {
+      const double when = killFrom + (tNow - killStart);
+      const KillFrame& fr = killFrames[killAt];
+      const KillFrame& nx = killFrames[killAt + 1];
+      const double a = clampd((when - fr.t) / std::max(nx.t - fr.t, 1e-3), 0, 1);
+      const int who = killerShown;
+      const bool fromMissile = who >= 0 && killerMissileShown;
+      if (fromMissile && fr.snap.track.missileOn[who] && nx.snap.track.missileOn[who]) {
+        // Behind the missile, the way its own flyer sees it. And where it went off, it stays.
+        killMissileSeen = true;
+        killMissileP = fr.snap.track.missileP[who] + (nx.snap.track.missileP[who] - fr.snap.track.missileP[who]) * a;
+        killMissileV = fr.snap.track.missileV[who] + (nx.snap.track.missileV[who] - fr.snap.track.missileV[who]) * a;
+      }
+      if (fromMissile && killMissileSeen) {
+        const V3 dir = len2(killMissileV) > 1.0 ? norm(killMissileV) : V3{1, 0, 0};
+        cam.eye = killMissileP - dir * 9.0 + V3{0, 0, 2.0};
+        cam.target = killMissileP + dir * 30.0;
+        cam.fovY = 65.0 * PI / 180.0;
+      } else if (who >= 0) {
+        cam.eye = fr.snap.track.eye[who] + (nx.snap.track.eye[who] - fr.snap.track.eye[who]) * a;
+        const V3 look = fr.snap.track.look[who] + (nx.snap.track.look[who] - fr.snap.track.look[who]) * a;
+        cam.target = cam.eye + (len2(look) > 1e-6 ? norm(look) : V3{1, 0, 0}) * 40.0;
+        cam.fovY = 66.0 * PI / 180.0;
+      } else {
+        // At one's own hands: the way it looked at the time.
+        cam.eye = fr.cam.eye + (nx.cam.eye - fr.cam.eye) * a;
+        cam.target = fr.cam.target + (nx.cam.target - fr.cam.target) * a;
+        cam.fovY = fr.cam.fovY;
+      }
+      cam.up = {0, 0, 1};
+      cam.inside = false;
+    }
     if (gScriptCamOn) {
       cam.eye = gScriptEye;
       cam.target = gScriptAt;
@@ -5413,6 +5634,57 @@ static void runGame() {
     hud.damageView = gSet.damageView && (inTank || view.foot.heliOn);
     hud.stats = gSet.stats;
     hud.farShadows = gSet.farShadows;
+    if (killPlaying) {
+      hud.motionBlur = false;
+      hud.damageView = false;
+      hud.vehicleHud = false;
+      hud.crosshair = false;
+      hud.scope = 0;
+      hud.hurt = 0;
+      hud.hitMark = 0;
+      hud.hurtDir = 0;
+      hud.vector.clear();
+      hud.showBoard = false;
+      hud.map.open = false;
+    } else if (netState == Game::NET_IN && !replayOn && (phase == Duel::PLAYING || phase == Duel::FINISHED)) {
+      // Keeping it: only what has moved since the last time, for the whole map is mostly standing still.
+      killEvents.insert(killEvents.end(), view.events.begin(), view.events.end());
+      if (tNow >= killNext && !view.pos.empty()) {
+        killNext = tNow + kKillStep;
+        if (killLast.size() != view.pos.size()) {
+          killFrames.clear();
+          killBase = view.pos;
+          killLast = view.pos;
+        }
+        KillFrame fr;
+        fr.t = tNow;
+        fr.cam = cam;
+        for (u32 n = 0; n < u32(view.pos.size()); n++)
+          if (view.pos[n].x != killLast[n].x || view.pos[n].y != killLast[n].y || view.pos[n].z != killLast[n].z) {
+            fr.moved.push_back({n, float(view.pos[n].x), float(view.pos[n].y), float(view.pos[n].z)});
+            killLast[n] = view.pos[n];
+          }
+        std::vector<V3> keepPos = std::move(view.pos);
+        std::vector<float> keepForce = std::move(view.beamForce);
+        std::vector<u16> keepObj = std::move(view.nodeObj);
+        std::vector<World::Crater> keepCraters = std::move(view.craters);
+        std::vector<SimEvent> keepEvents = std::move(view.events);
+        fr.snap = view;
+        view.pos = std::move(keepPos);
+        view.beamForce = std::move(keepForce);
+        view.nodeObj = std::move(keepObj);
+        view.craters = std::move(keepCraters);
+        view.events = std::move(keepEvents);
+        fr.snap.events = std::move(killEvents);
+        killEvents.clear();
+        killFrames.push_back(std::move(fr));
+        // A second more than it takes; what is older goes into the base.
+        while (killFrames.size() > 2 && killFrames.back().t - killFrames[1].t > kKillSeconds + 1.0) {
+          for (const KillFrame::Moved& m : killFrames[1].moved) killBase[m.node] = V3{m.x, m.y, m.z};
+          killFrames.pop_front();
+        }
+      }
+    }
     if (scriptMode == 69) {
       // The small guns from close by: from the side and from in front, each on its own hull.
       static const int kSlots[3] = {1, 3, 9};

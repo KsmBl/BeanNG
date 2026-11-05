@@ -685,6 +685,10 @@ int main(int argc, char** argv) {
     w.put(u8(duel->players[slot].soldier.grounded ? 1 : 0));
     w.put(duel->players[slot].hitsLanded);
     w.put(duel->players[slot].hitsTaken);
+    // Who it was, for the kill cam of whoever has just gone down.
+    const int killer = duel->players[slot].soldier.hp <= 0 ? duel->killerOf(slot) : -1;
+    w.put(i8(killer));
+    w.put(u8(killer >= 0 && duel->hurtByMissile[slot] ? 1 : 0));
     // Blasts stay in the packet until the player says they have gone off there.
     const auto& log = duel->sim.blastLog;
     const u32 ack = c.in.ackMatch == duel->matchId ? c.in.ackBlasts : 0;
@@ -894,6 +898,9 @@ int main(int argc, char** argv) {
         shell.print("Den Spieler gibt es nicht");
       } else {
         Duel::Player& pl = duel->players[who];
+        // Optionally at someone's hands, to try out what it looks like for whoever goes down.
+        const int by = words.size() > 2 ? playerByName(words[2]) : -1;
+        if (by >= 0) duel->creditHurt(who, by, words.size() > 3 && words[3] == "rakete");
         pl.lastBlow = V3{-std::cos(pl.soldier.yaw), -std::sin(pl.soldier.yaw), 0.3} * -7.0;
         pl.soldier.hp = 0;
         duel->sim.event(EV_BLOOD, pl.soldier.p + V3{0, 0, 1.2}, pl.lastBlow * 0.5, 1.f);

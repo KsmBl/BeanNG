@@ -699,13 +699,14 @@ void Duel::explodeHeli(int h) {
     Player& pl = players[i];
     if (pl.heli != h) continue;
     // Inside what goes up, one goes up with it.
-    creditHurt(i, H.hitBy);
+    creditHurt(i, H.hitBy, H.hitByMissile);
     pl.soldier.hp = 0;
     pl.soldier.p = H.p;
     pl.lastBlow = V3{0, 0, 6};
     pl.heli = -1;
   }
   sim.blastBy = H.hitBy;
+  sim.blastIsMissile = H.hitByMissile;
   sim.explode(mid, 3000.0, 12.0);
   for (int k = 0; k < 4; k++) sim.event(EV_FIRE, mid, V3{}, 1.f);
 }
@@ -1678,9 +1679,10 @@ void Duel::callStrike(int p, V3 at) {
   }
 }
 
-void Duel::creditHurt(int victim, int by) {
+void Duel::creditHurt(int victim, int by, bool missile) {
   if (by < 0 || by == victim) return;
   hurtBy[victim] = by;
+  hurtByMissile[victim] = missile;
   hurtByAge[victim] = 0;
 }
 
@@ -1876,7 +1878,10 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     // A shell going off anywhere near is the end of a helicopter, and its pilot; a bullet's dust is not.
     for (int h = 0; h < kHelis; h++) {
       if (helis[h].dead || (b.impulse < 800.0 && !b.shell) || len(helis[h].at(-0.5, 0, 1.6) - b.c) > std::max(4.5, b.radius * 0.25)) continue;
-      if (b.by >= 0) helis[h].hitBy = b.by;
+      if (b.by >= 0) {
+        helis[h].hitBy = b.by;
+        helis[h].hitByMissile = b.missile;
+      }
       explodeHeli(h);
     }
     for (Player& pl : players) {
@@ -1887,7 +1892,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
         // Even the small shells: what barely scratches a tank still goes off right next to a person.
         const double share = (1.0 - d / kill) * clampd(b.impulse / 1000.0, 0.5, 1.0);
         pl.soldier.hp -= 140.0 * share;
-        creditHurt(int(&pl - players), b.by);
+        creditHurt(int(&pl - players), b.by, b.missile);
         noteHit(int(&pl - players), -1, b.c);
         // Thrown away from it, and up.
         pl.lastBlow = norm(pl.soldier.p + V3{0, 0, 0.9} - b.c + V3{0, 0, 0.7}) * clampd(5.0 + 14.0 * share, 0.0, 18.0);
@@ -2049,7 +2054,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     if (pl.vehicle >= 0) {
       // Inside what goes up, one goes up with it.
       if (vehicleDead(pl.vehicle)) {
-        if (s.hp > 0) creditHurt(i, pl.vehicle < kTanks ? tanks[pl.vehicle].hitBy : carHitBy[pl.vehicle - kTanks]);
+        if (s.hp > 0) creditHurt(i, pl.vehicle < kTanks ? tanks[pl.vehicle].hitBy : carHitBy[pl.vehicle - kTanks], pl.vehicle < kTanks ? tanks[pl.vehicle].hitByMissile : carHitByMissile[pl.vehicle - kTanks]);
         s.hp = 0;
         s.p = frames[pl.vehicle].cog;
       }
@@ -2370,7 +2375,10 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     Vehicle& v = cars[i];
     // What a shell has torn open right beside it no longer works as a vehicle.
     if (blast && !v.exploded && len(v.cog - sim.lastBlast) < sim.lastBlastRadius * 0.30) {
-      if (sim.lastBlastBy >= 0) carHitBy[i] = sim.lastBlastBy;
+      if (sim.lastBlastBy >= 0) {
+        carHitBy[i] = sim.lastBlastBy;
+        carHitByMissile[i] = sim.lastBlastIsMissile;
+      }
       v.wreck(sim);
     }
     Controls driven = parked;

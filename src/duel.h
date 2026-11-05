@@ -99,6 +99,7 @@ struct Heli {
   bool crashing = false, dead = false, onGround = true;
   double gunClock = 0, burn = 0, smokeClock = 0;
   int hitBy = -1;
+  bool hitByMissile = false;
   static constexpr int kEngineHits = 6, kRotorHits = 6, kTailHits = 4, kGunAmmo = 200;
   static constexpr double kMuzzleAhead = 4.05, kMuzzleHigh = 0.58;
   static constexpr double kBoardReach = 5.5, kGunInterval = 0.05, kCameraBack = 17.0, kCameraUp = 5.5;
@@ -334,6 +335,9 @@ class Duel {
   static constexpr double kKillCredit = 30.0;
   int hurtBy[kMaxPlayers] = {-1, -1, -1, -1, -1, -1};
   double hurtByAge[kMaxPlayers] = {};
+  bool hurtByMissile[kMaxPlayers] = {};  // with a guided missile: the kill cam flies with it
+  bool carHitByMissile[kCars] = {};
+  int killerOf(int p) const { return hurtBy[p] >= 0 && hurtBy[p] != p && hurtByAge[p] < kKillCredit ? hurtBy[p] : -1; }
   int carHitBy[kCars] = {-1, -1, -1, -1, -1, -1};
   int playersWanted = 2;  // how many it takes for a match, half on each side
   Phase phase = WAITING;
@@ -413,7 +417,9 @@ class Duel {
   void stepBullets(double dt);
   // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
   bool bulletInCar(int k, V3 from, V3 dir, int kind, int owner);
-  void creditHurt(int victim, int by);
+public:
+  void creditHurt(int victim, int by, bool missile = false);
+private:
   void stepHeli(int h, const Intent in[kMaxPlayers], double dt);
   bool bulletInHeli(int h, V3 from, V3 to, const Bullet& b);
   void explodeHeli(int h);

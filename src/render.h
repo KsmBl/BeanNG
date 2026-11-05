@@ -84,6 +84,16 @@ struct Snapshot {
     bool alive = true, me = false;
   };
   std::vector<BoardRow> board;
+  // For the kill cam: where each player's own view is, and their guided missile if one is in the air.
+  struct ViewTrack {
+    V3 eye[6], look[6];
+    bool missileOn[6] = {};
+    V3 missileP[6], missileV[6];
+  };
+  ViewTrack track;
+  int killer = -1;
+  bool killerMissile = false;
+  std::string killerName;
   float heliNoise = 0;  // how loud a rotor is from here, 0..1
   std::vector<PartState> heliParts;
   // One's own side, for the name and health over each of them.

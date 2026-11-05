@@ -103,6 +103,8 @@ Fahrzeuge, Wracks, Bäume, Häuser und andere Helikopter bringen ihn zum Absturz
 
 **Tarnnetz:** Das Tarnnetz lässt sich jetzt auch als Plane über ein stehendes Auto ziehen. Das dauert 3 Sekunden, beim Losfahren bleibt es zurück.
 
+**Kill-Cam:** Wer stirbt, sieht knapp eine Sekunde später die letzten 7 Sekunden noch einmal: aus der Sicht des Gegners, bei einer Lenkrakete aus der Sicht der Rakete, und aus der eigenen, wenn niemand anderes schuld war. Eine beliebige Taste überspringt sie.
+
 **Mitspieler:** Über jedem Mitspieler stehen sein Name in der Farbe des Teams (West blau, Ost orange) und seine Leben, auch durch Wände und über Fahrzeugen. Auf der Karte sind lebende Mitspieler mit Namen in derselben Farbe zu sehen. Namen dürfen keine Leerzeichen enthalten, im Menü lassen sie sich gar nicht erst eintippen. Der Server macht aus einem Leerzeichen sonst einen Unterstrich und hängt bei doppelten Namen eine Zahl an.
 
 **Punktestand:** Solange TAB gehalten wird (Controller: Back gedrückt halten), zeigt eine Tabelle den Stand der Teams und alle Spieler mit ihren Kills und Toden. Kurz auf Back getippt öffnet wie bisher den Chat. Ein Kill zählt für den Gegner, der einen zuletzt getroffen hat, wenn das nicht länger als 30 Sekunden her ist. Wer in seinem Fahrzeug stirbt, zählt für den, der das Fahrzeug zuletzt getroffen hat. Teamkills zählen nicht als Kill, der Tod zählt aber trotzdem. Die Zahlen gelten über alle Matches eines Servers und beginnen neu, wenn jemand Neues einen Platz übernimmt.
@@ -134,7 +136,7 @@ Bots spielen nach denselben Regeln wie alle anderen, wissen aber etwas mehr: all
 
 **Replay:** Nach dem Verlassen eines Matches zeigt das Hauptmenü **Letztes Match ansehen**, aus der Sicht jedes Spielers oder frei fliegend.
 
-**Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill`, `/kick`, `/bot add|remove`, `/bridge <1-3>`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt allen von Anfang an alle Waffen und den angezapften Rechner, zum Ausprobieren. Spieler heißen in allen Befehlen bei ihrem Namen. `/players` zeigt bei Bots die aktuelle Taktik und was sie gerade tun; jeder Taktikwechsel erscheint außerdem nur auf der Konsole.
+**Serverkonsole:** Text ohne `/` geht in den Chat. Dazu `/give <spieler> <sache> [anzahl]`, `/kill <spieler> [täter] [rakete]`, `/kick`, `/bot add|remove`, `/bridge <1-3>`, `/players`, `/restart`, `/wind`, `/help` und `/quit`. TAB ergänzt Befehle, Spieler und Sachen. `--give-all` gibt allen von Anfang an alle Waffen und den angezapften Rechner, zum Ausprobieren. Spieler heißen in allen Befehlen bei ihrem Namen. `/players` zeigt bei Bots die aktuelle Taktik und was sie gerade tun; jeder Taktikwechsel erscheint außerdem nur auf der Konsole.
 
 ### Netz
 

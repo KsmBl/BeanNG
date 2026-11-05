@@ -428,8 +428,10 @@ void Sim::explode(V3 c, double impulse, double radius, double hole) {
   blastDir = V3{};
   lastBlastBy = blastBy;
   blastBy = -1;
-  if (logBlasts) blastLog.push_back({c, impulse, radius, hole, lastBlastBy, blastIsShell});
+  lastBlastIsMissile = blastIsMissile;
+  if (logBlasts) blastLog.push_back({c, impulse, radius, hole, lastBlastBy, blastIsShell, blastIsMissile});
   blastIsShell = false;
+  blastIsMissile = false;
   if (craterWorld) {
     // Only what goes off close to the ground digs into it.
     const double above = c.z - craterWorld->height(c.x, c.y);

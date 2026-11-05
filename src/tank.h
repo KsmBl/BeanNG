@@ -91,6 +91,7 @@ class Tank {
   std::vector<Shell> shells;
   // For the score: which player is at the gun now, whose missile is in the air, and who last did this tank any harm.
   int gunner = -1, missileBy = -1, hitBy = -1;
+  bool hitByMissile = false;
 
   // Telemetry.
   V3 cog, vCog, fwd{1, 0, 0}, left{0, 1, 0}, up{0, 0, 1};
