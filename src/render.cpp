@@ -2032,6 +2032,13 @@ struct Renderer::Impl {
           q.a = .22f;
           q.gravity = -0.25f;
           q.drag = 1.1f;
+          // What a buggy throws up behind it at speed, as against what a sliding tyre does.
+          if (dust && e.strength >= 100.f) {
+            q.size = rnd(1.f, 2.2f);
+            q.a = .38f;
+            q.maxLife = q.life = rnd(1.4f, 3.f);
+            q.gravity = -0.9f;
+          }
           particles.push_back(q);
           break;
         }

@@ -3,7 +3,7 @@
 
 Coordinates as for the vehicles: x rearwards, y to the left, z up, tracks on the ground at z = 0, the middle at x = 0.
 Open and low: a tube frame on two rubber tracks, a roll cage over the seat, an engine behind it and a machine gun on a
-ring on top of the cage. Groups as on the tanks: the hull, the ring with the gun's mount, the gun, and the net that can be thrown over it.
+ring on top of the cage. Groups as on the tanks: the hull, the ring with the gun's mount, the gun, and the net that can be thrown over it, and whoever is driving.
 """
 import math
 import struct
@@ -165,6 +165,20 @@ box("gun", "dark", 0.22, 0.34, -0.012, 0.012, H + 0.22, H + 0.33)
 for y in (-0.05, 0.05):
     rod("gun", "dark", (0.25, y, H + 0.3), (0.42, y, H + 0.3), 0.012, seg=5)
 box("gun", "olive2", -0.66, -0.62, -0.26, 0.26, H + 0.14, H + 0.55)
+
+# ---- Whoever sits in it, in the open under the cage: there only while there is someone.
+box("driver", "olive", 0.18, 0.5, -0.2, 0.2, 0.62, 1.12)
+box("driver", "olive2", 0.1, 0.42, -0.18, 0.18, 1.0, 1.14)
+box("driver", "olive", -0.28, 0.2, -0.2, -0.06, 0.58, 0.72)
+box("driver", "olive", -0.28, 0.2, 0.06, 0.2, 0.58, 0.72)
+for y in (-0.27, 0.27):
+    rod("driver", "olive", (0.34, y * 0.85, 1.1), (0.08, y * 0.75, 0.92), 0.05, seg=8)
+    rod("driver", "olive", (0.08, y * 0.75, 0.92), (-0.38, y * 0.6, 1.04), 0.043, seg=8)
+    rod("driver", "black", (-0.38, y * 0.6, 1.04), (-0.45, y * 0.58, 1.05), 0.05, seg=8)
+rod("driver", "skin", (0.3, 0, 1.12), (0.3, 0, 1.2), 0.055, seg=10)
+rod("driver", "skin", (0.28, 0, 1.2), (0.28, 0, 1.38), 0.105, seg=12)
+rod("driver", "olive2", (0.3, 0, 1.3), (0.3, 0, 1.43), 0.128, seg=12)
+box("driver", "dark", 0.14, 0.2, -0.08, 0.08, 1.26, 1.32)
 
 # ---- The camouflage net, over the whole of it and down to the ground.
 NET_N = 28

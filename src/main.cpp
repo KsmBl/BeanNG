@@ -1963,7 +1963,9 @@ struct Game {
             from = seen.at(Heli::kMuzzleAhead, 0, Heli::kMuzzleHigh) + seen.fwd() * std::max(ahead, 0.3);
           }
           // Right beside the barrels the flash would fill the picture: from there, only a flicker of it.
-          const bool atLens = l.heli >= 0 && l.heli == duel.players[mySlot].heli && gunCamera.load();
+          // The same on the buggy, with the gun an arm's length from the eye.
+          const bool atMg = (l.kind == EV_MUZZLE || l.kind == EV_TRACER) && vehicleNow >= 0 && vehicleNow < Duel::kTanks && duel.tanks[vehicleNow].kind == TK_MG && len2(l.p - duel.tanks[vehicleNow].muzzle) < 6.0 * 6.0;
+          const bool atLens = gunCamera.load() && ((l.heli >= 0 && l.heli == duel.players[mySlot].heli) || atMg);
           if (!(atLens && l.kind == EV_TRACER)) sim.event(EventKind(l.kind), from, l.v, atLens && l.kind == EV_MUZZLE ? l.a * 0.12f : l.a);
         }
         else if (len2(sim.pos[l.node] - l.p) > 8.0 * 8.0) sim.pos[l.node] = l.p;
@@ -2273,7 +2275,21 @@ struct Game {
       } else {
         me = duel.players[mySlot].soldier;
       }
-      for (int t = 0; t < Duel::kTanks; t++) Duel::poseNet(sim, duel.netFirst[t], duel.tanks[t], duel.tanks[t].netOn);
+      for (int t = 0; t < Duel::kTanks; t++) {
+        const Tank& nt = duel.tanks[t];
+        Duel::poseNet(sim, duel.netFirst[t], nt, nt.netOn);
+        if (nt.hull != HK_BUGGY) continue;
+        // Someone in the seat, unless it is oneself looking out from there.
+        Duel::poseNet(sim, duel.netFirst[t] + 8, nt, duel.occupied(t) && !nt.destroyed && !(t == vehicleNow && gunCamera.load()));
+        // On loose ground it throws up a plume behind it.
+        const VehicleFrame& nf = duel.frames[t];
+        const double fast = std::fabs(nf.speed);
+        if (fast > 6.0 && !nt.destroyed && std::fmod(now + double(t) * 0.013, 0.05) < dt) {
+          const u8 ground = duel.world.surfaceAt(nf.cog.x, nf.cog.y);
+          if (ground != SURF_ASPHALT && ground != SURF_CONCRETE && nf.cog.z - duel.world.height(nf.cog.x, nf.cog.y) < 3.0)
+            for (double side : {-0.9, 0.9}) sim.event(EV_DUST, nf.cog - nf.fwd * 2.3 + nf.left * side - nf.up * 0.6, nf.fwd * (nf.speed * 0.25), 100.f);
+        }
+      }
       for (int t = 0; t < Duel::kCars; t++) duel.poseTarp(sim, t, duel.cars[size_t(t)].netOn);
       const bool flyingOwn = myHeli >= 0 && !replaying && state == NET_IN;
       if (flyingOwn) {
@@ -2967,6 +2983,11 @@ static void runGame() {
       std::vector<u32> net;
       for (u32 n = 0; n < 8; n++) net.push_back(G.duel.netFirst[k] + n);
       G.rig.groups.push_back({std::to_string(k) + ":net", net});
+      if (G.duel.tanks[k].hull == HK_BUGGY) {
+        std::vector<u32> sitting;
+        for (u32 n = 8; n < 16; n++) sitting.push_back(G.duel.netFirst[k] + n);
+        G.rig.groups.push_back({std::to_string(k) + ":driver", sitting});
+      }
     }
     G.rig.links.insert(G.rig.links.end(), r.links.begin(), r.links.end());
     G.rig.linkInstance.resize(G.rig.links.size(), k);
@@ -2980,7 +3001,7 @@ static void runGame() {
     }
     // A tank's mesh is skinned when anything of it moves, and its net is a node of its own.
     G.rig.parkedNodes.push_back({first, end - first});
-    G.rig.parkedExtra.push_back(isTank ? CarRig::NodeRange{G.duel.netFirst[k], 8} : CarRig::NodeRange{0, 0});
+    G.rig.parkedExtra.push_back(isTank ? CarRig::NodeRange{G.duel.netFirst[k], G.duel.tanks[k].hull == HK_BUGGY ? 16u : 8u} : CarRig::NodeRange{0, 0});
   }
   // Two soldiers, each part held by its own few nodes.
   for (int i = 0; i < Duel::kMaxPlayers; i++) {

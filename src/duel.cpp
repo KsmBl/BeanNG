@@ -137,6 +137,13 @@ void Duel::build() {
       sim.addNode(o + r + V3{0, 0, -400}, 1.0, NF_FIXED);
       sim.rest[netFirst[i] + u32(k)] = o + r;
     }
+    // A buggy has no lid: right behind its net the same few nodes again, for whoever is seen sitting in it.
+    if (i < kTanks && t.hull == HK_BUGGY)
+      for (int k = 0; k < 8; k++) {
+        const V3 r{(k & 1) ? 3.0 : -3.0, (k & 2) ? 2.0 : -2.0, (k & 4) ? 1.5 : -1.5};
+        sim.addNode(o + r + V3{0, 0, -400}, 1.0, NF_FIXED);
+        sim.rest[netFirst[i] + 8 + u32(k)] = o + r;
+      }
     sim.endObj();
   }
   // The tarpaulins, out of sight until someone puts one up.
