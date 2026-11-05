@@ -130,6 +130,7 @@ struct Snapshot {
     int ammo = 0;  // for what is in the hand, -1 if it needs none
     int has = 3;
     int hitsLanded = 0, hitsTaken = 0, hitKind = 0;
+    float rearm = 0;
     V3 hurtFrom;
     int slot = 0;
     int shells = 0, missiles = 0, codes = 0;
@@ -288,6 +289,7 @@ struct HudOptions {
   float hurt = 0;  // being hit: how red the picture goes
   float hitMark = 0;   // a hit landed
   int hitKind = 0;     // on what: HitKind
+  float rearm = 0;     // how far along the filling up on the green patch is, 0..1
   // Something heard: which way, how loud, and how long ago it faded.
   struct Heard {
     V3 at;

@@ -2596,6 +2596,8 @@ struct Game {
           const bool still = mine ? std::fabs(mine->speed) < 1.0 : (flown >= 0 && len(duel.helis[flown].v) < 1.0);
           rearmOn = phaseNow == Duel::PLAYING && here;
           rearmShown = rearmOn && still ? rearmShown + dt : 0.0;
+          std::lock_guard<std::mutex> lock(snapMutex);
+          snap.foot.rearm = float(rearmShown / Duel::kRearmTime);
         }
         if (duel.players[mySlot].heli >= 0) {
           const Heli& H = duel.helis[duel.players[mySlot].heli];
@@ -5708,6 +5710,18 @@ static void runGame() {
         takenSeen = view.foot.hitsTaken;
       }
       hud.hitMark = std::max(0.f, hud.hitMark - float(dt) * 3.5f);
+      // The green patch: a clunk as each second goes by, and a heavier one when it is done.
+      {
+        static float rearmWas = 0;
+        hud.rearm = view.foot.rearm;
+        const float now = view.foot.rearm;
+        if (now > 0 && int(now * Duel::kRearmTime) > int(rearmWas * Duel::kRearmTime)) sound->synth.trigger(Sfx::Clunk, 0.25f, 0.f, 0.45f);
+        if (now == 0 && rearmWas > 0.9f) {
+          sound->synth.trigger(Sfx::Clunk, 0.9f, 0.f, 0.9f);
+          sound->synth.trigger(Sfx::Metal, 0.2f, 0.f, 0.5f);
+        }
+        rearmWas = now;
+      }
       hud.hurtDir = std::max(0.f, hud.hurtDir - float(dt));
       static double lastHp = 100;
       if (view.foot.hp < lastHp - 0.5) hurtFlash = std::min(1.0, hurtFlash + (lastHp - view.foot.hp) / 40.0 + 0.3);

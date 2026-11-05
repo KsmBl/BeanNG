@@ -2961,7 +2961,7 @@ struct Renderer::Impl {
         toMap(b.c.x, b.c.y, sx, sy);
         const float bw = std::max(float((std::fabs(b.ax[0].x) * b.h.x + std::fabs(b.ax[1].x) * b.h.y) * 2.0 / (2.0 * kMapHalf)) * ms, 2 * u), bh = std::max(float((std::fabs(b.ax[0].y) * b.h.x + std::fabs(b.ax[1].y) * b.h.y) * 2.0 / (2.0 * kMapHalf)) * ms, 2 * u);
         // The green patches stand out on the map as on the ground.
-        rrect(sx - bw * .5f, sy - bh * .5f, bw, bh, 0, b.h.z < 0.1 ? Col{.2f, .85f, .3f, 1} : Col{.12f, .12f, .13f, 1});
+        rrect(sx - bw * .5f, sy - bh * .5f, bw, bh, 0, b.g > b.r * 2.f ? Col{.2f, .85f, .3f, 1} : Col{.12f, .12f, .13f, 1});
       }
       const auto dot2 = [&](V3 p, float r, Col c) {
         float sx, sy;
@@ -3063,6 +3063,12 @@ struct Renderer::Impl {
       label(mx0 + 14 * u, my0 + ms - 18 * u, o.map.padCursor ? (o.map.strike ? "Bombencode  ·  Rechter Stick: Cursor  ·  A: Ziel des Schlags  ·  B: abbrechen" : "Rechter Stick: Cursor  ·  A: Ziel markieren  ·  X: löschen  ·  B: schließen") : o.map.strike ? "Bombencode  ·  Klick: Ziel des Schlags  ·  Rechtsklick: abbrechen" : "Klick: Ziel markieren  ·  Rechtsklick: löschen  ·  K: schließen", 14 * u, {1, 1, 1, .9f});
     }
 
+    // Filling up on the green patch: a ring that closes round the crosshair.
+    if (o.rearm > 0) {
+      const float cx = W * .5f, cy = H * .5f;
+      arc(cx, cy, 42 * u, 3 * u, 0, 6.28319f, {1, 1, 1, .18f});
+      arc(cx, cy, 42 * u, 4 * u, -1.5708f, -1.5708f + 6.28319f * std::min(o.rearm, 1.f), {.3f, .95f, .45f, .95f});
+    }
     // A hit landed: a cross in the crosshair.
     if (o.hitMark > 0) {
       const float cx = W * .5f, cy = H * .5f, a = std::min(o.hitMark * 2.f, 1.f);
@@ -3174,6 +3180,24 @@ struct Renderer::Impl {
       }
     }
 
+    // ---- What the green patch is, in words, over it as long as one is near enough to want to know.
+    if (o.scope <= 0 && !o.map.open && world) {
+      const Mat4& m = camVP;
+      for (int b = 0; b < 2; b++) {
+        const V3 p = world->base(b).rearm + V3{0, 0, 3.0};
+        const double away = len(p - camEye);
+        if (away > 110.0) continue;
+        const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
+        const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
+        const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
+        if (qw < 0.1) continue;
+        const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H);
+        const float fade = float(std::clamp((110.0 - away) / 25.0, 0.0, 1.0));
+        const float tw = textWidth("Munition", 15 * u);
+        rrect(sx - tw * .5f - 10 * u, sy - 12 * u, tw + 20 * u, 24 * u, 6 * u, {.05f, .3f, .1f, .75f * fade});
+        labelMid(sx, sy, "Munition", 15 * u, {.75f, 1, .8f, fade});
+      }
+    }
     // ---- One's own side: over each of them the name in the colour of the team, and how much life is left.
     if (o.scope <= 0 && !o.map.open) {
       const Mat4& m = camVP;

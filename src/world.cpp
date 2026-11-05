@@ -802,6 +802,20 @@ void World::addCommandCentre(Base& b) {
   // Behind it, out of the line of fire: whatever stands on this for a few seconds is filled up again.
   b.rearm = at - V3{cx, sx, 0} * (kF + kWall + 2.0 + kRearmAlong) + V3{0, 0, kYardZ};
   addBox(b.rearm + V3{0, 0, -0.03}, {kRearmAlong, kRearmAcross, 0.05}, b.facing, 0, SURF_CONCRETE, .16f, .72f, .24f);
+  // A white edge round it, and ammunition stacked at the far side, for it to look like what it is.
+  const auto onPatch = [&](double along, double across, double z, double ha, double hc, double hz, float r, float g, float bl) {
+    addBox(b.rearm + V3{cx * along - sx * across, sx * along + cx * across, z}, {ha, hc, hz}, b.facing, 0, SURF_CONCRETE, r, g, bl);
+  };
+  for (double side : {-1.0, 1.0}) {
+    onPatch(side * (kRearmAlong - 0.2), 0, 0.0, 0.2, kRearmAcross, 0.035, .9f, .92f, .88f);
+    onPatch(0, side * (kRearmAcross - 0.2), 0.0, kRearmAlong, 0.2, 0.035, .9f, .92f, .88f);
+  }
+  for (double side : {-1.0, 1.0}) {
+    // Outside the edge, not on it: nothing that drives on is to catch on them.
+    onPatch(-kRearmAlong - 1.3, side * 7.5, 0.55, 0.9, 1.5, 0.55, .36f, .4f, .2f);
+    onPatch(-kRearmAlong - 1.3, side * 3.6, 0.45, 0.8, 1.1, 0.45, .3f, .34f, .18f);
+    onPatch(-kRearmAlong - 1.3, side * 7.5, 1.45, 0.8, 1.1, 0.35, .42f, .36f, .2f);
+  }
 }
 
 double World::riverAt(double y) { return riverX(y); }
