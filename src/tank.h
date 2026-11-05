@@ -91,6 +91,8 @@ class Tank {
   const HullSpec& hullSpec() const { return ::hullSpec(hull); }
   const TurretSpec& spec() const { return turretSpec(kind); }
   double turnRate(double absV) const;  // rad/s at full lock, at this speed
+  // Whether it stands the longer steps at all: a light hull under a heavy turret does not, tankfarall has the list.
+  bool canGoFar() const { return !(hull == HK_FAST && kind != TK_LIGHT) && !(kind == TK_ARTILLERY && hull != HK_HEAVY); }
   bool nothingToDo(const Controls& in) const;  // stands, and nobody wants anything of it: it may as well sleep with someone in it
 
   struct Shell {

@@ -80,6 +80,7 @@ struct Obj {
   std::vector<u32> nodes, beamList;
   u16 root = 0;        // the object this piece originally belonged to
   bool dirty = false;  // a beam broke: check whether it has come apart
+  bool far = false;    // stepped two steps in three, each half as long again. For what nobody is near enough to see
   ObjKind kind = OBJ_PROP;
   bool awake = false;
   bool alwaysAwake = false;
@@ -191,6 +192,8 @@ class Sim {
   void finish(double dt);
 
   void wake(u16 obj);
+  bool farStep() const { return farStep_; }  // whether what is far is stepped this time
+  static constexpr double kFarStretch = 1.5;  // no more: at twice the step the hulls of most tanks shake themselves apart
   // Puts the first count objects back as they were in start, wherever pieces of them have got to, and
   // leaves everything else in the world exactly as it is.
   void restoreObjects(const Sim& start, u32 count);
@@ -249,6 +252,7 @@ class Sim {
   void splitObjects();
   template <class F>
   void inParallel(int count, F&& fn);
+  bool farStep_ = true;
   void breakBeam(Beam& b, bool notify, double f);
   void computeBounds(Obj& o);
   bool triPairAllowed(u32 node, const Tri& t) const;

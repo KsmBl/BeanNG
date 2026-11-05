@@ -1041,7 +1041,10 @@ int main(int argc, char** argv) {
         in[i].walk.crouch = c.in.crouch;
         c.fire = c.launch = c.repair = c.use = c.setup = c.mineFoot = c.mineTank = c.strike = c.query = c.smoke = c.net = c.drone = c.medkit = false;
       }
-      for (int i = 0; i < Duel::kMaxPlayers; i++) duel->players[i].present = clients[i].used;
+      for (int i = 0; i < Duel::kMaxPlayers; i++) {
+        duel->players[i].present = clients[i].used;
+        duel->players[i].human = !clients[i].bot;
+      }
       duel->step(in);
       simStep++;
       simTime += Duel::kDt;

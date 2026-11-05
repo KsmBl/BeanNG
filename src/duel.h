@@ -145,6 +145,7 @@ class Duel {
 
   struct Player {
     bool present = false, ready = false;
+    bool human = true;  // someone is looking: a bot's vehicle nobody is near to see can be stepped less finely
     u8 items[IT_COUNT] = {};
     Soldier soldier;
     int vehicle = -1;  // what they sit in, -1 on foot
@@ -296,6 +297,7 @@ class Duel {
   Heli helis[kHelis], helisStart[kHelis];
   double rearmTank[kTanks] = {}, rearmHeli[kHelis] = {};
   void stepRearm();
+  void chooseStrides();
   static bool wantsRearm(const Tank& t) { return !t.destroyed && t.ammo >= 0 && (t.ammo < t.spec().ammo || t.missiles < t.spec().missiles || t.smokeCharges < 3); }
   u32 heliFirst[kHelis] = {};
   static void poseHeli(Sim& sim, u32 first, const Heli& h);

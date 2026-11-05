@@ -225,6 +225,7 @@ double Sim::maxEigenvalue(u32 obj, u32* worstNode) const {
 void Sim::forces(double dt) {
   ProfScope profBeams(PS_BEAMS);
   const V3 gv{0, 0, -g};
+  farStep_ = stepCount % 3 != 2;
   // Each object's beams only ever touch that object's nodes, so the objects can go side by side.
   const int nActive = int(active.size());
   double plastic = 0;
@@ -233,6 +234,7 @@ void Sim::forces(double dt) {
     (void)slot;
     const u32 oi = active[size_t(ai)];
     Obj& o = objs[oi];
+    if (o.far && !farStep_) return;
     if (o.kind == OBJ_PROP) {
       // Loose objects lose energy to internal friction, and so come to rest instead of humming on
       // their springs for ever, which is what lets them go back to sleep. It acts on slow motion
@@ -1006,10 +1008,12 @@ void Sim::collidePairs(double dt) {
 // Share of the contact frequency for rim nodes: 0.65 means 42 % of the normal stiffness, about 1.3 MN/m.
 static constexpr double kRimCushion = 0.65;
 
-void Sim::collideWorld(double dt) {
+void Sim::collideWorld(double dtStep) {
   inParallel(int(active.size()), [&](int ai, int) {
     const u32 oi = active[size_t(ai)];
     const Obj& o = objs[oi];
+    if (o.far && !farStep_) return;
+    const double dt = o.far ? dtStep * kFarStretch : dtStep;
     for (u32 i : o.nodes) {
       const u8 fl = flags[i];
       if ((fl & NF_FIXED) || !(fl & NF_COLLIDE)) continue;
@@ -1040,9 +1044,11 @@ void Sim::collideWorld(double dt) {
   });
 }
 
-void Sim::integrate(double dt) {
+void Sim::integrate(double dtStep) {
   inParallel(int(active.size()), [&](int ai, int) {
     const Obj& o = objs[active[size_t(ai)]];
+    if (o.far && !farStep_) return;
+    const double dt = o.far ? dtStep * kFarStretch : dtStep;
     for (u32 i : o.nodes) {
       V3 dv = force[i] * (invMass[i] * dt);
       // Last line of defence: no legitimate force changes a node's speed this much in 0.5 ms. It

@@ -3083,6 +3083,7 @@ int main(int argc, char** argv) {
     // Two to six bots against each other, without a server: does it come to a fight, and to an end?
     const int count = argc > 2 ? std::clamp(atoi(argv[2]), 2, int(Duel::kMaxPlayers)) : 2;
     gProfOn = getenv("BEANNG_PROFILE") != nullptr;
+    const bool nobodyLooks = getenv("BEANNG_NOBODY") != nullptr;
     const double most = argc > 3 ? atof(argv[3]) : 400.0;
     const bool cut = argc > 4 && (!strcmp(argv[4], "cut") || !strcmp(argv[4], "ford"));  // with every bridge down from the start
     const bool idle = argc > 4 && !strcmp(argv[4], "ford");  // and the other side just standing there, out of sight until one is close
@@ -3125,6 +3126,7 @@ int main(int argc, char** argv) {
           continue;
         }
         const double yawBefore = in[i].walk.yaw;
+        d->players[i].human = !nobodyLooks;
         {
           ProfScope prof(PS_BOTS);
           bots[size_t(i)].step(*d, i, in[i]);
@@ -3222,6 +3224,98 @@ int main(int argc, char** argv) {
     d->sim.explode(d->frames[v].cog + d->frames[v].up * 1.5, 2200.0, 15.0);
     run(0.2);
     printf("Im Panzer %d, Schaden %.2f | Marker: Schuetze %d, sein Kamerad %d, Insasse %d, dessen Kamerad %d | getroffen: Insasse %d\n", int(d->players[1].vehicle == v), d->tanks[v].damage, int(d->players[0].hitsLanded), int(d->players[2].hitsLanded), int(d->players[1].hitsLanded), int(d->players[3].hitsLanded), int(d->players[1].hitsTaken));
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "eigen")) {
+    // How long a time step each kind of tank could stand: a step of h holds as long as eigenvalue * h * h stays below 4.
+    for (int h = 0; h <= HK_BUGGY; h++)
+      for (int k = 0; k <= TK_MG; k++) {
+        if ((h == HK_BUGGY) != (k == TK_MG)) continue;
+        auto* w = new World();
+        auto* s = new Sim();
+        CarRig r;
+        w->build();
+        w->clearBoxes();
+        s->world = w;
+        Tank t = buildLeopard(*s, V3{-400, 0, 0}, &r, TurretKind(k), HullKind(h));
+        s->finalize();
+        const double e = std::max(s->maxEigenvalue(t.hullObj, nullptr), s->maxEigenvalue(t.turretObj, nullptr));
+        printf("Wanne %d Turm %d: Eigenwert %.2e, hoechster Schritt %.2f ms\n", h, k, e, 2.0 / std::sqrt(e) * 1000.0);
+      }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "tankfarall")) {
+    // Which hull and turret can stand the longer step at all: gas, a turn, and the turret going round, for each.
+    for (int h = 0; h <= HK_BUGGY; h++)
+      for (int k = 0; k <= TK_MG; k++) {
+        if ((h == HK_BUGGY) != (k == TK_MG)) continue;
+        auto* w = new World();
+        auto* s = new Sim();
+        CarRig r;
+        w->build();
+        w->clearBoxes();
+        w->flatten();
+        w->pave();
+        s->world = w;
+        Tank t = buildLeopard(*s, V3{-500, 0, 0}, &r, TurretKind(k), HullKind(h));
+        s->finalize();
+        t.settle(*s, 3.0);
+        s->objs[t.hullObj].far = s->objs[t.turretObj].far = true;
+        Controls c;
+        c.throttle = 1;
+        c.aimPoint = t.muzzle + t.left * 100.0;
+        for (int n = 0; n < 2000 * 14; n++) {
+          if (n == 2000 * 9) c.steer = 1;
+          s->forces(kDt);
+          if (s->farStep()) t.update(*s, c, kDt * Sim::kFarStretch);
+          s->finish(kDt);
+        }
+        s->events.clear();
+        printf("Wanne %d Turm %d: Bremse %llu, Schaden %.2f, Hochachse %.2f, %.0f km/h\n", h, k, (unsigned long long)s->clampedSteps, t.damage, t.up.z, t.speed * 3.6);
+      }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "tankfar")) {
+    // Every kind of hull at half the steps of twice the length, against the same at the full rate.
+    for (int h = 0; h <= HK_BUGGY; h++)
+      for (int stride = 1; stride <= 2; stride++) {
+        const bool far = stride == 2;
+        auto* w = new World();
+        auto* s = new Sim();
+        CarRig r;
+        w->build();
+        w->clearBoxes();
+        w->flatten();
+        w->pave();
+        s->world = w;
+        Tank t = buildLeopard(*s, V3{-500, 0, 0}, &r, h == HK_BUGGY ? TK_MG : TK_STANDARD, HullKind(h));
+        s->finalize();
+        t.settle(*s, 3.0);
+        s->objs[t.hullObj].far = s->objs[t.turretObj].far = far;
+        Controls c;
+        c.throttle = 1;
+        double t40 = -1, top = 0, shake = 0;
+        for (int k = 0; k < 2000 * 22; k++) {
+          s->forces(kDt);
+          if (!far || s->farStep()) t.update(*s, c, far ? kDt * Sim::kFarStretch : kDt);
+          s->finish(kDt);
+          const double kmh = t.speed * 3.6;
+          if (t40 < 0 && kmh >= 40) t40 = k * kDt;
+          top = std::max(top, kmh);
+          if (k > 2000 * 12) shake = std::max(shake, std::fabs(t.up.z - 1.0));
+        }
+        c.steer = 1;
+        c.throttle = 0.3;
+        for (int k = 0; k < 2000 * 4; k++) {
+          s->forces(kDt);
+          if (!far || s->farStep()) t.update(*s, c, far ? kDt * Sim::kFarStretch : kDt);
+          s->finish(kDt);
+        }
+        double bent = 0;
+        for (u32 bi : s->objs[t.hullObj].beamList) bent += std::fabs(s->beams[bi].L0 - s->beams[bi].Lorig);
+        s->events.clear();
+        printf("Wanne %d fern %d: 0-40 %5.2f s, Spitze %5.1f km/h, Neigung %.4f, verbogen %.3f m, Schaden %.2f, Geschw.-Bremse %llu, Boden %.2f\n", h, int(far), t40, top, shake, bent, t.damage, (unsigned long long)s->clampedSteps, t.cog.z);
+      }
     return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "tankrest")) {

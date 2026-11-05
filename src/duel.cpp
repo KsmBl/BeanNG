@@ -694,6 +694,32 @@ void Duel::stepRearm() {
   }
 }
 
+// A tank with nobody near enough to see how it shakes takes fewer, longer steps, as long as nothing else is near it to touch.
+void Duel::chooseStrides() {
+  constexpr double kSeenFrom = 450.0, kTouch = 30.0;
+  if (sim.blastCount != blastCountNoted) {
+    // Whatever goes off is felt in full by everything.
+    for (int v = 0; v < kTanks; v++) sim.objs[tanks[v].hullObj].far = sim.objs[tanks[v].turretObj].far = false;
+    return;
+  }
+  if (sim.stepCount % 63 != 0 || stepsSinceBlast < 400) return;
+  for (int v = 0; v < kTanks; v++) {
+    const Tank& t = tanks[v];
+    bool far = !t.destroyed && t.canGoFar() && sim.objs[t.hullObj].awake;
+    const V3 at = frames[v].cog;
+    for (int p = 0; p < kMaxPlayers && far; p++) {
+      const Player& pl = players[p];
+      if (pl.present && pl.human && len2((pl.vehicle >= 0 ? frames[pl.vehicle].cog : pl.soldier.p) - at) < kSeenFrom * kSeenFrom) far = false;
+      if (pl.present && pl.vehicle < 0 && pl.heli < 0 && len2(pl.soldier.p - at) < 12.0 * 12.0) far = false;
+    }
+    for (int o = 0; o < kVehicles && far; o++)
+      if (o != v && len2(frames[o].cog - at) < kTouch * kTouch) far = false;
+    for (const V3& w : world.wreckSites())
+      if (far && len2(w - at) < kTouch * kTouch) far = false;
+    sim.objs[t.hullObj].far = sim.objs[t.turretObj].far = far;
+  }
+}
+
 void Duel::poseNet(Sim& sim, u32 first, const Tank& t, bool on) {
   const V3 rest0 = (sim.rest[t.refFL] + sim.rest[t.refFR] + sim.rest[t.refRL] + sim.rest[t.refRR]) * 0.25;
   const V3 now = (sim.pos[t.refFL] + sim.pos[t.refFR] + sim.pos[t.refRL] + sim.pos[t.refRR]) * 0.25;
@@ -2462,7 +2488,8 @@ void Duel::step(const Intent in[kMaxPlayers]) {
         sim.wake(t.hullObj);
         sim.wake(t.turretObj);
       }
-      t.update(sim, *c, kDt);
+      const bool far = sim.objs[t.hullObj].far;
+      if (!far || sim.farStep()) t.update(sim, *c, far ? kDt * Sim::kFarStretch : kDt);
       if (t.mgShots > 0) {
         t.mgShots = 0;
         randState = randState * 1664525u + 1013904223u;
@@ -2530,6 +2557,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
   }
   // A tank that has just lost armour: whoever sits in it feels it, and whoever fired, if it is a blast of theirs, sees it
   // land. Nobody else: a crash is nobody's hit, and a mate's shot is not one's own.
+  chooseStrides();
   stepsSinceBlast = sim.blastCount != blastCountNoted ? 0 : stepsSinceBlast + 1;
   blastCountNoted = sim.blastCount;
   for (int v = 0; v < kTanks; v++) {
