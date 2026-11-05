@@ -85,7 +85,7 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Vektoren:** Die Karte ist in 8 x 8 Felder geteilt, A bis H von West nach Ost, 1 bis 8 von Nord nach Süd, also A1 bis H8. Oben links im Bild steht immer dein aktuelles Feld, im Chat gibt es dazu die Schnellnachricht „Ich bin in Vektor …“.
 
-**Computer:** Im Kommandozentrum des Gegners lässt sich der Hauptcomputer in 5 Sekunden anzapfen. Danach zeigt die Karte alle 30 Sekunden auf Anfrage ungefähr, wo er ist.
+**Computer:** Im Kommandozentrum des Gegners lässt sich der Hauptcomputer in 5 Sekunden anzapfen. Danach zeigt die Karte alle 30 Sekunden auf Anfrage für jeden lebenden Gegner mit Namen ungefähr, wo er gerade ist.
 
 **Mehr Spieler:** `beanng-server --players 4` oder `6` macht daraus 2v2 oder 3v3, ein Team pro Basis. Im Panzer gibt es zwei Plätze: Wer zuerst einsteigt, fährt, der zweite ist Richtschütze und führt Turm und Kanone. Eine Seite verliert, wenn von ihr niemand mehr lebt.
 

@@ -1614,19 +1614,25 @@ struct Game {
           serverStats[1] = serverReal / 100.0;
           serverStats[2] = serverAwake;
           u8 tap = 0;
-          float tapClock = 0, fixWait = 0, fixAge = 0;
+          float tapClock = 0, fixWait = 0;
           r.get(tap);
           r.get(tapClock);
           r.get(fixWait);
-          r.get(fixAge);
-          const V3 fix = r.getV3();
+          u8 fixMask = 0;
+          r.get(fixMask);
           Duel::Player& self = duel.players[mySlot];
           self.tapped = tap & 1;
-          self.hasFix = tap & 2;
           self.tapClock = tapClock;
           self.fixWait = fixWait;
-          self.fixAge = fixAge;
-          self.fix = fix;
+          for (int k = 0; k < Duel::kMaxPlayers; k++) {
+            Duel::Player::Fix& f = self.fixes[k];
+            f.on = fixMask & (1 << k);
+            if (!f.on) continue;
+            f.at = r.getV3();
+            float age = 0;
+            r.get(age);
+            f.age = age;
+          }
           // The blasts have brought down the same spans here, unless a rounding went the other way. Then it catches up.
           u32 spansGone = 0;
           r.get(spansGone);
@@ -2296,9 +2302,9 @@ struct Game {
         snap.foot.hurtFrom = who.hurtFrom;
         snap.foot.ammo = in.weapon == WP_KNIFE ? -1 : (in.weapon == WP_SNIPER ? who.sniperAmmo : (in.weapon == WP_RPG ? who.rpgAmmo : who.smallAmmo));
         snap.foot.tapped = who.tapped;
-        snap.foot.hasFix = who.hasFix;
-        snap.foot.fix = who.fix;
-        snap.foot.fixAge = who.fixAge;
+        snap.foot.fixes.clear();
+        for (int k = 0; k < Duel::kMaxPlayers; k++)
+          if (who.fixes[k].on) snap.foot.fixes.push_back({who.fixes[k].at, float(who.fixes[k].age), names[k]});
         snap.foot.fixWait = who.fixWait;
         snap.foot.shells = who.tankShells;
         snap.foot.missiles = who.tankMissiles;
@@ -2914,7 +2920,7 @@ static void runGame() {
       if (f.tapped) {
         char wait[32] = "bereit";
         if (f.fixWait > 0) snprintf(wait, sizeof wait, "noch %.0f s", f.fixWait);
-        tool("Standort abfragen", wait, f.fixWait > 0 ? "" : nullptr, "Fragt den angezapften Computer. Der ungefähre Standort des Gegners erscheint auf der Karte.", [&] { edges.query = true; });
+        tool("Standort abfragen", wait, f.fixWait > 0 ? "" : nullptr, "Fragt den angezapften Computer. Der ungefähre Standort jedes Gegners erscheint auf der Karte.", [&] { edges.query = true; });
       }
       if (items.empty()) {
         toolAbout.push_back("Finden kannst du Werkzeug in Kisten in Häusern und bei Wracks.");
@@ -4629,9 +4635,7 @@ static void runGame() {
     }
     hud.map.strike = strikePending;
     hud.map.mark = markPoint;
-    hud.map.hasEnemy = view.foot.hasFix;
-    hud.map.enemy = view.foot.fix;
-    hud.map.fixAge = view.foot.fixAge;
+    hud.map.fixes = view.foot.fixes;
     hud.map.fixWait = view.foot.tapped ? view.foot.fixWait : -1.0;
     hud.map.me = view.carCog;
     hud.map.noRadio = view.foot.noRadio;

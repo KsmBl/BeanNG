@@ -585,9 +585,9 @@ void Duel::stepDrone(int p, const Intent& in, double dt) {
       const V3 to = where - pl.droneP;
       const double d = len(to);
       if (d < kDroneMarkRange && dot(norm(to), ahead) > 0.97) {
-        pl.fix = where;
-        pl.hasFix = true;
-        pl.fixAge = 0;
+        pl.fixes[e].on = true;
+        pl.fixes[e].at = where;
+        pl.fixes[e].age = 0;
         noteHit(-1, p, where);
         break;
       }
@@ -1562,21 +1562,24 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       }
     }
     pl.fixWait = std::max(0.0, pl.fixWait - kDt);
-    pl.fixAge += kDt;
+    for (Player::Fix& f : pl.fixes) f.age += kDt;
     // In a tank the question goes by radio, and that needs its aerials.
     const bool radioGone = pl.vehicle >= 0 && pl.vehicle < kTanks && tanks[pl.vehicle].mod[TM_ANTENNA] <= 0;
     if (in[i].query && pl.tapped && pl.fixWait <= 0 && phase == PLAYING && !radioGone) {
-      // Whichever of them is nearest.
-      const int foe = enemyNearest(i, s.p);
-      const Player& other = players[foe >= 0 ? foe : i];
-      const V3 where = other.vehicle >= 0 ? frames[other.vehicle].cog : other.soldier.p;
-      randState = randState * 1664525u + 1013904223u;
-      const double a = double(randState >> 16) / 65535.0 * 2.0 * PI;
-      randState = randState * 1664525u + 1013904223u;
-      const double r = double(randState >> 16) / 65535.0 * kFixError;
-      pl.fix = where + V3{std::cos(a) * r, std::sin(a) * r, 0};
-      pl.hasFix = true;
-      pl.fixAge = 0;
+      // Every one of them still alive, each roughly and each with an error of its own.
+      for (int e = 0; e < kMaxPlayers; e++) {
+        const Player& other = players[e];
+        Player::Fix& f = pl.fixes[e];
+        f.on = other.present && teamOf(e) != teamOf(i) && other.soldier.hp > 0;
+        if (!f.on) continue;
+        const V3 where = other.vehicle >= 0 ? frames[other.vehicle].cog : other.soldier.p;
+        randState = randState * 1664525u + 1013904223u;
+        const double a = double(randState >> 16) / 65535.0 * 2.0 * PI;
+        randState = randState * 1664525u + 1013904223u;
+        const double r = double(randState >> 16) / 65535.0 * kFixError;
+        f.at = where + V3{std::cos(a) * r, std::sin(a) * r, 0};
+        f.age = 0;
+      }
       pl.fixWait = kQueryWait;
     }
     if (pl.vehicle >= 0) {
@@ -1699,8 +1702,8 @@ void Duel::placePlayers() {
     p.drones = 0;
     p.hurtFrom = V3{};
     p.tapped = false;
-    p.tapClock = p.fixWait = p.fixAge = 0;
-    p.hasFix = false;
+    p.tapClock = p.fixWait = 0;
+    for (Player::Fix& f : p.fixes) f = Player::Fix{};
     p.weapon = WP_PISTOL;
     p.smallAmmo = 24;
     p.sniperAmmo = p.rpgAmmo = 0;
@@ -1715,6 +1718,7 @@ void Duel::placePlayers() {
       p.sniperAmmo = 20;
       p.rpgAmmo = 6;
       p.thermalSight = p.weakSight = true;
+      p.tapped = true;
     }
     p.walkDebt = 0;
     const World::Base& base = world.base(teamOf(i));

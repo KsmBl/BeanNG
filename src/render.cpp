@@ -2890,14 +2890,14 @@ struct Renderer::Impl {
           labelMid(mx0 + ms + 13 * u, my0 + (float(i) + .5f) * part, number, 17 * u, edge);
         }
       }
-      if (o.map.hasEnemy) {
+      for (const Snapshot::Foot::Fix& fix : o.map.fixes) {
         // Only roughly: a patch, not a point, and it gets stale.
         const float radius = float(Duel_kFixError / (2.0 * kMapHalf)) * ms;
         float sx, sy;
-        toMap(o.map.enemy.x, o.map.enemy.y, sx, sy);
+        toMap(fix.at.x, fix.at.y, sx, sy);
         circle(sx, sy, radius, {.95f, .25f, .2f, .28f});
         arc(sx, sy, radius, 1.5f * u, 0, kPi2, {.95f, .25f, .2f, 1});
-        snprintf(buf, sizeof buf, "vor %.0f s", o.map.fixAge);
+        snprintf(buf, sizeof buf, "%s, vor %.0f s", fix.name.c_str(), fix.age);
         labelMid(sx, sy - radius - 8 * u, buf, 13 * u, {1, 1, 1, .95f});
       }
       if (o.map.noRadio) {
@@ -2905,7 +2905,7 @@ struct Renderer::Impl {
       }
       if (o.map.fixWait >= 0) {
         if (o.map.fixWait > 0) snprintf(buf, sizeof buf, "Nächste Abfrage in %.0f s", o.map.fixWait);
-        else snprintf(buf, sizeof buf, o.map.padCursor ? "RB: Standort des Gegners abfragen" : "Q: Standort des Gegners abfragen");
+        else snprintf(buf, sizeof buf, o.map.padCursor ? "RB: Standorte der Gegner abfragen" : "Q: Standorte der Gegner abfragen");
         label(mx0 + 14 * u, my0 + 22 * u, buf, 15 * u, white);
       }
       if (o.map.hasMark) {

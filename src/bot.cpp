@@ -229,8 +229,12 @@ void Bot::think(Duel& d, int me) {
   if (pl.tapped && queryClock_ <= 0) {
     pulse_.query = true;
     queryClock_ = 2.0;
-    if (pl.hasFix && pl.fixAge < 3.0) {
-      hint_ = pl.fix;
+    // It says where all of them are; the nearest is the one to go for.
+    double nearest = 1e30;
+    for (const Duel::Player::Fix& f : pl.fixes) {
+      if (!f.on || f.age > 3.0 || len2(f.at - eye) >= nearest) continue;
+      nearest = len2(f.at - eye);
+      hint_ = f.at;
       hintAge_ = 0;
     }
   }

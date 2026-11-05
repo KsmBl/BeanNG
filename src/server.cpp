@@ -720,11 +720,18 @@ int main(int argc, char** argv) {
     w.put(u8(std::min(statLoad * 100.0, 255.0)));
     w.put(u8(std::min(statReal * 100.0, 255.0)));
     w.put(u16(duel->sim.active.size()));
-    w.put(u8((me.tapped ? 1 : 0) | (me.hasFix ? 2 : 0)));
+    w.put(u8(me.tapped ? 1 : 0));
     w.put(float(me.tapClock));
     w.put(float(me.fixWait));
-    w.put(float(me.fixAge));
-    w.putV3(me.fix);
+    u8 fixMask = 0;
+    for (int k = 0; k < Duel::kMaxPlayers; k++)
+      if (me.fixes[k].on) fixMask |= u8(1 << k);
+    w.put(fixMask);
+    for (const Duel::Player::Fix& f : me.fixes) {
+      if (!f.on) continue;
+      w.putV3(f.at);
+      w.put(float(f.age));
+    }
     w.put(duel->world.bridgeMask());
     post(c, w);
   };

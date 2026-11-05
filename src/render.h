@@ -100,7 +100,7 @@ struct Snapshot {
     int slot = 0;
     double fuelShare = 1;
     int shells = 0, missiles = 0, codes = 0;
-    bool tapped = false, hasFix = false;
+    bool tapped = false;
     bool droneLive = false;
     V3 droneP;
     double yaw = 0;  // of one's own figure, when this picture was made
@@ -108,8 +108,14 @@ struct Snapshot {
     int drones = 0, medkits = 0;
     int launcher = 0;  // smoke charges of the tank one sits in
     bool noSight = false, noRange = false, noPeriscope = false, noRadio = false;
-    V3 fix;
-    double fixAge = 0, fixWait = 0;
+    double fixWait = 0;
+    // Where the enemy is, as far as is known: one for each of them.
+    struct Fix {
+      V3 at;
+      float age = 0;
+      std::string name;
+    };
+    std::vector<Fix> fixes;
     double prone = 0;
     V3 wind;
     V3 p;
@@ -206,10 +212,8 @@ struct UiMap {
   V3 cursor;
   V3 mark, me;
   double meYaw = 0;
-  bool hasEnemy = false;
-  V3 enemy;
+  std::vector<Snapshot::Foot::Fix> fixes;
   bool noRadio = false;
-  double fixAge = 0;
   double fixWait = -1;  // until the next question may be asked; negative while the computer has not been tapped
 };
 constexpr double kMapHalf = 900.0;

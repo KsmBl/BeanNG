@@ -116,13 +116,16 @@ class Duel {
     // For the screen: how many hits this player has landed, how many they have taken, and from where the last came.
     u16 hitsLanded = 0, hitsTaken = 0;
     V3 hurtFrom;
-    // The enemy's main computer: a few seconds at it, and from then on it says roughly where they are.
+    // The enemy's main computer: a few seconds at it, and from then on it says roughly where each of them is.
     bool tapped = false;
     double tapClock = 0;
     double fixWait = 0;
-    bool hasFix = false;
-    V3 fix;
-    double fixAge = 0;
+    struct Fix {
+      bool on = false;
+      V3 at;
+      double age = 0;
+    };
+    Fix fixes[kMaxPlayers];  // by player, from the computer or marked by a drone
     int weapon = WP_PISTOL;
     bool hasWeapon[WP_COUNT] = {true, true, false, false, false};
     int smallAmmo = 24;  // pistol and assault rifle: what one starts with, and what the loadout adds
