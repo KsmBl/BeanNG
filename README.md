@@ -93,7 +93,23 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Punktestand:** Solange TAB gehalten wird (Controller: Back gedrückt halten), zeigt eine Tabelle den Stand der Teams und alle Spieler mit ihren Kills und Toden. Kurz auf Back getippt öffnet wie bisher den Chat. Ein Kill zählt für den Gegner, der einen zuletzt getroffen hat, wenn das nicht länger als 30 Sekunden her ist. Wer in seinem Fahrzeug stirbt, zählt für den, der das Fahrzeug zuletzt getroffen hat. Teamkills zählen nicht als Kill, der Tod zählt aber trotzdem. Die Zahlen gelten über alle Matches eines Servers und beginnen neu, wenn jemand Neues einen Platz übernimmt.
 
-**Bots:** `beanng-server --bots 1` lässt dich gegen den Rechner antreten, `--players 4 --bots 3` ergibt zwei gegen zwei mit einem Bot an deiner Seite. Fehlen Plätze, erhöht `--bots` die Spielerzahl von selbst, und auf der Serverkonsole geht es mit `/bot add` und `/bot remove` auch mitten im Spiel. Verbindet sich ein Mensch und alle Plätze sind belegt, übernimmt er den Platz eines Bots, und zwar dort, wo der gerade steht. Bots nehmen sich einen Panzer mit 105 mm (notfalls die leichte Kanone), folgen den Straßen, weichen bei gesprengten Brücken auf die Furten aus, reparieren mit ihrem Set und kämpfen zu Fuß weiter, wenn es sein muss. Artillerie, Lenkraketen, Autos, Minen und Drohnen benutzen sie nicht. Sie spielen nach denselben Regeln wie alle anderen, nur wissen sie alle 30 Sekunden ungefähr, wo der nächste Gegner ist, damit ein Match nicht ewig dauert, wenn sich jemand versteckt. Sie treffen nicht immer, sehen aber auch durch Bäume und Büsche.
+**Bots:** `beanng-server --bots 1` lässt dich gegen den Rechner antreten, `--players 4 --bots 3` ergibt zwei gegen zwei mit einem Bot an deiner Seite. Fehlen Plätze, erhöht `--bots` die Spielerzahl von selbst, und auf der Serverkonsole geht es mit `/bot add` und `/bot remove` auch mitten im Spiel. Verbindet sich ein Mensch und alle Plätze sind belegt, übernimmt er den Platz eines Bots, und zwar dort, wo der gerade steht.
+
+Jede Runde entscheidet sich ein Bot für eine andere Taktik als zuletzt und nimmt die passende Ausrüstung mit:
+
+| Taktik | Was der Bot macht |
+|---|---|
+| Sturm | Nimmt einen Panzer mit 105 mm, sucht den Gegner und greift direkt an |
+| Flanke | Fährt im schnellen Panzer in weitem Bogen und schießt von der Seite, wo die Panzerung dünner ist |
+| Hinterhalt | Versteckt sich im schweren Panzer an einer Straße oder Brücke, zieht das Tarnnetz über und schießt erst aus der Nähe. Ist er entdeckt, wechselt er den Platz oder greift an |
+| Scharfschütze | Sucht in Kisten nach dem Gewehr, legt sich im Ghillie-Anzug auf eine Anhöhe und zielt bei Panzern auf die Ketten |
+| Plünderer | Fährt mit wenig Gepäck von Kiste zu Kiste und greift danach mit dem Gefundenen an |
+| Spion | Fährt zur gegnerischen Basis, zapft dort zu Fuß den Rechner an und jagt dann mit dessen Standortangaben |
+| Lenkrakete | Nimmt den Raketenpanzer und lenkt die Raketen aus großer Entfernung ins Ziel |
+
+Hinterhalt und Scharfschütze warten nur begrenzt, Plünderer und Flanke geben ihren Plan ebenfalls irgendwann auf; danach greifen sie an. Verstecke wählt ein Bot nah an der Straße, weil jeder Meter durchs Gras eine sichtbare Spur hinterlässt. Stößt er selbst auf frische Spuren eines Gegners, folgt er ihnen. Er plündert, wenn ihm etwas fehlt: Medikit, Munition oder Waffen. Fehlen Panzergranaten, fährt er zu den alten Wracks. Nach einem Treffer weicht er aus, nutzt Nebel und repariert. Ist der Panzer nicht mehr zu retten, steigt er aus und holt sich einen anderen.
+
+Bots spielen nach denselben Regeln wie alle anderen, wissen aber etwas mehr: alle 30 Sekunden ungefähr, wo der nächste Gegner ist, damit ein Match nicht ewig dauert; ungefähr, woher ein Treffer kam; und in welche Richtung eine Spur führt. Bäume, Häuser und Nebel versperren ihnen die Sicht, Büsche nicht. Artillerie, Autos, Minen und Drohnen benutzen sie nicht.
 
 **Vegetation:** Wiesen aus Gras in drei Höhen und Büsche, die im Wind wogen. Was darüberfährt, drückt sie platt, eine Explosion brennt sie weg. Beides sind Instanzen mit je einem Drawcall, das Gras wird nur um die Kamera herum erzeugt und dünnt mit der Entfernung weich aus. Die **Grasdichte** lässt sich in den Spiel-Einstellungen wählen.
 

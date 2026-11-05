@@ -1,17 +1,46 @@
-// A player the server plays itself. It only ever hands in what a person could: the same intents, nothing else. What it
-// knows beyond that: roughly where someone is every half a minute, the way a tapped computer would tell it, so that a
-// match with someone hiding still comes to an end.
+// A player the server plays itself. It only ever hands in what a person could: the same intents, nothing else. Every
+// round it settles on a way to play, and takes along and loots what that way needs. What it knows beyond a person: roughly
+// where someone is every half a minute, as a tapped computer would tell it, so that a match with someone hiding still
+// comes to an end; roughly where a shot came from; and which way a track in the grass runs.
 #pragma once
 #include <vector>
 #include "duel.h"
 
 class Bot {
  public:
-  explicit Bot(u32 seed = 1) : rand_(seed * 2654435761u + 12345u) {}
+  enum Tactic : u8 { STORM, FLANK, AMBUSH, SNIPER, SCAVENGE, SPY, MISSILE, kTacticCount };
+  static const char* tacticName(Tactic t);
+  explicit Bot(u32 seed = 1) : rand_(seed * 2654435761u + 12345u) {
+    // No two play quite alike: some are quicker, some shoot straighter.
+    aimSkill_ = chance(0.7, 1.35);
+    reactSkill_ = chance(0.75, 1.3);
+  }
   // Fills in what this player does for this physics step.
   void step(Duel& d, int me, Duel::Intent& out);
+  Tactic tactic() const { return tactic_; }
+  // How it is getting on, for the test bench.
+  const char* doing() const { return doing_; }
+  int followedTracks() const { return tracksFollowed_; }
+  int cratesTaken() const { return cratesAllTime_; }
+  int computersTapped() const { return tapsAllTime_; }
+  int timesRescued() const { return rescuesAllTime_; }
 
  private:
+  void pickTactic(const Duel& d, int me);
+  void noteHits(const Duel& d, int me, V3 eye);
+  void noteTracks(const Duel& d, int me, V3 at);
+  bool lookForTracks(const Duel& d, V3 eye);
+  bool goodTank(const Duel& d, int v) const;
+  void chooseTank(const Duel& d, int me, V3 from);
+  // Getting out of what no longer works, and not back into it.
+  void bail(int v);
+  int pickCrate(const Duel& d, V3 from, bool ammunitionOnly) const;
+  bool wantsLoot(const Duel& d, int me) const;
+  bool lootOnFoot(Duel& d, int me);
+  void planToCrate(const Duel& d, V3 from, V3 at);
+  void checkIdle(Duel& d, int me, V3 here);
+  bool findPost(const Duel& d, int me, V3 from, bool high);
+  void fightInTank(Duel& d, int me);
   void think(Duel& d, int me);
   void chooseLoadout(Duel& d, int me);
   void lookAround(const Duel& d, int me, V3 eye);
@@ -26,7 +55,7 @@ class Bot {
   V3 nextPoint(V3 at, double reach);
   void walkTowards(const Duel& d, int me, V3 at, bool sprint);
   void driveTowards(const Duel& d, int me, V3 at, double wantSpeed);
-  V3 goalFor(const Duel& d, int me);
+  V3 goalFor(const Duel& d, int me, V3 at);
   double chance(double a, double b);
 
   Duel::Intent held_;
@@ -54,10 +83,53 @@ class Bot {
   u32 fallsSeen_ = 0;
 
   int wantVehicle_ = -1;
+  double wantClock_ = 0;
   bool repairing_ = false;
   int repairTank_ = -1;
+  double repairClock_ = 0;
   double useClock_ = 0;
+  bool givenUp_[Duel::kVehicles] = {};  // what does not work, and is no use getting back into
 
   V3 stuckAt_;
-  double stuckClock_ = 0, unstickClock_ = 0, unstickSteer_ = 0;
+  double stuckHeading_ = 0, stuckClock_ = 0, unstickClock_ = 0, unstickSteer_ = 0, flippedClock_ = 0, brokenClock_ = 0;
+  int stuckCount_ = 0;
+  // The last word on getting stuck: whatever the plan says, nobody stands about doing nothing for long.
+  V3 idleAt_;
+  double idleClock_ = 0;
+  int idleStrikes_ = 0;
+  int spyStage_ = 0;
+  bool wasTapped_ = false;
+  int cratesAllTime_ = 0, tapsAllTime_ = 0, rescuesAllTime_ = 0;
+
+  // The plan for this round.
+  Tactic tactic_ = STORM, lastTactic_ = kTacticCount;
+  bool picked_ = false;
+  double tacticClock_ = 0, tacticLimit_ = 1e9;
+  const char* doing_ = "";
+  double aimSkill_ = 1, reactSkill_ = 1;
+  // A place to lie in wait, and the bit of road it watches.
+  bool hasPost_ = false, atPost_ = false;
+  V3 post_, watch_;
+  int shotsFromPost_ = 0;
+  double dodgeClock_ = 0, dodgeSide_ = 1, shiftClock_ = 8;
+  int flankSide_ = 1;
+  bool flanked_ = false;
+  double queryClock_ = 0;
+  // Crates: which one it is going for, and which are not worth another look.
+  int crate_ = -1;
+  double crateClock_ = 0;
+  int cratesTaken_ = 0, cratesWanted_ = 0;
+  std::vector<u8> crateTried_;
+  // The tracks the enemy has left in the grass, once it has come across them.
+  struct Mark {
+    V3 at;
+    int vehicle;
+    double when;
+  };
+  std::vector<Mark> marks_;
+  V3 markedAt_[Duel::kVehicles];
+  double now_ = 0, trackLook_ = 0, trackWhen_ = -1;
+  bool onTrack_ = false;
+  V3 trackGoal_;
+  int trackVehicle_ = -1, tracksFollowed_ = 0;
 };

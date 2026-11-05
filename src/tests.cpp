@@ -2776,6 +2776,12 @@ int main(int argc, char** argv) {
     const double most = argc > 3 ? atof(argv[3]) : 400.0;
     const bool cut = argc > 4 && (!strcmp(argv[4], "cut") || !strcmp(argv[4], "ford"));  // with every bridge down from the start
     const bool idle = argc > 4 && !strcmp(argv[4], "ford");  // and the other side just standing there, out of sight until one is close
+    // What a guided missile does to the tank bot 0 is in: square on the nose, again and again, as long as it sits in one.
+    const bool struck = argc > 4 && !strcmp(argv[4], "hit");
+    const int rounds = argc > 5 ? atoi(argv[5]) : 2;
+    double nextStrike = 40.0;
+    int strikes = 0;
+    const int strikesMost = argc > 6 ? atoi(argv[6]) : 1000;
     auto* d = new Duel();
     d->playersWanted = count;
     d->build();
@@ -2810,14 +2816,28 @@ int main(int argc, char** argv) {
         for (const World::Bridge& br : d->world.bridgeSpans()) d->sim.explode(br.at + V3{std::cos(br.yaw) * 6.0, std::sin(br.yaw) * 6.0, 0.1}, 12000.0, 30.0);
         printf("Alle Bruecken unten: Maske %x\n", d->world.bridgeMask());
       }
+      if (struck && strikes < strikesMost && t >= nextStrike && d->phase == Duel::PLAYING && d->players[0].vehicle >= 0 && d->players[0].vehicle < Duel::kTanks) {
+        nextStrike = t + 25.0;
+        strikes++;
+        Tank& hit = d->tanks[d->players[0].vehicle];
+        const double lower = hit.damage;
+        d->sim.blastBy = 1;
+        d->sim.explode(hit.cog + hit.fwd * 3.8, 5000.0, 20.0);
+        printf("  Lenkrakete auf Panzer %d bei t %.0f, Schaden vorher %.2f\n", d->players[0].vehicle, t, lower);
+      }
       if (t >= nextSay) {
-        nextSay = t + 10.0;
+        nextSay = t + (struck ? 3.0 : 10.0);
         printf("t %3.0f Phase %d Match %u Stand %u:%u", t, int(d->phase), d->matchId, d->wins[0], d->wins[1]);
         for (int i = 0; i < count; i++) {
           const Duel::Player& pl = d->players[i];
           const V3 p = pl.vehicle >= 0 ? d->frames[pl.vehicle].cog : pl.soldier.p;
-          printf(" | %d: %.0f %.0f z%.0f fz %d hp %.0f", i, p.x, p.y, p.z, pl.vehicle, pl.soldier.hp);
-          if (pl.vehicle >= 0 && pl.vehicle < Duel::kTanks) printf(" sch %.2f mun %d v %.1f", d->tanks[pl.vehicle].damage, d->tanks[pl.vehicle].ammo, d->frames[pl.vehicle].speed);
+          printf(" | %d %s/%s: %.0f %.0f fz %d hp %.0f K%d T%d", i, Bot::tacticName(bots[size_t(i)].tactic()), bots[size_t(i)].doing(), p.x, p.y, pl.vehicle, pl.soldier.hp, int(d->scores[i].kills), int(d->scores[i].deaths));
+          if (pl.vehicle >= 0 && pl.vehicle < Duel::kTanks) {
+            const Tank& tk = d->tanks[pl.vehicle];
+            printf(" sch %.2f mun %d v %.1f", tk.damage, tk.ammo, d->frames[pl.vehicle].speed);
+            if (struck) printf(" gas %.2f brems %.2f lenk %.2f gang %d mods %.1f %.1f %.1f %.1f", in[i].c.throttle, in[i].c.brake, in[i].c.steer, tk.gear, tk.mod[TM_RING], tk.mod[TM_RADIATOR], tk.mod[TM_FUEL], tk.radiatorHeat);
+            if (struck) printf(" motor %.2f ketten %d%d benzin %.0f set %d", tk.mod[TM_ENGINE], int(tk.trackOff[0]), int(tk.trackOff[1]), tk.fuel, int(pl.items[IT_REPAIR]));
+          }
         }
         printf("\n");
         fflush(stdout);
@@ -2826,8 +2846,9 @@ int main(int argc, char** argv) {
         winsSeen = d->wins[0] + d->wins[1];
         printf("-> Match entschieden nach %.0f s: Stand %u:%u\n", t, d->wins[0], d->wins[1]);
       }
-      if (d->matchId > startMatch + 3) break;
+      if (d->matchId > startMatch + rounds * 2) break;
     }
+    for (int i = 0; i < count; i++) printf("Bot %d: Kills %d, Tode %d, Spuren gefolgt %d, Kisten %d, Rechner %d, Rettungen %d\n", i, int(d->scores[i].kills), int(d->scores[i].deaths), bots[size_t(i)].followedTracks(), bots[size_t(i)].cratesTaken(), bots[size_t(i)].computersTapped(), bots[size_t(i)].timesRescued());
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
   }
