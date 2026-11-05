@@ -286,6 +286,7 @@ class Duel {
   static void poseNet(Sim& sim, u32 first, const Tank& t, bool on);
   // A helicopter in each yard.
   // One helicopter for each place to start from, and after them two buggies for each side.
+  static constexpr double kRearmTime = 5.0;
   static constexpr int kFlying = 6, kHelis = kFlying, kHeliNodes = 32;  // three to a side, however many play
   double heliDebt[kHelis] = {};
   // Returns true if it has just hit the ground in a way it does not survive. No pilot, or none who may fly yet: null.
@@ -293,6 +294,9 @@ class Duel {
   int heliToRepair(V3 p) const;
   static const V3 kHeliRest;  // where its nodes lie for the mesh to be bound
   Heli helis[kHelis], helisStart[kHelis];
+  double rearmTank[kTanks] = {}, rearmHeli[kHelis] = {};
+  void stepRearm();
+  static bool wantsRearm(const Tank& t) { return !t.destroyed && t.ammo >= 0 && (t.ammo < t.spec().ammo || t.missiles < t.spec().missiles || t.smokeCharges < 3); }
   u32 heliFirst[kHelis] = {};
   static void poseHeli(Sim& sim, u32 first, const Heli& h);
   int heliPilot(int h) const {

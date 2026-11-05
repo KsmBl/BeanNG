@@ -2898,7 +2898,8 @@ struct Renderer::Impl {
         float sx, sy;
         toMap(b.c.x, b.c.y, sx, sy);
         const float bw = std::max(float((std::fabs(b.ax[0].x) * b.h.x + std::fabs(b.ax[1].x) * b.h.y) * 2.0 / (2.0 * kMapHalf)) * ms, 2 * u), bh = std::max(float((std::fabs(b.ax[0].y) * b.h.x + std::fabs(b.ax[1].y) * b.h.y) * 2.0 / (2.0 * kMapHalf)) * ms, 2 * u);
-        rrect(sx - bw * .5f, sy - bh * .5f, bw, bh, 0, {.12f, .12f, .13f, 1});
+        // The green patches stand out on the map as on the ground.
+        rrect(sx - bw * .5f, sy - bh * .5f, bw, bh, 0, b.h.z < 0.1 ? Col{.2f, .85f, .3f, 1} : Col{.12f, .12f, .13f, 1});
       }
       const auto dot2 = [&](V3 p, float r, Col c) {
         float sx, sy;

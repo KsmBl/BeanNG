@@ -39,7 +39,7 @@ double padBlend(double x, double y) { return smoothstepd(kPadR, kPadR + 70.0, st
 
 // ---- The duel's map. Two kilometres across, a valley running west to east between the bases, hills to hide behind,
 // and a rim of mountains all round that nothing can climb. The land is the same beyond the grid's edge.
-constexpr double kBaseX = 730.0, kYardHalfX = 42.0, kYardHalfY = 62.0, kYardZ = 16.0;
+constexpr double kBaseX = 730.0, kYardHalfX = 58.0, kYardHalfY = 62.0, kYardZ = 16.0;
 // The river runs north to south through the middle, in a gully too steep to climb out of: the bridges are the only
 // way across. Far out it dies away into the rim.
 constexpr double kWaterZ = 2.5, kBedZ = 0.9, kRiverHalf = 13.0, kBankOuter = 20.0;
@@ -799,6 +799,9 @@ void World::addCommandCentre(Base& b) {
   place(kF + 5.0, 0, kYardZ + 1.4, 0.5, 4.0, 1.4, wr, wg, wb);
   b.door = at + V3{cx, sx, 0} * (kF + 2.0) + V3{0, 0, kYardZ};
   b.computer = at - V3{cx, sx, 0} * (kF - 2.6) + V3{0, 0, kYardZ + 1.0};
+  // Behind it, out of the line of fire: whatever stands on this for a few seconds is filled up again.
+  b.rearm = at - V3{cx, sx, 0} * (kF + kWall + 2.0 + kRearmAlong) + V3{0, 0, kYardZ};
+  addBox(b.rearm + V3{0, 0, -0.03}, {kRearmAlong, kRearmAcross, 0.05}, b.facing, 0, SURF_CONCRETE, .16f, .72f, .24f);
 }
 
 double World::riverAt(double y) { return riverX(y); }

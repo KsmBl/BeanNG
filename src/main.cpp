@@ -1068,6 +1068,8 @@ struct Game {
     } droneShown[Duel::kMaxPlayers];
     Ragdoll bodies[Duel::kMaxPlayers];
     int seatNow = 0, wantedNow = 2, hereNow = 0;
+    bool rearmOn = false;
+    double rearmShown = 0;
     double repairNow = 0;
     // A part just lost is said out loud for a few seconds.
     double lastMod[TM_COUNT];
@@ -2574,6 +2576,14 @@ struct Game {
         snprintf(msg, sizeof msg, "%s", alert.c_str());
       } else if (state == NET_IN) {
         const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
+        // The green patch: the server does the filling, this only says how far along it is.
+        {
+          const int flown = duel.players[mySlot].heli;
+          const bool here = mine ? duel.world.onRearm(duel.frames[vehicleNow].cog) && Duel::wantsRearm(*mine) : (flown >= 0 && duel.world.onRearm(duel.helis[flown].p) && duel.helis[flown].ammo < duel.helis[flown].fullAmmo());
+          const bool still = mine ? std::fabs(mine->speed) < 1.0 : (flown >= 0 && len(duel.helis[flown].v) < 1.0);
+          rearmOn = phaseNow == Duel::PLAYING && here;
+          rearmShown = rearmOn && still ? rearmShown + dt : 0.0;
+        }
         if (duel.players[mySlot].heli >= 0) {
           const Heli& H = duel.helis[duel.players[mySlot].heli];
           if (H.crashing) snprintf(msg, sizeof msg, "ABSTURZ");
@@ -2595,6 +2605,8 @@ struct Game {
           };
         }
         else if (repairNow > 0) snprintf(msg, sizeof msg, "Repariere  ·  %.0f s", repairNow);
+        else if (rearmOn && rearmShown > 0) snprintf(msg, sizeof msg, "Munition wird aufgefüllt  ·  %.0f s", std::max(std::ceil(Duel::kRearmTime - rearmShown), 1.0));
+        else if (rearmOn) snprintf(msg, sizeof msg, "Grüne Zone: stehen bleiben füllt die Munition auf");
         else if (droneShown[mySlot].live) snprintf(msg, sizeof msg, "Drohne  ·  Akku %.0f s  ·  Feuer markiert den Gegner  ·  Q: zurückholen", droneShown[mySlot].battery);
         else if (mine && mine->netClock > 0) snprintf(msg, sizeof msg, "Tarnnetz wird aufgezogen  ·  %.0f s", mine->netClock);
         else if (vehicleNow >= Duel::kTanks && duel.cars[size_t(vehicleNow - Duel::kTanks)].netClock > 0) snprintf(msg, sizeof msg, "Tarnplane wird aufgezogen");
@@ -4282,6 +4294,36 @@ static void runGame() {
         } else if (stage == 6 && tNow > stageAt + 2.0) {
           wantShot = true;
           stage = 7;
+        }
+      }
+    }
+    if (scriptMode == 88 && netState == Game::NET_IN) {
+      // Round the command centre on foot, for a look at the green patch behind it.
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      static int leg88 = 0;
+      static double arrived88 = 0;
+      if (inMatch) {
+        const World::Base& home = G.world.base(Duel::teamOf(slot));
+        const double cf = std::cos(home.facing), sf = std::sin(home.facing);
+        const V3 corner = home.centre + V3{cf * -14.0 - sf * 24.0, sf * -14.0 + cf * 24.0, 0};
+        const V3 behind = home.rearm + V3{sf * -22.0, cf * 22.0, 0};
+        const V3 to = (leg88 == 0 ? corner : behind) - view.foot.p;
+        if (leg88 < 2) {
+          rig.yaw = std::atan2(-to.y, -to.x);
+          gas = 1.0;
+          if (len(V3{to.x, to.y, 0}) < 2.0) leg88++;
+        } else {
+          const V3 look = home.rearm - view.foot.p;
+          rig.yaw = std::atan2(-look.y, -look.x);
+          rig.pitch = 0.25;
+          if (arrived88 == 0) arrived88 = tNow;
+          if (tNow > arrived88 + 1.5) {
+            printf("Zone gezeigt bei %.0f %.0f\n", view.foot.p.x, view.foot.p.y);
+            fflush(stdout);
+            wantShot = true;
+            arrived88 = 1e9;
+          }
         }
       }
     }

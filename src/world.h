@@ -60,6 +60,7 @@ class World {
     double facing = 0;  // towards the middle of the map
     V3 computer;        // the main computer, inside the command centre
     V3 door;
+    V3 rearm;           // the middle of the green patch behind the command centre
     V3 slot(int i) const;  // where vehicle i of the row stands
   };
   static constexpr int kBaseSlots = 15;  // three rows of four tanks, three cars
@@ -72,6 +73,16 @@ class World {
   static V3 fordPoint(int i);  // the middle of a ford, without its height
   static double riverAt(double y);  // where the river runs at this y
   const Base& base(int side) const { return bases_[side]; }
+  static constexpr double kRearmAlong = 7.5, kRearmAcross = 11.0;  // half of it, away from the building and across
+  // On either side's green patch, where a vehicle that stands still is filled up.
+  bool onRearm(V3 p) const {
+    for (const Base& b : bases_) {
+      const V3 q = p - b.rearm;
+      const double along = q.x * std::cos(b.facing) + q.y * std::sin(b.facing), across = -q.x * std::sin(b.facing) + q.y * std::cos(b.facing);
+      if (std::fabs(along) < kRearmAlong && std::fabs(across) < kRearmAcross) return true;
+    }
+    return false;
+  }
   // Places set aside on the map: villages for houses, old wrecks for what can be taken from them.
   const std::vector<V3>& houseSites() const { return houseSites_; }
   struct House {

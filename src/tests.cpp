@@ -3171,6 +3171,63 @@ int main(int argc, char** argv) {
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "rearm")) {
+    // A rotor over friend and foe, the green patch for a tank and a helicopter, and an intruder at a bot's computer.
+    auto* d = new Duel();
+    d->playersWanted = 4;
+    d->build();
+    for (int i = 0; i < 4; i++) d->players[i].present = true;
+    Duel::Intent in[Duel::kMaxPlayers];
+    const auto run = [&](double seconds) {
+      for (double t = 0; t < seconds; t += Duel::kDt) {
+        d->step(in);
+        std::vector<SimEvent> ev;
+        d->drainEvents(ev);
+      }
+    };
+    u8 none[IT_COUNT] = {};
+    while (d->phase != Duel::CHOOSING) run(0.1);
+    for (int i = 0; i < 4; i++) d->choose(i, none, true);
+    while (d->phase != Duel::PLAYING) run(0.05);
+    // The rotor: pilot is player 0 of team 0, a friend (2) and a foe (1) under the disc.
+    Heli& H = d->helis[0];
+    d->players[0].heli = 0;
+    H.power = 1;
+    H.onGround = true;
+    d->players[2].soldier.p = H.p + V3{0, 3.0, 0};
+    d->players[1].soldier.p = H.p + V3{0, -3.0, 0};
+    run(0.2);
+    printf("Unter dem Rotor: Freund %.0f Leben, Gegner %.0f Leben\n", d->players[2].soldier.hp, d->players[1].soldier.hp);
+    // Off the patch and on it.
+    const World::Base& base = d->world.base(0);
+    printf("Gruene Zone bei %.0f %.0f %.1f, Boden %.2f, auf dem Fleck %d, daneben %d\n", base.rearm.x, base.rearm.y, base.rearm.z, d->world.groundUnder(base.rearm.x, base.rearm.y, base.rearm.z + 2.0), int(d->world.onRearm(base.rearm)), int(d->world.onRearm(base.rearm + V3{0, 40, 0})));
+    H.ammo = 5;
+    H.p = base.rearm;
+    H.v = V3{};
+    H.power = 0;
+    run(4.0);
+    printf("Helikopter nach 4 s: %d Schuss\n", H.ammo);
+    run(1.5);
+    printf("nach 5,5 s: %d Schuss\n", H.ammo);
+    d->players[0].heli = -1;
+    H.p = d->helisStart[0].p;
+    const int v = Duel::kTanks - Duel::kBuggies;
+    Tank& B = d->tanks[v];
+    const u32 first = d->tankFirst[v];
+    const V3 shift = base.rearm + V3{0, 0, 0.2} - V3{d->frames[v].cog.x, d->frames[v].cog.y, B.cog.z - 0.76};
+    for (u32 n = first; n < first + d->tankNodes; n++) d->sim.pos[n] += shift;
+    B.ammo = 3;
+    d->players[0].soldier.p = d->frames[v].cog;
+    d->players[0].vehicle = v;
+    d->sim.wake(B.hullObj);
+    d->sim.wake(B.turretObj);
+    in[0].c.brake = 1;
+    run(3.0);
+    printf("Buggy: auf dem Fleck %d, %.1f km/h, nach 3 s %d Schuss\n", int(d->world.onRearm(d->frames[v].cog)), B.speed * 3.6, B.ammo);
+    run(3.0);
+    printf("nach 6 s %d Schuss\n", B.ammo);
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "gatcar")) {
     // The gatling on a car with someone in it: what goes when, at twenty rounds a second, a burst at a time.
     auto* d = new Duel();

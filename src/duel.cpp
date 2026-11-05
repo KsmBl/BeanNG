@@ -662,6 +662,37 @@ void Duel::stepDrone(int p, const Intent& in, double dt) {
   }
 }
 
+// Standing on the green patch behind a command centre, with someone in it and something to fill.
+void Duel::stepRearm() {
+  for (int v = 0; v < kTanks; v++) {
+    Tank& t = tanks[v];
+    const VehicleFrame& f = frames[v];
+    if (!occupied(v) || !wantsRearm(t) || std::fabs(t.speed) > 1.0 || !world.onRearm(f.cog)) {
+      rearmTank[v] = 0;
+      continue;
+    }
+    rearmTank[v] += kDt;
+    if (rearmTank[v] < kRearmTime) continue;
+    rearmTank[v] = 0;
+    t.ammo = std::max(t.ammo, t.spec().ammo);
+    t.missiles = t.spec().missiles;
+    t.smokeCharges = std::max(t.smokeCharges, 3);
+    sim.event(EV_SPARK, f.cog + f.up * 1.2, f.up, 0.6f);
+  }
+  for (int h = 0; h < kHelis; h++) {
+    Heli& H = helis[h];
+    if (heliPilot(h) < 0 || H.dead || H.crashing || !H.onGround || H.ammo >= H.fullAmmo() || len(H.v) > 1.0 || !world.onRearm(H.p)) {
+      rearmHeli[h] = 0;
+      continue;
+    }
+    rearmHeli[h] += kDt;
+    if (rearmHeli[h] < kRearmTime) continue;
+    rearmHeli[h] = 0;
+    H.ammo = H.fullAmmo();
+    sim.event(EV_SPARK, H.at(0, 0, 1.5), H.up(), 0.6f);
+  }
+}
+
 void Duel::poseNet(Sim& sim, u32 first, const Tank& t, bool on) {
   const V3 rest0 = (sim.rest[t.refFL] + sim.rest[t.refFR] + sim.rest[t.refRL] + sim.rest[t.refRR]) * 0.25;
   const V3 now = (sim.pos[t.refFL] + sim.pos[t.refFR] + sim.pos[t.refRL] + sim.pos[t.refRR]) * 0.25;
@@ -2273,6 +2304,8 @@ void Duel::restart() {
   for (int i = 0; i < kWrecks; i++) wrecks[i] = wrecksStart[i];
   cars = carsStart;
   for (int h = 0; h < kHelis; h++) helis[h] = helisStart[h];
+  for (double& c : rearmTank) c = 0;
+  for (double& c : rearmHeli) c = 0;
   winner = -1;
   phaseClock = 0;
   for (int i = 0; i < kMaxPlayers; i++) hurtBy[i] = -1;
@@ -2445,6 +2478,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
       t.tickFire(sim, kDt);
     }
   }
+  stepRearm();
   // Putting a net up takes a moment and a tank that stands still; and driving off leaves it behind.
   for (int v = 0; v < kTanks; v++) {
     Tank& t = tanks[v];

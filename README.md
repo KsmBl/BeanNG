@@ -107,6 +107,8 @@ Fahrzeuge, Wracks, Bäume, Häuser und andere Helikopter bringen ihn zum Absturz
 
 **Kettenbuggy:** Neben den Helikoptern stehen je zwei leichte Kettenfahrzeuge mit Überrollkäfig. Sie fahren sich wie ein Panzer, sind ein ebensolcher Softbody mit laufenden Ketten und Spuren im Gras, erreichen aber rund 150 km/h und stellen sich nach einem Überschlag selbst wieder auf. Das MG auf dem Käfig hat 1000 Schuss, feuert 1600 pro Minute, solange die Maustaste gehalten wird, und jeder Schuss zieht eine Rauchspur. Einen Baum überlebt der Buggy auch bei 150 km/h mit verbogenem Rahmen, ein Panzerschuss beendet ihn, und wer drinsitzt, sitzt im Freien.
 
+**Grüne Zone:** Hinter jedem Kommandozentrum liegt eine kleine grüne Fläche, auch auf der Karte zu sehen. Wer dort mit Panzer, Buggy oder Helikopter 5 Sekunden stillsteht, bekommt Munition, Raketen und Nebelwerfer wieder aufgefüllt. Auch Bots fahren hin, wenn ihnen die Munition ausgeht.
+
 **Motorgeräusche:** Jedes Fahrzeug, in dem jemand sitzt, ist zu hören, auch das der anderen: Panzer, Autos und Buggys klingen verschieden, kommen aus der richtigen Richtung und werden mit der Entfernung leiser und dumpfer, bis etwa 400 m.
 
 **Kill-Log:** Im Chat steht jeder Kill mit Täter, Waffe und Opfer, zum Beispiel `Bot2 [Lenkrakete] Whisper`; Namen sind dort und im normalen Chat in der Farbe ihres Teams.

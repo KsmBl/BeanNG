@@ -1282,6 +1282,23 @@ void Bot::inTank(Duel& d, int me) {
     return;
   }
   if (!driver || cantDrive) return;
+  // Nearly out: home, round the back of the command centre, and stand on the green.
+  if (t.ammo >= 0 && t.ammo <= (t.kind == TK_MG ? 60 : 1) && t.missiles == 0 && !seesFoe_ && !cantDrive && stuckCount_ < 3) {
+    const V3 spot = d.world.base(Duel::teamOf(me)).rearm;
+    doing_ = "holt Munition";
+    if (d.world.onRearm(f.cog) && len2(flat(spot - f.cog)) < 5.0 * 5.0) {
+      held_.c.throttle = 0;
+      held_.c.steer = 0;
+      held_.c.brake = 1;
+      stuckClock_ = 0;
+      stuckAt_ = f.cog;
+      return;
+    }
+    if (pathAge_ > 20.0 || len(flat(spot - pathGoal_)) > 10.0 || d.world.bridgeFalls() != fallsSeen_) planTo(d, f.cog, spot);
+    const double left = len(flat(spot - f.cog));
+    driveTowards(d, me, nextPoint(f.cog, left < 25.0 ? 5.0 : 13.0), left < 40.0 ? 3.5 : 13.0);
+    return;
+  }
   if (t.ammo == 0 && t.missiles == 0 && !seesFoe_) {
     // The old wrecks have shells in them, as anyone knows who has been out here before.
     if (crate_ < 0) {
