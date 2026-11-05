@@ -2864,6 +2864,7 @@ int main(int argc, char** argv) {
     const bool airOnly = argc > 4 && !strcmp(argv[4], "air");  // only helicopters: do they get up, and do they find anyone
     const int rounds = argc > 5 ? atoi(argv[5]) : 2;
     double nextStrike = 40.0;
+    double mostTurn = 0;
     int strikes = 0;
     const int strikesMost = argc > 6 ? atoi(argv[6]) : 1000;
     auto* d = new Duel();
@@ -2890,7 +2891,9 @@ int main(int argc, char** argv) {
           if (d->phase == Duel::CHOOSING) d->choose(i, hide, true);
           continue;
         }
+        const double yawBefore = in[i].walk.yaw;
         bots[size_t(i)].step(*d, i, in[i]);
+        if (d->phase == Duel::PLAYING && t > 1.0) mostTurn = std::max(mostTurn, std::fabs(std::remainder(in[i].walk.yaw - yawBefore, 2.0 * PI)) / Duel::kDt * 57.2958);
       }
       d->step(in);
       std::vector<SimEvent> ev;
@@ -2936,6 +2939,7 @@ int main(int argc, char** argv) {
       if (d->matchId > startMatch + rounds * 2) break;
     }
     for (int i = 0; i < count; i++) printf("Bot %d: Kills %d, Tode %d, Spuren gefolgt %d, Kisten %d, Rechner %d, Rettungen %d, Fluege %d\n", i, int(d->scores[i].kills), int(d->scores[i].deaths), bots[size_t(i)].followedTracks(), bots[size_t(i)].cratesTaken(), bots[size_t(i)].computersTapped(), bots[size_t(i)].timesRescued(), bots[size_t(i)].flights());
+    printf("Schnellste Drehung eines Bots: %.0f Grad/s\n", mostTurn);
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
   }

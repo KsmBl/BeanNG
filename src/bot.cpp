@@ -66,6 +66,35 @@ void Bot::step(Duel& d, int me, Duel::Intent& out) {
     think(d, me);
   }
   out = held_;
+  // Nobody turns as fast as they can think. The look moves at most so far a second, and what is aimed at goes with it.
+  {
+    constexpr double kMostTurn = 720.0 * PI / 180.0;
+    const Duel::Player& pl = d.players[me];
+    if (!lookSet_) {
+      lookYaw_ = pl.soldier.yaw;
+      lookPitch_ = pl.soldier.pitch;
+      lookSet_ = true;
+    }
+    const double most = kMostTurn * Duel::kDt;
+    const double yawOff = std::remainder(held_.walk.yaw - lookYaw_, 2.0 * PI), pitchOff = held_.pitch - lookPitch_;
+    lookYaw_ += clampd(yawOff, -most, most);
+    lookPitch_ += clampd(pitchOff, -most, most);
+    out.walk.yaw = lookYaw_;
+    out.pitch = lookPitch_;
+    const bool byHand = pl.vehicle < 0 && len2(held_.c.aimPoint) > 1.0;
+    if (byHand) {
+      // Along the look as it is by now, as far off as what is being aimed at. On the mark only once the look has got there.
+      const V3 from = pl.heli >= 0 ? d.helis[pl.heli].at(Heli::kMuzzleAhead, 0, Heli::kMuzzleHigh) : Duel::eyeOf(pl.soldier);
+      const double cy = std::cos(lookYaw_), sy = std::sin(lookYaw_), cp = std::cos(lookPitch_), sp = std::sin(lookPitch_);
+      const V3 look{-cy * cp, -sy * cp, -sp};
+      const bool onMark = std::fabs(yawOff) < 0.03 && std::fabs(pitchOff) < 0.03;
+      if (!onMark) out.c.aimPoint = from + look * len(held_.c.aimPoint - from);
+      if (!onMark) {
+        pulse_.fireFoot = false;
+        out.fireHeld = false;
+      }
+    }
+  }
   // Pressed for one step, the way a key arrives.
   out.c.fire = pulse_.c.fire;
   out.c.launch = pulse_.c.launch;
@@ -158,6 +187,9 @@ void Bot::think(Duel& d, int me) {
     fresh.rescuesAllTime_ = rescuesAllTime_;
     fresh.flightsAllTime_ = flightsAllTime_;
     fresh.forced_ = forced_;
+    fresh.lookYaw_ = lookYaw_;
+    fresh.lookPitch_ = lookPitch_;
+    fresh.lookSet_ = lookSet_;
     *this = fresh;
     match_ = d.matchId;
     crateTried_.assign(d.crates.size(), 0);

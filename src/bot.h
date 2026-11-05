@@ -113,6 +113,8 @@ class Bot {
   // In the air, and what comes with it.
   Tactic forced_ = kTacticCount;
   int wantHeli_ = -1, mendHeli_ = -1, flownHeli_ = -1;
+  double lookYaw_ = 0, lookPitch_ = 0;
+  bool lookSet_ = false;
   double wantHeliClock_ = 0, mendClock_ = 0, orbitSide_ = 1, orbitClock_ = 0, wantHigh_ = 45.0;
 
   // The plan for this round.
