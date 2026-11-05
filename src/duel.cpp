@@ -699,7 +699,7 @@ void Duel::explodeHeli(int h) {
     Player& pl = players[i];
     if (pl.heli != h) continue;
     // Inside what goes up, one goes up with it.
-    creditHurt(i, H.hitBy, H.hitByMissile);
+    creditHurt(i, H.hitBy, H.hitByMissile, H.hitShot);
     pl.soldier.hp = 0;
     pl.soldier.p = H.p;
     pl.lastBlow = V3{0, 0, 6};
@@ -1680,10 +1680,11 @@ void Duel::callStrike(int p, V3 at) {
   }
 }
 
-void Duel::creditHurt(int victim, int by, bool missile) {
+void Duel::creditHurt(int victim, int by, bool missile, const Shot& shot) {
   if (by < 0 || by == victim) return;
   hurtBy[victim] = by;
   hurtByMissile[victim] = missile;
+  hurtShot[victim] = shot;
   hurtByAge[victim] = 0;
 }
 
@@ -1882,6 +1883,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       if (b.by >= 0) {
         helis[h].hitBy = b.by;
         helis[h].hitByMissile = b.missile;
+        helis[h].hitShot = Shot{b.shell, b.from, b.c, b.flight};
       }
       explodeHeli(h);
     }
@@ -1893,7 +1895,12 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
         // Even the small shells: what barely scratches a tank still goes off right next to a person.
         const double share = (1.0 - d / kill) * clampd(b.impulse / 1000.0, 0.5, 1.0);
         pl.soldier.hp -= 140.0 * share;
-        creditHurt(int(&pl - players), b.by, b.missile);
+        Shot shot;
+        shot.on = b.shell;
+        shot.from = b.from;
+        shot.at = b.c;
+        shot.flight = b.flight;
+        creditHurt(int(&pl - players), b.by, b.missile, shot);
         noteHit(int(&pl - players), -1, b.c);
         // Thrown away from it, and up.
         pl.lastBlow = norm(pl.soldier.p + V3{0, 0, 0.9} - b.c + V3{0, 0, 0.7}) * clampd(5.0 + 14.0 * share, 0.0, 18.0);
@@ -2056,7 +2063,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     if (pl.vehicle >= 0) {
       // Inside what goes up, one goes up with it.
       if (vehicleDead(pl.vehicle)) {
-        if (s.hp > 0) creditHurt(i, pl.vehicle < kTanks ? tanks[pl.vehicle].hitBy : carHitBy[pl.vehicle - kTanks], pl.vehicle < kTanks ? tanks[pl.vehicle].hitByMissile : carHitByMissile[pl.vehicle - kTanks]);
+        if (s.hp > 0) creditHurt(i, pl.vehicle < kTanks ? tanks[pl.vehicle].hitBy : carHitBy[pl.vehicle - kTanks], pl.vehicle < kTanks ? tanks[pl.vehicle].hitByMissile : carHitByMissile[pl.vehicle - kTanks], pl.vehicle < kTanks ? Shot{tanks[pl.vehicle].hitByShell, tanks[pl.vehicle].hitShotFrom, tanks[pl.vehicle].hitShotAt, tanks[pl.vehicle].hitShotFlight} : Shot{});
         s.hp = 0;
         s.p = frames[pl.vehicle].cog;
       }

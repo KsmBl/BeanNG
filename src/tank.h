@@ -87,11 +87,16 @@ class Tank {
     double age = 0;
     const Tank* glanced = nullptr;  // what it has just glanced off, and cannot hit again on the way out
     int by = -1;                    // who fired it
+    V3 from;                        // and from where
   };
   std::vector<Shell> shells;
   // For the score: which player is at the gun now, whose missile is in the air, and who last did this tank any harm.
   int gunner = -1, missileBy = -1, hitBy = -1;
   bool hitByMissile = false;
+  // The shell that last hurt it, if a shell it was: the kill cam goes along with it.
+  bool hitByShell = false;
+  V3 hitShotFrom, hitShotAt;
+  double hitShotFlight = 0;
 
   // Telemetry.
   V3 cog, vCog, fwd{1, 0, 0}, left{0, 1, 0}, up{0, 0, 1};

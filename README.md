@@ -103,7 +103,7 @@ Fahrzeuge, Wracks, Bäume, Häuser und andere Helikopter bringen ihn zum Absturz
 
 **Tarnnetz:** Das Tarnnetz lässt sich jetzt auch als Plane über ein stehendes Auto ziehen. Das dauert 3 Sekunden, beim Losfahren bleibt es zurück.
 
-**Kill-Cam:** Wer stirbt, sieht knapp eine Sekunde später die letzten 7 Sekunden noch einmal: aus der Sicht des Gegners, bei einer Lenkrakete aus der Sicht der Rakete, und aus der eigenen, wenn niemand anderes schuld war. Eine beliebige Taste überspringt sie.
+**Kill-Cam:** Wer stirbt, sieht knapp eine Sekunde später die letzten 7 Sekunden noch einmal: aus der Sicht des Gegners, bei einer Lenkrakete aus der Sicht der Rakete, und aus der eigenen, wenn niemand anderes schuld war. War es ein Panzerschuss, folgt die Kamera am Ende dem Geschoss in Zeitlupe bis zum Einschlag; insgesamt bleiben es 7 Sekunden. Eine beliebige Taste überspringt sie.
 
 **Mitspieler:** Über jedem Mitspieler stehen sein Name in der Farbe des Teams (West blau, Ost orange) und seine Leben, auch durch Wände und über Fahrzeugen. Auf der Karte sind lebende Mitspieler mit Namen in derselben Farbe zu sehen. Namen dürfen keine Leerzeichen enthalten, im Menü lassen sie sich gar nicht erst eintippen. Der Server macht aus einem Leerzeichen sonst einen Unterstrich und hängt bei doppelten Namen eine Zahl an.
 

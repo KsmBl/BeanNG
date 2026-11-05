@@ -145,7 +145,10 @@ class Sim {
   // And whose it was, set the same way: for the score, and for a bot to know who is after it. -1 for nobody.
   int blastBy = -1, lastBlastBy = -1;
   bool blastIsMissile = false, lastBlastIsMissile = false;  // one flown by hand: the kill cam goes with it
-  bool blastIsShell = false;  // from a tank's gun, however small: that is the end of anything that flies
+  // A shell's flight: where from, and how long, for the kill cam to go along with it. Set just before explode().
+  V3 blastFrom, lastBlastFrom;
+  double blastFlight = 0, lastBlastFlight = 0;
+  bool blastIsShell = false, lastBlastIsShell = false;  // from a tank's gun, however small: that is the end of anything that flies
   // For the duel server: what went off, for the players' machines to set off as well.
   struct BlastRecord {
     V3 c;
@@ -153,6 +156,8 @@ class Sim {
     int by = -1;
     bool shell = false;
     bool missile = false;
+    V3 from;
+    double flight = 0;
   };
   bool logBlasts = false;
   std::vector<BlastRecord> blastLog;

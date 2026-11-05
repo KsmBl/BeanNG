@@ -94,6 +94,9 @@ struct Snapshot {
   int killer = -1;
   bool killerMissile = false;
   std::string killerName;
+  bool killerShell = false;  // and if a shell did it, its flight
+  V3 killShotFrom, killShotAt;
+  double killShotFlight = 0;
   float heliNoise = 0;  // how loud a rotor is from here, 0..1
   std::vector<PartState> heliParts;
   // One's own side, for the name and health over each of them.

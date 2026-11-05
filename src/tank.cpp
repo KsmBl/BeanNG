@@ -494,6 +494,7 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
     Shell s;
     s.p = muzzle + gF * 0.2;
     s.by = gunner;
+    s.from = s.p;
     // Without its sight the gunner lays it by eye, and it shows.
     V3 shot = gF;
     if (mod[TM_SIGHT] <= 0) {
@@ -683,6 +684,8 @@ void Tank::updateShells(Sim& sim, double dt) {
       sim.blastDir = norm(s.v);
       sim.blastBy = s.by;
       sim.blastIsShell = true;
+      sim.blastFrom = s.from;
+      sim.blastFlight = s.age;
       sim.explode(at, spec().blastImpulse, spec().blastRadius);
       shells[i] = shells.back();
       shells.pop_back();
@@ -1021,6 +1024,10 @@ void Tank::checkDamage(Sim& sim, double dt) {
       if (sim.lastBlastBy >= 0) {
         hitBy = sim.lastBlastBy;
         hitByMissile = sim.lastBlastIsMissile;
+        hitByShell = sim.lastBlastIsShell;
+        hitShotFrom = sim.lastBlastFrom;
+        hitShotAt = c;
+        hitShotFlight = sim.lastBlastFlight;
       }
       // A heavy shell does not need to touch: anywhere close enough, and that is the end of the tank.
       const double core = sim.lastBlastImpulse >= 10000.0 ? 4.5 : 1.3;

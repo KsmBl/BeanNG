@@ -688,7 +688,13 @@ int main(int argc, char** argv) {
     // Who it was, for the kill cam of whoever has just gone down.
     const int killer = duel->players[slot].soldier.hp <= 0 ? duel->killerOf(slot) : -1;
     w.put(i8(killer));
-    w.put(u8(killer >= 0 && duel->hurtByMissile[slot] ? 1 : 0));
+    const bool killerShell = killer >= 0 && duel->hurtShot[slot].on;
+    w.put(u8((killer >= 0 && duel->hurtByMissile[slot] ? 1 : 0) | (killerShell ? 2 : 0)));
+    if (killerShell) {
+      w.putV3(duel->hurtShot[slot].from);
+      w.putV3(duel->hurtShot[slot].at);
+      w.put(float(duel->hurtShot[slot].flight));
+    }
     // Blasts stay in the packet until the player says they have gone off there.
     const auto& log = duel->sim.blastLog;
     const u32 ack = c.in.ackMatch == duel->matchId ? c.in.ackBlasts : 0;

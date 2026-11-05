@@ -85,6 +85,13 @@ inline constexpr WeaponInfo kWeapons[WP_COUNT] = {
 // How big a shot looks and sounds.
 inline float muzzleSize(int weapon) { return weapon == WP_RPG ? 0.5f : (weapon == WP_SNIPER ? 1.0f : (weapon == WP_AR ? 0.14f : 0.1f)); }
 
+// What a shell did on its way, for the kill cam to fly along with it.
+struct ShellFlight {
+  bool on = false;
+  V3 from, at;
+  double flight = 0;
+};
+
 // A helicopter is not a soft body like the rest: it flies by a few numbers, and is drawn from three rigid parts.
 struct Heli {
   V3 p, v;  // p is on the ground between the skids
@@ -100,6 +107,7 @@ struct Heli {
   double gunClock = 0, burn = 0, smokeClock = 0;
   int hitBy = -1;
   bool hitByMissile = false;
+  ShellFlight hitShot;
   static constexpr int kEngineHits = 6, kRotorHits = 6, kTailHits = 4, kGunAmmo = 200;
   static constexpr double kMuzzleAhead = 4.05, kMuzzleHigh = 0.58;
   static constexpr double kBoardReach = 5.5, kGunInterval = 0.05, kCameraBack = 17.0, kCameraUp = 5.5;
@@ -337,6 +345,9 @@ class Duel {
   double hurtByAge[kMaxPlayers] = {};
   bool hurtByMissile[kMaxPlayers] = {};  // with a guided missile: the kill cam flies with it
   bool carHitByMissile[kCars] = {};
+  // And if it was a shell, its flight, for the kill cam to follow.
+  using Shot = ShellFlight;
+  Shot hurtShot[kMaxPlayers];
   int killerOf(int p) const { return hurtBy[p] >= 0 && hurtBy[p] != p && hurtByAge[p] < kKillCredit ? hurtBy[p] : -1; }
   int carHitBy[kCars] = {-1, -1, -1, -1, -1, -1};
   int playersWanted = 2;  // how many it takes for a match, half on each side
@@ -418,7 +429,7 @@ class Duel {
   // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
   bool bulletInCar(int k, V3 from, V3 dir, int kind, int owner);
 public:
-  void creditHurt(int victim, int by, bool missile = false);
+  void creditHurt(int victim, int by, bool missile = false, const Shot& shot = Shot{});
 private:
   void stepHeli(int h, const Intent in[kMaxPlayers], double dt);
   bool bulletInHeli(int h, V3 from, V3 to, const Bullet& b);
