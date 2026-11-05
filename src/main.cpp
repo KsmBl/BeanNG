@@ -3178,7 +3178,7 @@ static void runGame() {
     const double pitchUp = lookHigh ? -1.4 : -0.30, pitchDown = view.missileLive ? 1.5 : 1.2;
     rig.pitch = clampd(rig.pitch, pitchUp, pitchDown);
     // Nothing to do on foot before or after the match itself: one waits where one stands.
-    if (!onFoot || weaponPick != WP_SNIPER) scoped = false;
+    if (!onFoot || weaponPick != WP_SNIPER || view.foot.heliOn) scoped = false;
     // Through the scope: plain, or with whichever of the found sights one has.
     const bool hasThermal = view.foot.has & kHasThermal, hasWeak = view.foot.has & kHasWeak;
     if ((scopeView == SV_THERMAL && !hasThermal) || (scopeView == SV_WEAK && !hasWeak)) scopeView = SV_PLAIN;
@@ -3786,7 +3786,7 @@ static void runGame() {
             if (view.watchOn) G.teamWatch++;
             else edges.fire = true;
           }
-          if (e.button.button == SDL_BUTTON_RIGHT && onFoot && weaponPick == WP_SNIPER) scoped = !scoped;
+          if (e.button.button == SDL_BUTTON_RIGHT && onFoot && weaponPick == WP_SNIPER && !view.foot.heliOn) scoped = !scoped;
           break;
         case SDL_EVENT_MOUSE_MOTION: {
           const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse / (scoped ? scopeZoom * 0.5 : 1.0) * lerpd(1.0, inTank ? 0.3 : 0.55, aimBlend);
@@ -3895,7 +3895,7 @@ static void runGame() {
         padFire = fireNow;
         const bool aimNow = lt > 0.4;
         const bool scopeWeapon = onFoot && weaponPick == WP_SNIPER;
-        if (aimNow && !padScopeHeld && scopeWeapon) scoped = !scoped;
+        if (aimNow && !padScopeHeld && scopeWeapon && !view.foot.heliOn) scoped = !scoped;
         padScopeHeld = aimNow;
         padAim = aimNow && !scopeWeapon;
       } else {
@@ -4174,6 +4174,7 @@ static void runGame() {
     }
     if (scriptMode == 79 && netState == Game::NET_IN) {
       // Into the helicopter and up, with the gun going for a moment.
+      static bool scope79 = false;
       if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
       panelKind = PANEL_NONE;
       static double stageAt = 0;
@@ -4194,10 +4195,14 @@ static void runGame() {
           }
         } else if (stage == 1) {
           hb = 1.0;
+          // With the big rifle picked and the sights asked for, as a right click would: nothing is to come of it up here.
+          weaponPick = WP_SNIPER;
+          scope79 = scoped;
+          if (view.foot.heliOn) scoped = true;
           rig.yaw = G.world.base(Duel::teamOf(slot)).facing + PI;
           rig.pitch = 0.2;
           if (tNow > stageAt + 9.0) {
-            printf("Oben: an Bord %d, Hoehe %.1f, Leistung %.2f, Munition %d\n", int(view.foot.heliOn), view.foot.heliP.z, H.power, H.ammo);
+            printf("Oben: an Bord %d, Hoehe %.1f, Leistung %.2f, Munition %d, Zielfernrohr mit Waffe 4: %d\n", int(view.foot.heliOn), view.foot.heliP.z, H.power, H.ammo, int(scope79));
             fflush(stdout);
             wantShot = true;
             stage = 2;
