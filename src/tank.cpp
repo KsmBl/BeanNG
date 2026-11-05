@@ -612,7 +612,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   radiatorHeat = std::min(radiatorHeat + (1.0 - mod[TM_RADIATOR]) * dt / 45.0, 1.0);
   fuel = std::max(0.0, fuel - (1.0 - mod[TM_FUEL]) * 7.0 * dt);
   const double power = (fuel <= 0 ? 0.0 : 1.0) * clampd(1.0 - radiatorHeat * 0.75, 0.25, 1.0) * spec().powerScale * hullSpec().powerScale * (mod[TM_ENGINE] <= 0 ? 0.0 : lerpd(0.35, 1.0, mod[TM_ENGINE]));
-  const double Te = loadNow * engineTorque(rpmNow) * power - 80.0 - engineOmega * 0.8;
+  const double Te = loadNow * engineTorque(rpmNow) * hullSpec().torque * power - 80.0 - engineOmega * 0.8;
   engineOmega += (Te - Tconv) * dt / 7.0;
   engineOmega = clampd(engineOmega, 0.0, 270.0);
 

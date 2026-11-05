@@ -34,6 +34,7 @@ struct HullSpec {
   const char* meshPart;  // what the mesh's file name has for it
   double massScale, powerScale;
   double armour;  // what a hit does to it: below 1 it takes more of them
+  double torque = 1.6;  // on top of what the engine gives: the pull of each hull, for it to feel as strong as it looks
 };
 const HullSpec& hullSpec(HullKind k);
 std::string tankMeshFile(HullKind hull, TurretKind turret);
