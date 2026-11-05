@@ -536,6 +536,7 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   if (in.fire && missileLive) {
     sim.blastBy = missileBy;
     sim.blastIsMissile = true;
+    sim.blastWeapon = KW_MISSILE;
     sim.explode(missileP, 5000.0, 20.0);
     missileLive = false;
   } else if (in.fire && reload <= 0 && ammo != 0 && mod[TM_GUN] > 0) {
@@ -739,6 +740,7 @@ void Tank::updateShells(Sim& sim, double dt) {
       sim.blastDir = norm(s.v);
       sim.blastBy = s.by;
       sim.blastIsShell = true;
+      sim.blastWeapon = kind == TK_STANDARD ? KW_GUN105 : (kind == TK_LIGHT ? KW_LIGHTGUN : (kind == TK_ARTILLERY ? KW_HOWITZER : KW_TANKGUN));
       sim.blastFrom = s.from;
       sim.blastFlight = s.age;
       sim.explode(at, spec().blastImpulse, spec().blastRadius);
@@ -858,6 +860,7 @@ void Tank::updateMissile(Sim& sim, const Controls& in, double dt) {
     sim.blastDir = norm(missileV);
     sim.blastBy = missileBy;
     sim.blastIsMissile = true;
+    sim.blastWeapon = KW_MISSILE;
     sim.explode(at, 5000.0, 20.0);
     missileLive = false;
   }
@@ -1079,6 +1082,7 @@ void Tank::checkDamage(Sim& sim, double dt) {
       if (sim.lastBlastBy >= 0) {
         hitBy = sim.lastBlastBy;
         hitByMissile = sim.lastBlastIsMissile;
+        hitWeapon = sim.lastBlastWeapon;
         hitByShell = sim.lastBlastIsShell;
         hitShotFrom = sim.lastBlastFrom;
         hitShotAt = c;
@@ -1151,6 +1155,7 @@ void Tank::destroy(Sim& sim) {
   for (u32 n : sim.objs[turretObj].nodes) sim.vel[n] += kick + cross(spin, sim.pos[n] - tc);
   sim.blastBy = hitBy;
   sim.blastIsMissile = hitByMissile;
+  sim.blastWeapon = hitWeapon;
   sim.explode(O + up * 0.2, 3500.0, 9.0);
   blastSeen_ = sim.blastCount;
 }

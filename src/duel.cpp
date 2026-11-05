@@ -699,7 +699,7 @@ void Duel::explodeHeli(int h) {
     Player& pl = players[i];
     if (pl.heli != h) continue;
     // Inside what goes up, one goes up with it.
-    creditHurt(i, H.hitBy, H.hitByMissile, H.hitShot);
+    creditHurt(i, H.hitBy, H.hitByMissile, H.hitShot, H.hitWeapon);
     pl.soldier.hp = 0;
     pl.soldier.p = H.p;
     pl.lastBlow = V3{0, 0, 6};
@@ -707,6 +707,7 @@ void Duel::explodeHeli(int h) {
   }
   sim.blastBy = H.hitBy;
   sim.blastIsMissile = H.hitByMissile;
+  sim.blastWeapon = H.hitWeapon;
   sim.explode(mid, 3000.0, 12.0);
   for (int k = 0; k < 4; k++) sim.event(EV_FIRE, mid, V3{}, 1.f);
 }
@@ -738,6 +739,7 @@ bool Duel::bulletInHeli(int h, V3 from, V3 to, const Bullet& b) {
   const auto note = [&](V3 where) {
     if (b.kind >= WP_RPG) return;
     H.hitBy = b.owner;
+    H.hitWeapon = weaponOfBullet(b.kind, b.gatling);
     noteHit(-1, b.owner, from);
     if (pilot >= 0) noteHit(pilot, -1, from);
     sim.event(EV_SPARK, where, H.up(), 0.5f);
@@ -779,7 +781,7 @@ bool Duel::bulletInHeli(int h, V3 from, V3 to, const Bullet& b) {
       note(cockpit);
       if (pilot >= 0) {
         players[pilot].soldier.hp -= kWeapons[b.kind].damage * 0.8;
-        creditHurt(pilot, b.owner);
+        creditHurt(pilot, b.owner, false, Shot{}, weaponOfBullet(b.kind, b.gatling));
         sim.event(EV_BLOOD, cockpit, seg * 0.0, 0.7f);
       }
     }
@@ -945,7 +947,7 @@ void Duel::stepHeli(int h, const Intent in[kMaxPlayers], double dt) {
     const V3 belly = H.at(-0.5, 0, 1.0);
     const bool squashed = fast > 2.5 && len(belly - (feet + V3{0, 0, tall * 0.5})) < 1.9;
     if (!blades && !tailBlades && !squashed) continue;
-    creditHurt(i, pilot);
+    creditHurt(i, pilot, false, Shot{}, KW_ROTOR);
     noteHit(i, pilot, hub);
     pl.soldier.hp = 0;
     pl.lastBlow = norm(feet - hub + upNow * 1.5) * 12.0;
@@ -1369,7 +1371,7 @@ void Duel::fireWeapon(int p, const Intent& in) {
     if (foe >= 0 && players[foe].vehicle < 0 && len(V3{target.x - s.p.x, target.y - s.p.y, target.z - s.p.z}) < 2.2) {
       Soldier& other = players[foe].soldier;
       other.hp -= kWeapons[w].damage;
-      creditHurt(foe, p);
+      creditHurt(foe, p, false, Shot{}, KW_KNIFE);
       players[foe].lastBlow = norm(target - s.p + V3{0, 0, 0.3}) * 2.0;
       noteHit(foe, p, s.p);
       sim.event(EV_BLOOD, target + V3{0, 0, 1.1}, norm(target - s.p) * 2.0, 0.7f);
@@ -1432,6 +1434,7 @@ void Duel::stepCarRounds(double dt) {
     car.burnTime = 0;
     sim.blastBy = carHitBy[k];
     sim.blastIsMissile = false;
+    sim.blastWeapon = carHitWeapon[k];
     sim.explode(f.cog + f.up * 0.3, 1800.0, 9.0);
   }
 }
@@ -1511,7 +1514,7 @@ bool Duel::bulletInCar(int k, V3 from, V3 dir, int kind, int owner, bool gatling
       for (Player& pl : players)
         if (pl.vehicle == kTanks + k) {
           pl.soldier.hp -= kWeapons[kind].damage * 0.8;
-          creditHurt(int(&pl - players), owner);
+          creditHurt(int(&pl - players), owner, false, Shot{}, weaponOfBullet(kind, gatling));
           sim.event(EV_BLOOD, first->at, dir * 2.0, 0.7f);
           noteHit(int(&pl - players), -1, first->at - dir * 5.0);
         }
@@ -1608,7 +1611,7 @@ void Duel::stepBullets(double dt) {
             // In the head it counts for more than in the boots.
             const double z = near.z - foot.z;
             players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 - 0.55 * players[q].soldier.crouch ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
-            creditHurt(q, b.owner);
+            creditHurt(q, b.owner, false, Shot{}, weaponOfBullet(b.kind, b.gatling));
             players[q].lastBlow = norm(b.v) * (b.kind == WP_SNIPER ? 11.0 : 2.5);
             noteHit(q, b.owner, from);
             sim.event(EV_BLOOD, near, b.v * 0.02, b.kind == WP_SNIPER ? 1.f : 0.45f);
@@ -1629,6 +1632,7 @@ void Duel::stepBullets(double dt) {
           at = b.p;
           noteHit(-1, b.owner, from);
           tanks[v].hitBy = b.owner;
+          tanks[v].hitWeapon = weaponOfBullet(b.kind, b.gatling);
           for (int who = 0; who < kMaxPlayers; who++)
             if (players[who].vehicle == v) noteHit(who, -1, from);
         }
@@ -1657,6 +1661,7 @@ void Duel::stepBullets(double dt) {
           if (v >= kTanks && !vehicleDead(v) && b.kind < WP_RPG) {
             inCar = true;
             carHitBy[v - kTanks] = b.owner;
+            carHitWeapon[v - kTanks] = weaponOfBullet(b.kind, b.gatling);
             bulletInCar(v - kTanks, p - norm(seg) * 0.5, norm(seg), b.kind, b.owner, b.gatling);
           }
         }
@@ -1685,6 +1690,7 @@ void Duel::stepBullets(double dt) {
     if (stop) {
       if (b.kind == WP_RPG || b.kind == kKindStrike) sim.blastDir = norm(b.v);
       sim.blastBy = b.kind == kKindStrike ? b.by : b.owner;
+      sim.blastWeapon = b.kind == kKindStrike ? KW_STRIKE : (b.kind == WP_RPG ? KW_RPG : KW_SNIPER);
       if (b.kind == WP_RPG) sim.explode(at, 2800.0, 10.0);
       else if (b.kind == kKindStrike) sim.explode(at, 6500.0, 24.0);
       else if (b.kind == WP_SNIPER && b.age < 6.0) {
@@ -1723,8 +1729,9 @@ void Duel::callStrike(int p, V3 at) {
   }
 }
 
-void Duel::creditHurt(int victim, int by, bool missile, const Shot& shot) {
+void Duel::creditHurt(int victim, int by, bool missile, const Shot& shot, u8 weapon) {
   if (by < 0 || by == victim) return;
+  hurtWeapon[victim] = weapon;
   hurtBy[victim] = by;
   hurtByMissile[victim] = missile;
   hurtShot[victim] = shot;
@@ -1744,6 +1751,7 @@ void Duel::countDeaths() {
     scores[i].deaths++;
     const int by = hurtBy[i];
     if (by >= 0 && by != i && hurtByAge[i] < kKillCredit && teamOf(by) != teamOf(i)) scores[by].kills++;
+    killNotes.push_back({killerOf(i), i, hurtWeapon[i]});
   }
 }
 
@@ -1848,6 +1856,7 @@ void Duel::stepMines(double dt) {
       m.live = false;
       moveMarker(sim, mineFirst[kind][i], V3{0, 0, kMarkerDepth});
       sim.blastBy = m.owner;
+      sim.blastWeapon = kind == 0 ? KW_FOOTMINE : KW_ATMINE;
       if (kind == 0) sim.explode(m.p + V3{0, 0, 0.2}, 1400.0, 10.0);
       else {
         // Right under it, so the track on that side is gone whatever the armour makes of the blast.
@@ -1926,6 +1935,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       if (b.by >= 0) {
         helis[h].hitBy = b.by;
         helis[h].hitByMissile = b.missile;
+        helis[h].hitWeapon = b.weapon;
         helis[h].hitShot = Shot{b.shell, b.from, b.c, b.flight};
       }
       explodeHeli(h);
@@ -1943,7 +1953,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
         shot.from = b.from;
         shot.at = b.c;
         shot.flight = b.flight;
-        creditHurt(int(&pl - players), b.by, b.missile, shot);
+        creditHurt(int(&pl - players), b.by, b.missile, shot, b.weapon);
         noteHit(int(&pl - players), -1, b.c);
         // Thrown away from it, and up.
         pl.lastBlow = norm(pl.soldier.p + V3{0, 0, 0.9} - b.c + V3{0, 0, 0.7}) * clampd(5.0 + 14.0 * share, 0.0, 18.0);
@@ -2106,7 +2116,7 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     if (pl.vehicle >= 0) {
       // Inside what goes up, one goes up with it.
       if (vehicleDead(pl.vehicle)) {
-        if (s.hp > 0) creditHurt(i, pl.vehicle < kTanks ? tanks[pl.vehicle].hitBy : carHitBy[pl.vehicle - kTanks], pl.vehicle < kTanks ? tanks[pl.vehicle].hitByMissile : carHitByMissile[pl.vehicle - kTanks], pl.vehicle < kTanks ? Shot{tanks[pl.vehicle].hitByShell, tanks[pl.vehicle].hitShotFrom, tanks[pl.vehicle].hitShotAt, tanks[pl.vehicle].hitShotFlight} : Shot{});
+        if (s.hp > 0) creditHurt(i, pl.vehicle < kTanks ? tanks[pl.vehicle].hitBy : carHitBy[pl.vehicle - kTanks], pl.vehicle < kTanks ? tanks[pl.vehicle].hitByMissile : carHitByMissile[pl.vehicle - kTanks], pl.vehicle < kTanks ? Shot{tanks[pl.vehicle].hitByShell, tanks[pl.vehicle].hitShotFrom, tanks[pl.vehicle].hitShotAt, tanks[pl.vehicle].hitShotFlight} : Shot{}, pl.vehicle < kTanks ? tanks[pl.vehicle].hitWeapon : carHitWeapon[pl.vehicle - kTanks]);
         s.hp = 0;
         s.p = frames[pl.vehicle].cog;
       }
@@ -2434,6 +2444,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
       if (sim.lastBlastBy >= 0) {
         carHitBy[i] = sim.lastBlastBy;
         carHitByMissile[i] = sim.lastBlastIsMissile;
+        carHitWeapon[i] = sim.lastBlastWeapon;
       }
       v.wreck(sim);
     }
@@ -2445,7 +2456,7 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     if (sim.objs[v.obj].awake) v.update(sim, driven, kDt);
     else v.speed = 0;
   }
-  // Water holds back whatever goes through it. A tank just grinds on; a car, with less weight on it, hardly at all.
+  // Water holds back what is really in it, and the deeper the more: nothing above it, and less and less on the way out.
   for (int v = 0; v < kVehicles; v++) {
     const VehicleFrame& f = frames[v];
     const double depth = world.waterDepth(f.cog.x, f.cog.y, f.cog.z - (v < kTanks ? 0.7 : 0.5));

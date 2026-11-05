@@ -3079,9 +3079,37 @@ struct Renderer::Impl {
       }
       for (size_t i = s.chat.size(); i-- > 0;) {
         cy1 -= 24 * u;
-        const float tw = textWidth(s.chat[i].c_str(), 15 * u);
+        // Names come marked: 1 and the team until 2, for the colour of the side.
+        struct Piece {
+          std::string text;
+          Col col;
+        };
+        std::vector<Piece> pieces;
+        std::string now;
+        Col ink = white;
+        const std::string& line = s.chat[i];
+        for (size_t c = 0; c < line.size(); c++) {
+          if (line[c] == '\x01' && c + 1 < line.size()) {
+            if (!now.empty()) pieces.push_back({now, ink});
+            now.clear();
+            ink = teamColor(line[++c] - '0');
+          } else if (line[c] == '\x02') {
+            if (!now.empty()) pieces.push_back({now, ink});
+            now.clear();
+            ink = white;
+          } else {
+            now += line[c];
+          }
+        }
+        if (!now.empty()) pieces.push_back({now, ink});
+        float tw = 0;
+        for (const Piece& p : pieces) tw += textWidth(p.text.c_str(), 15 * u);
         rrect(cx0 - 6 * u, cy1 - 12 * u, tw + 16 * u, 23 * u, 6 * u, {.03f, .03f, .04f, .5f});
-        label(cx0 + 2 * u, cy1 - .5f * u, s.chat[i].c_str(), 15 * u, white);
+        float px = cx0 + 2 * u;
+        for (const Piece& p : pieces) {
+          label(px, cy1 - .5f * u, p.text.c_str(), 15 * u, p.col);
+          px += textWidth(p.text.c_str(), 15 * u);
+        }
       }
     }
 

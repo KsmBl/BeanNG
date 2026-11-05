@@ -95,6 +95,7 @@ class Tank {
   // For the score: which player is at the gun now, whose missile is in the air, and who last did this tank any harm.
   int gunner = -1, missileBy = -1, hitBy = -1;
   bool hitByMissile = false;
+  u8 hitWeapon = KW_NONE;
   // The barrel is as solid as anything: where it runs against something it stops. What it is found to be against, if anything.
   bool gunAgainst(const Sim& sim, V3 trun, V3 dir, V3* firstFree) const;
   int gunDepth(const Sim& sim, V3 trun, V3 dir) const;  // how far into something, in lengths of a quarter of a metre

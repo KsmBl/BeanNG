@@ -107,6 +107,7 @@ struct Heli {
   double gunClock = 0, burn = 0, smokeClock = 0;
   int hitBy = -1;
   bool hitByMissile = false;
+  u8 hitWeapon = KW_NONE;
   ShellFlight hitShot;
   static constexpr int kEngineHits = 6, kRotorHits = 6, kTailHits = 4, kGunAmmo = 200;
   static constexpr double kMuzzleAhead = 4.05, kMuzzleHigh = 0.58;
@@ -346,6 +347,15 @@ class Duel {
   double hurtByAge[kMaxPlayers] = {};
   bool hurtByMissile[kMaxPlayers] = {};  // with a guided missile: the kill cam flies with it
   bool carHitByMissile[kCars] = {};
+  u8 carHitWeapon[kCars] = {};
+  u8 hurtWeapon[kMaxPlayers] = {};
+  // Who killed whom and with what, for the server to hand on to everyone. Whoever has none died of something else.
+  struct KillNote {
+    int killer, victim;
+    u8 weapon;
+  };
+  std::vector<KillNote> killNotes;
+  static u8 weaponOfBullet(int kind, bool gatling) { return gatling ? KW_GATLING : (kind == WP_KNIFE ? KW_KNIFE : (kind == WP_PISTOL ? KW_PISTOL : (kind == WP_AR ? KW_RIFLE : (kind == WP_SNIPER ? KW_SNIPER : KW_RPG)))); }
   // A car under cannon fire does not go up at once: holes, then smoke, then fire, and only the fire ends it.
   struct CarRounds {
     int hits = 0, tankHits = 0;
@@ -440,7 +450,7 @@ class Duel {
   // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
   bool bulletInCar(int k, V3 from, V3 dir, int kind, int owner, bool gatling = false);
 public:
-  void creditHurt(int victim, int by, bool missile = false, const Shot& shot = Shot{});
+  void creditHurt(int victim, int by, bool missile = false, const Shot& shot = Shot{}, u8 weapon = KW_NONE);
 private:
   void stepHeli(int h, const Intent in[kMaxPlayers], double dt);
   bool bulletInHeli(int h, V3 from, V3 to, const Bullet& b);

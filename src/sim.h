@@ -93,6 +93,8 @@ struct Obj {
 // Beam tags of trees: their breaking is heard and seen differently from steel.
 constexpr u8 kTagWood = 200, kTagBranch = 201;
 
+// What a kill is put down to, for the log of them in the chat.
+enum KillWeapon : u8 { KW_NONE, KW_KNIFE, KW_PISTOL, KW_RIFLE, KW_SNIPER, KW_RPG, KW_GATLING, KW_GUN105, KW_LIGHTGUN, KW_HOWITZER, KW_TANKGUN, KW_MISSILE, KW_STRIKE, KW_FOOTMINE, KW_ATMINE, KW_ROTOR, KW_COUNT };
 enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH, EV_ROCK, EV_IMPACT, EV_BLOOD, EV_SMOKE, EV_TRAIL };  // a trail: v is where it ends
 struct SimEvent {
   V3 p, v;
@@ -144,6 +146,7 @@ class Sim {
   V3 blastDir, lastBlastDir;
   // And whose it was, set the same way: for the score, and for a bot to know who is after it. -1 for nobody.
   int blastBy = -1, lastBlastBy = -1;
+  u8 blastWeapon = KW_NONE, lastBlastWeapon = KW_NONE;
   bool blastIsMissile = false, lastBlastIsMissile = false;  // one flown by hand: the kill cam goes with it
   // A shell's flight: where from, and how long, for the kill cam to go along with it. Set just before explode().
   V3 blastFrom, lastBlastFrom;
@@ -156,6 +159,7 @@ class Sim {
     int by = -1;
     bool shell = false;
     bool missile = false;
+    u8 weapon = KW_NONE;
     V3 from;
     double flight = 0;
   };

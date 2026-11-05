@@ -105,6 +105,8 @@ Fahrzeuge, Wracks, Bäume, Häuser und andere Helikopter bringen ihn zum Absturz
 
 **Tarnnetz:** Das Tarnnetz lässt sich jetzt auch als Plane über ein stehendes Auto ziehen. Das dauert 3 Sekunden, beim Losfahren bleibt es zurück.
 
+**Kill-Log:** Im Chat steht jeder Kill mit Täter, Waffe und Opfer, zum Beispiel `Bot2 [Lenkrakete] Whisper`; Namen sind dort und im normalen Chat in der Farbe ihres Teams.
+
 **Kill-Cam:** Wer stirbt, sieht knapp eine Sekunde später die letzten 7 Sekunden noch einmal: aus der Sicht des Gegners, bei einer Lenkrakete aus der Sicht der Rakete, und aus der eigenen, wenn niemand anderes schuld war. War es ein Panzerschuss, folgt die Kamera am Ende dem Geschoss in Zeitlupe bis zum Einschlag; insgesamt bleiben es 7 Sekunden. Eine beliebige Taste überspringt sie.
 
 **Panzerwannen:** Der schnelle Panzer fährt bis zu 100 km/h, der mittlere 70, der schwere 50. Im Wasser werden alle langsam, je tiefer desto mehr, und kommen am Ufer wieder heraus; über dem Wasser, etwa auf einer Brücke, bremst nichts.

@@ -2901,6 +2901,8 @@ int main(int argc, char** argv) {
         for (const World::Bridge& br : d->world.bridgeSpans()) d->sim.explode(br.at + V3{std::cos(br.yaw) * 6.0, std::sin(br.yaw) * 6.0, 0.1}, 12000.0, 30.0);
         printf("Alle Bruecken unten: Maske %x\n", d->world.bridgeMask());
       }
+      for (const Duel::KillNote& note : d->killNotes) printf("-> Kill: Spieler %d an %d, Waffe %d\n", note.killer, note.victim, int(note.weapon));
+      d->killNotes.clear();
       if (struck && strikes < strikesMost && t >= nextStrike && d->phase == Duel::PLAYING && d->players[0].vehicle >= 0 && d->players[0].vehicle < Duel::kTanks) {
         nextStrike = t + 25.0;
         strikes++;

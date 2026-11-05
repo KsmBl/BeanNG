@@ -13,10 +13,11 @@
 namespace net {
 
 constexpr u32 kMagic = 0x31474e42;  // "BNG1"
-constexpr u16 kProtocol = 44;
+constexpr u16 kProtocol = 45;
 constexpr u16 kDefaultPort = 27015;
 constexpr size_t kMaxPacket = 1400;  // safely under any path's MTU
 constexpr int kNameBytes = 24;
+constexpr int kKillLine = 7;  // whose line of the chat that is: nobody's, but one of the kill log
 constexpr int kChatBytes = 120;
 
 enum PacketKind : u8 { P_HELLO, P_WELCOME, P_FULL, P_INPUT, P_TANK, P_META, P_SCENERY, P_BYE, P_CAR, P_NAMES, P_CHAT, P_CHATLOG, P_SELF, P_BUNDLE };

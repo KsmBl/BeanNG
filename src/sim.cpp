@@ -432,7 +432,9 @@ void Sim::explode(V3 c, double impulse, double radius, double hole) {
   lastBlastIsShell = blastIsShell;
   lastBlastFrom = blastFrom;
   lastBlastFlight = blastFlight;
-  if (logBlasts) blastLog.push_back({c, impulse, radius, hole, lastBlastBy, blastIsShell, blastIsMissile, blastFrom, blastFlight});
+  if (logBlasts) blastLog.push_back({c, impulse, radius, hole, lastBlastBy, blastIsShell, blastIsMissile, blastWeapon, blastFrom, blastFlight});
+  lastBlastWeapon = blastWeapon;
+  blastWeapon = KW_NONE;
   blastIsShell = false;
   blastIsMissile = false;
   if (craterWorld) {

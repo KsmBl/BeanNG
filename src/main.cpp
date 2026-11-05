@@ -1634,7 +1634,7 @@ struct Game {
               r.get(ch);
               text += ch;
             }
-            if (!r.ok() || who > Duel::kMaxPlayers) break;
+            if (!r.ok() || who > net::kKillLine) break;
             const u32 have = chatLogFirst + u32(chatLog.size());
             if (chatLog.empty()) chatLogFirst = from;
             if (i == chatLogFirst + u32(chatLog.size()) || (have <= i && chatLog.empty())) chatLog.push_back({who, text});
@@ -1648,7 +1648,32 @@ struct Game {
           std::lock_guard<std::mutex> lock(snapMutex);
           snap.chat.clear();
           const size_t show = std::min<size_t>(chatLog.size(), 8);
-          for (size_t i = chatLog.size() - show; i < chatLog.size(); i++) snap.chat.push_back((chatLog[i].first == Duel::kMaxPlayers ? std::string("Server") : names[chatLog[i].first]) + ": " + chatLog[i].second);
+          const auto marked = [&](int who) { return std::string("\x01") + char('0' + Duel::teamOf(who)) + names[who] + "\x02"; };
+          for (size_t i = chatLog.size() - show; i < chatLog.size(); i++) {
+            const int who = chatLog[i].first;
+            const std::string& said = chatLog[i].second;
+            if (who == net::kKillLine) {
+              // The kill log: who, with what, whom.
+              static const char* const kWeapons[KW_COUNT] = {"", "Kampfmesser", "Pistole", "Sturmgewehr", "Scharfschützengewehr", "Raketenwerfer", "Gatling", "105-mm-Kanone", "Leichte Kanone", "Artillerie", "Panzerkanone", "Lenkrakete", "Bombencode", "Tretmine", "Panzermine", "Rotor"};
+              if (said.size() < 3) continue;
+              const int killer = int(static_cast<unsigned char>(said[0])) - 1, victim = int(static_cast<unsigned char>(said[1])) - 1, weapon = static_cast<unsigned char>(said[2]);
+              if (victim < 0 || victim >= Duel::kMaxPlayers) continue;
+              std::string line;
+              if (killer >= 0 && killer < Duel::kMaxPlayers) {
+                line = marked(killer) + (weapon > 0 && weapon < KW_COUNT ? std::string("  [") + kWeapons[weapon] + "]  " : std::string("  tötet  ")) + marked(victim);
+                if (Duel::teamOf(killer) == Duel::teamOf(victim)) line += "  (Teamkill)";
+              } else {
+                line = marked(victim) + " ist gestorben";
+              }
+              snap.chat.push_back(line);
+              continue;
+            }
+            // What someone typed cannot pass for a colour.
+            std::string text = said;
+            for (char& ch : text)
+              if (ch == '\x01' || ch == '\x02') ch = ' ';
+            snap.chat.push_back((who == Duel::kMaxPlayers ? std::string("Server") : marked(who)) + ": " + text);
+          }
         } else if (kind == net::P_NAMES) {
           std::lock_guard<std::mutex> lock(snapMutex);
           for (int i = 0; i < Duel::kMaxPlayers; i++) {

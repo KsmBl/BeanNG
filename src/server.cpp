@@ -1064,6 +1064,16 @@ int main(int argc, char** argv) {
       hasteNext = t + 0.5;
     }
     logSteps += u64(done);
+    // The kill log: in the chat, for everyone, as who did what to whom. How it reads is left to the players' machines.
+    for (const Duel::KillNote& note : duel->killNotes) {
+      std::string line;
+      line += char(note.killer + 1);
+      line += char(note.victim + 1);
+      line += char(note.weapon);
+      chat.push_back({kKillLine, line});
+      if (note.killer >= 0) say("%s toetet %s", clients[note.killer].name, clients[note.victim].name);
+    }
+    duel->killNotes.clear();
     // Only here on the console, never to the players: a new plan, and when one is given up for another.
     for (int i = 0; i < Duel::kMaxPlayers; i++) {
       if (!clients[i].used || !clients[i].bot || !bots[i].planned() || bots[i].tactic() == botTold[i]) continue;
