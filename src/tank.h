@@ -115,6 +115,9 @@ class Tank {
     bool lying;
   };
   static inline std::vector<Person> people;
+  // And what flies by itself, as a ball about its middle: a shell goes off on it.
+  static inline std::vector<V3> flyers;
+  static constexpr double kFlyerRadius = 2.4;
   // What a hit at this point makes of the armour: thick in front, thin behind, and worth less the flatter it comes in.
   // dir is the way it was flying, or nothing if it came from nowhere in particular.
   struct ArmourHit {

@@ -8,7 +8,8 @@
 
 class Bot {
  public:
-  enum Tactic : u8 { STORM, FLANK, AMBUSH, SNIPER, SCAVENGE, SPY, MISSILE, kTacticCount };
+  enum Tactic : u8 { STORM, FLANK, AMBUSH, SNIPER, SCAVENGE, SPY, MISSILE, AIR, kTacticCount };
+  void forceTactic(Tactic t) { forced_ = t; }  // for the test bench
   static const char* tacticName(Tactic t);
   explicit Bot(u32 seed = 1) {
     // Well stirred: numbers next to each other must not make bots that start out alike.
@@ -30,6 +31,7 @@ class Bot {
   int cratesTaken() const { return cratesAllTime_; }
   int computersTapped() const { return tapsAllTime_; }
   int timesRescued() const { return rescuesAllTime_; }
+  int flights() const { return flightsAllTime_; }
 
  private:
   void pickTactic(const Duel& d, int me);
@@ -47,6 +49,8 @@ class Bot {
   void checkIdle(Duel& d, int me, V3 here);
   bool findPost(const Duel& d, int me, V3 from, bool high);
   void fightInTank(Duel& d, int me);
+  void inHeli(Duel& d, int me);
+  bool toHeli(Duel& d, int me);
   void think(Duel& d, int me);
   void chooseLoadout(Duel& d, int me);
   void lookAround(const Duel& d, int me, V3 eye);
@@ -105,7 +109,11 @@ class Bot {
   int idleStrikes_ = 0;
   int spyStage_ = 0;
   bool wasTapped_ = false;
-  int cratesAllTime_ = 0, tapsAllTime_ = 0, rescuesAllTime_ = 0;
+  int cratesAllTime_ = 0, tapsAllTime_ = 0, rescuesAllTime_ = 0, flightsAllTime_ = 0;
+  // In the air, and what comes with it.
+  Tactic forced_ = kTacticCount;
+  int wantHeli_ = -1, mendHeli_ = -1, flownHeli_ = -1;
+  double wantHeliClock_ = 0, mendClock_ = 0, orbitSide_ = 1, orbitClock_ = 0, wantHigh_ = 45.0;
 
   // The plan for this round.
   Tactic tactic_ = STORM, lastTactic_ = kTacticCount;

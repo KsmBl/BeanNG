@@ -50,7 +50,7 @@ int treesAround(const World& w, V3 p, double reach) {
 }  // namespace
 
 const char* Bot::tacticName(Tactic t) {
-  static const char* const kNames[kTacticCount] = {"Sturm", "Flanke", "Hinterhalt", "Scharfschuetze", "Pluenderer", "Spion", "Lenkrakete"};
+  static const char* const kNames[kTacticCount] = {"Sturm", "Flanke", "Hinterhalt", "Scharfschuetze", "Pluenderer", "Spion", "Lenkrakete", "Helikopter"};
   return t < kTacticCount ? kNames[t] : "?";
 }
 
@@ -88,7 +88,7 @@ void Bot::pickTactic(const Duel& d, int me) {
   (void)d;
   (void)me;
   lastTactic_ = picked_ ? tactic_ : lastTactic_;
-  static constexpr double kWeight[kTacticCount] = {3.0, 3.0, 3.0, 2.0, 2.0, 1.5, 2.0};
+  static constexpr double kWeight[kTacticCount] = {3.0, 3.0, 3.0, 2.0, 2.0, 1.5, 2.0, 2.5};
   // Never the same way twice running: whoever was caught out by it last time is ready for it now.
   double total = 0;
   for (int t = 0; t < kTacticCount; t++)
@@ -103,6 +103,7 @@ void Bot::pickTactic(const Duel& d, int me) {
     }
     roll -= kWeight[t];
   }
+  if (forced_ < kTacticCount) tactic_ = forced_;
   picked_ = true;
   tacticClock_ = 0;
   // How long each way of playing gets, before it goes looking for them after all.
@@ -127,7 +128,7 @@ void Bot::chooseLoadout(Duel& d, int me) {
     case SCAVENGE:  // travelling light: what it needs is out there
       items[IT_AR] = 1, items[IT_SMALL_AMMO] = 3, items[IT_SMOKE] = 2;
       break;
-    case FLANK: case SPY: case MISSILE:
+    case FLANK: case SPY: case MISSILE: case AIR:
       items[IT_REPAIR] = 1, items[IT_AR] = 1, items[IT_SMALL_AMMO] = 4, items[IT_SMOKE] = 4;
       break;
     default:
@@ -155,6 +156,8 @@ void Bot::think(Duel& d, int me) {
     fresh.cratesAllTime_ = cratesAllTime_;
     fresh.tapsAllTime_ = tapsAllTime_;
     fresh.rescuesAllTime_ = rescuesAllTime_;
+    fresh.flightsAllTime_ = flightsAllTime_;
+    fresh.forced_ = forced_;
     *this = fresh;
     match_ = d.matchId;
     crateTried_.assign(d.crates.size(), 0);
@@ -238,7 +241,8 @@ void Bot::think(Duel& d, int me) {
       hintAge_ = 0;
     }
   }
-  if (pl.vehicle >= 0 && pl.vehicle < Duel::kTanks) inTank(d, me);
+  if (pl.heli >= 0) inHeli(d, me);
+  else if (pl.vehicle >= 0 && pl.vehicle < Duel::kTanks) inTank(d, me);
   else if (pl.vehicle >= Duel::kTanks) pulse_.use = true;  // not one for cars
   else onFoot(d, me);
 }
@@ -288,7 +292,8 @@ void Bot::noteHits(const Duel& d, int me, V3 eye) {
   // A person sees the trail or hears the gun: that is about where they are, and no more than that.
   const bool inTankNow = pl.vehicle >= 0 && pl.vehicle < Duel::kTanks;
   int by = -1;
-  if (inTankNow) by = d.tanks[pl.vehicle].hitBy;
+  if (pl.heli >= 0) by = d.helis[pl.heli].hitBy;
+  else if (inTankNow) by = d.tanks[pl.vehicle].hitBy;
   else if (d.hurtByAge[me] < 3.0) by = d.hurtBy[me];
   if (by >= 0 && by != me && Duel::teamOf(by) != Duel::teamOf(me) && d.players[by].present) {
     const Duel::Player& other = d.players[by];
@@ -297,6 +302,10 @@ void Bot::noteHits(const Duel& d, int me, V3 eye) {
     const double a = chance(0, 2.0 * PI), r = chance(0, err);
     lastSeen_ = where + V3{std::cos(a) * r, std::sin(a) * r, 0};
     lastSeenAge_ = 0;
+  }
+  if (pl.heli >= 0) {
+    dodgeClock_ = chance(2.0, 4.0);
+    orbitSide_ = -orbitSide_;
   }
   if (inTankNow) {
     // Not where they last saw it, either.
@@ -314,6 +323,7 @@ bool Bot::canSee(const Duel& d, V3 from, V3 to, int foe) const {
   if (dist < 1.0) return true;
   const Duel::Player& other = d.players[foe];
   double range = other.vehicle >= 0 ? kSightTank : kSightFoot;
+  if (other.heli >= 0) range = d.helis[other.heli].onGround ? kSightTank : kSightTank * 1.5;  // nothing is easier to see
   // What moves catches the eye. What stands still among the bushes does not, from so far.
   if (other.vehicle >= 0 && std::fabs(d.frames[other.vehicle].speed) < 0.5) range *= 0.7;
   if (other.vehicle >= 0 && (other.vehicle < Duel::kTanks ? d.tanks[other.vehicle].netOn : d.cars[size_t(other.vehicle - Duel::kTanks)].netOn)) range = kSightHidden * 2.0;
@@ -923,6 +933,26 @@ void Bot::onFoot(Duel& d, int me) {
     }
   }
 
+  // A helicopter to mend, or to get to.
+  if (mendHeli_ >= 0) {
+    const Heli& H = d.helis[mendHeli_];
+    mendClock_ += kThinkEvery;
+    const bool hurt = H.crashing || H.engine < Heli::kEngineHits || H.rotor < Heli::kRotorHits || H.tail < Heli::kTailHits;
+    if (H.dead || !hurt || pl.items[IT_REPAIR] == 0 || mendClock_ > 25.0) {
+      if (!H.dead && !H.crashing && tactic_ == AIR) wantHeli_ = mendHeli_;
+      if (H.dead || H.crashing || mendClock_ > 25.0) tactic_ = STORM;
+      mendHeli_ = -1;
+    } else if (pl.repairClock > 0) {
+      doing_ = "repariert den Helikopter";
+      return;
+    } else {
+      doing_ = "repariert den Helikopter";
+      if (d.heliToRepair(s.p) == mendHeli_) pulse_.repair = true;
+      else walkTowards(d, me, H.p, false);
+      return;
+    }
+  }
+  if (tactic_ == AIR && toHeli(d, me)) return;
   // The plans that are carried out on foot.
   if (tactic_ == SPY && !pl.tapped) {
     const World::Base& theirs = d.world.base(1 - Duel::teamOf(me));
@@ -1014,7 +1044,16 @@ void Bot::driveTowards(const Duel& d, int me, V3 at, double wantSpeed) {
   const VehicleFrame& f = d.frames[mine];
   const V3 to = flat(at - f.cog);
   double err = std::atan2(dot(to, f.left), dot(to, f.fwd));
-  // Around what stands in the way: other vehicles are not on the map of the roads.
+  // Around what stands in the way: other vehicles are not on the map of the roads, and neither is a helicopter.
+  for (const Heli& H : d.helis) {
+    if (H.dead || !H.onGround) continue;
+    const V3 q = flat(H.at(-2.0, 0, 0) - f.cog);
+    const double ahead = dot(q, f.fwd), side = dot(q, f.left);
+    if (ahead > 0 && ahead < 24.0 && std::fabs(side) < 7.0) {
+      err += (side > 0 ? -1.0 : 1.0) * 0.8 * (1.0 - ahead / 24.0) + (side > 0 ? -0.15 : 0.15);
+      wantSpeed = std::min(wantSpeed, 6.0);
+    }
+  }
   for (int v = 0; v < Duel::kVehicles; v++) {
     if (v == mine) continue;
     const V3 q = flat(d.frames[v].cog - f.cog);
@@ -1090,8 +1129,18 @@ void Bot::fightInTank(Duel& d, int me) {
     return;
   }
   if (seesFoe_) {
-    aimAt(d, me, t.spec().shellSpeed, t.muzzle);
+    // Something in the air is hard to hit with a gun made for the ground: it moves in all directions, and the lead is a
+    // guess. And a guided missile is not spent on it.
+    const Duel::Player& target = d.players[foe_];
+    const bool foeFlying = target.heli >= 0 && !d.helis[target.heli].onGround;
+    const double flyingSpeed = foeFlying ? len(foeVel_) : 0.0;
     const double dist = len(foeAt_ - t.muzzle);
+    const auto newOffset = [&] {
+      const double spread = foeFlying ? (dist * 0.03 + flyingSpeed * 0.3 + 3.0) * aimSkill_ : (dist * kAimError + 0.2) * aimSkill_;
+      aimOff_ = V3{chance(-spread, spread), chance(-spread, spread), chance(-spread, spread) * (foeFlying ? 1.0 : 0.5)};
+    };
+    if (foeFlying && seenFor_ < 0.3) newOffset();
+    aimAt(d, me, t.spec().shellSpeed, t.muzzle);
     // Lying in wait: nothing that gives it away until they are well inside.
     const bool holdFire = tactic_ == AMBUSH && atPost_ && dist > kAmbushRange && shotsFromPost_ == 0;
     const V3 wanted = norm(flat(held_.c.aimPoint - t.muzzle));
@@ -1103,10 +1152,9 @@ void Bot::fightInTank(Duel& d, int me) {
       shotClock_ = 4.0;
     } else if (ready && off < 0.012 && t.reload <= 0 && t.ammo != 0 && !gunGone) {
       pulse_.c.fire = true;
-      shotClock_ = 0.4;
+      shotClock_ = foeFlying ? chance(1.5, 3.0) : 0.4;
       if (atPost_) shotsFromPost_++;
-      const double spread = (dist * kAimError + 0.2) * aimSkill_;
-      aimOff_ = V3{chance(-spread, spread), chance(-spread, spread), chance(-spread, spread) * 0.5};
+      newOffset();
     }
   } else if (lastSeenAge_ < 12.0) {
     held_.c.aimPoint = lastSeen_;
@@ -1415,4 +1463,169 @@ void Bot::inTank(Duel& d, int me) {
   if (pathAge_ > 30.0 || len(flat(goal - pathGoal_)) > 150.0 || (onTrack_ && pathAge_ > 4.0) || d.world.bridgeFalls() != fallsSeen_) planTo(d, f.cog, goal);
   const double left = len(flat(goal - f.cog));
   driveTowards(d, me, nextPoint(f.cog, 13.0), left < 40.0 ? 4.0 : (seesFoe_ ? 7.0 : (onTrack_ ? 9.0 : 13.0)));
+}
+
+// ---- In the air.
+
+// To a helicopter on foot, nearest first and one's own side's before the enemy's. False if none is to be had.
+bool Bot::toHeli(Duel& d, int me) {
+  const Duel::Player& pl = d.players[me];
+  const Soldier& s = pl.soldier;
+  wantHeliClock_ += kThinkEvery;
+  const auto usable = [&](int h) {
+    const Heli& H = d.helis[h];
+    return !H.dead && !H.crashing && H.onGround && d.heliPilot(h) < 0;
+  };
+  if (wantHeli_ >= 0 && (!usable(wantHeli_) || wantHeliClock_ > 60.0)) wantHeli_ = -1;
+  if (wantHeli_ < 0) {
+    double best = 400.0 * 400.0;
+    for (int h = 0; h < Duel::kHelis; h++) {
+      if (!usable(h)) continue;
+      const double dist = len2(flat(d.helis[h].p - s.p)) * (Duel::teamOf(h) == Duel::teamOf(me) ? 1.0 : 4.0);
+      if (dist < best) best = dist, wantHeli_ = h;
+    }
+    wantHeliClock_ = 0;
+    pathAge_ = 1e9;
+    // Nothing left that flies, or nothing near: a tank will do.
+    if (wantHeli_ < 0) {
+      tactic_ = STORM;
+      return false;
+    }
+  }
+  doing_ = "zum Helikopter";
+  const Heli& H = d.helis[wantHeli_];
+  if (len(s.p - H.p) < Heli::kBoardReach - 1.0 && d.nearestVehicle(s.p, 2.5) < 0) {
+    if (useClock_ <= 0) {
+      pulse_.use = true;
+      useClock_ = 0.8;
+    }
+    return true;
+  }
+  if (pathAge_ > 6.0) planTo(d, s.p, H.p);
+  walkTowards(d, me, nextPoint(s.p, 3.0), true);
+  return true;
+}
+
+void Bot::inHeli(Duel& d, int me) {
+  const Duel::Player& pl = d.players[me];
+  const int h = pl.heli;
+  const Heli& H = d.helis[h];
+  if (flownHeli_ != h) {
+    flownHeli_ = h;
+    flightsAllTime_++;
+    wantHigh_ = chance(32.0, 60.0);
+    orbitSide_ = chance(0, 1) < 0.5 ? -1.0 : 1.0;
+  }
+  orbitClock_ -= kThinkEvery;
+  held_.c.brake = 0;
+  doing_ = "fliegt";
+  if (H.crashing) {
+    doing_ = "stuerzt ab";
+    return;
+  }
+  const bool hurt = H.engine * 2 <= Heli::kEngineHits || H.rotor * 2 <= Heli::kRotorHits || H.tail * 2 <= Heli::kTailHits;
+  const bool mend = hurt && pl.items[IT_REPAIR] > 0;
+  // Nothing left in the gun, or something that a kit can still put right: home first, where the ground is known to be
+  // clear, and there down and out.
+  if (H.ammo == 0 || mend) {
+    doing_ = "fliegt heim";
+    const V3 home = d.helisStart[Duel::teamOf(h) == Duel::teamOf(me) ? h : me].p;
+    const V3 way = flat(home - H.p);
+    const double away = len(way);
+    held_.walk.yaw = away > 1.0 ? std::atan2(-way.y, -way.x) : pl.soldier.yaw;
+    const V3 headed{std::cos(H.yaw), std::sin(H.yaw), 0};
+    if (away > 6.0 && !H.onGround) {
+      held_.walk.forward = dot(headed, way) / std::max(away, 1.0) > 0.7 ? clampd(away / 60.0, 0.1, 1.0) : 0.0;
+      held_.walk.sprint = away > 300.0;
+      const double high = d.world.height(H.p.x, H.p.y) + 30.0;
+      held_.walk.jump = H.p.z < high - 2.0;
+      held_.walk.crouch = H.p.z > high + 4.0 && away < 150.0;
+    } else {
+      doing_ = "landet";
+      held_.walk.crouch = !H.onGround;
+    }
+    if (H.onGround && useClock_ <= 0) {
+      pulse_.use = true;
+      useClock_ = 0.8;
+      if (mend) {
+        mendHeli_ = h;
+        mendClock_ = 0;
+      } else {
+        tactic_ = STORM;
+      }
+      pathAge_ = 1e9;
+    }
+    return;
+  }
+  const V3 eye = H.at(0, 0, 1.2);
+  double wantHigh = wantHigh_;
+  if (seesFoe_) {
+    doing_ = "greift an";
+    const double dist = len(flat(foeAt_ - H.p));
+    const bool foeTank = d.players[foe_].vehicle >= 0;
+    // The eye on them, and the gun with it: the shot goes where the line from behind the helicopter ends, 500 m out.
+    const V3 muzzle = H.at(Heli::kMuzzleAhead, 0, Heli::kMuzzleHigh);
+    const double flight = len(foeAt_ - muzzle) / kWeapons[WP_AR].speed;
+    // Against a tank only the small things can be hurt: its tracks, low down on the near side.
+    V3 target = foeAt_;
+    if (foeTank) {
+      const VehicleFrame& ft = d.frames[d.players[foe_].vehicle];
+      target = ft.cog - ft.up * 0.75 + ft.left * (dot(H.p - ft.cog, ft.left) > 0 ? 1.35 : -1.35);
+    }
+    const V3 aim = target + (foeVel_ - H.v) * flight + aimOff_;
+    held_.c.aimPoint = aim;
+    const V3 look = norm(aim - eye);
+    held_.walk.yaw = std::atan2(-look.y, -look.x);
+    held_.pitch = std::asin(clampd(-look.z, -1, 1));
+    // Round them at a distance: a tank's gun is what it fears, so from further off and higher up.
+    const double keep = foeTank ? 330.0 : 170.0;
+    held_.walk.forward = dist > keep * 1.2 ? 1.0 : (dist < keep * 0.7 ? -0.8 : 0.0);
+    if (orbitClock_ <= 0) {
+      orbitClock_ = chance(6.0, 14.0);
+      orbitSide_ = chance(0, 1) < 0.7 ? orbitSide_ : -orbitSide_;
+    }
+    held_.walk.strafe = orbitSide_ * (dodgeClock_ > 0 ? 1.0 : 0.6);
+    held_.walk.sprint = dodgeClock_ > 0;
+    if (foeTank) wantHigh += 25.0;
+    const V3 dir = norm(aim - muzzle);
+    const bool onLine = dot(norm(V3{H.fwd().x, H.fwd().y, 0}), norm(flat(dir))) > 0.97;
+    if (seenFor_ > kReaction * reactSkill_ && onLine && dist < 380.0 && H.power > 0.7) {
+      // In short bursts, each with an error of its own: 200 rounds are gone in ten seconds otherwise.
+      if (shotClock_ <= 0) {
+        const double spread = (len(aim - muzzle) * kAimError * 1.2 + 0.2) * aimSkill_;
+        aimOff_ = V3{chance(-spread, spread), chance(-spread, spread), chance(-spread, spread) * 0.5};
+        shotClock_ = chance(1.0, 1.9);
+      }
+      held_.fireHeld = shotClock_ > 0.8;
+    }
+  } else {
+    if (lookForTracks(d, eye)) doing_ = "folgt einer Spur";
+    const V3 goal = goalFor(d, me, H.p);
+    const V3 to = flat(goal - H.p);
+    const double dist = len(to);
+    held_.walk.yaw = std::atan2(-to.y, -to.x);
+    held_.pitch = 0.12;
+    // Facing it first, then on.
+    const V3 heading{std::cos(H.yaw), std::sin(H.yaw), 0};
+    const double facing = dist > 1.0 ? dot(heading, to / dist) : 1.0;
+    held_.walk.forward = facing > 0.5 ? std::min(dist / 40.0, 1.0) : 0.0;
+    held_.walk.sprint = dist > 200.0 && dodgeClock_ <= 0;
+    if (dodgeClock_ > 0) held_.walk.strafe = orbitSide_;
+  }
+  // High enough over what is coming, and never lower than the trees.
+  double ground = d.world.height(H.p.x, H.p.y);
+  for (double t : {1.5, 3.0, 5.0}) {
+    const V3 ahead = H.p + V3{H.v.x, H.v.y, 0} * t;
+    ground = std::max(ground, d.world.height(ahead.x, ahead.y));
+  }
+  const double want = ground + std::max(wantHigh, 22.0);
+  held_.walk.jump = H.p.z < want - 2.0;
+  held_.walk.crouch = H.p.z > want + 5.0;
+  // Before it has any height, nowhere: there is a yard full of tanks to clear.
+  if (H.p.z - d.world.height(H.p.x, H.p.y) < 14.0) {
+    held_.walk.jump = true;
+    held_.walk.crouch = false;
+    held_.walk.forward = 0;
+    held_.walk.strafe = 0;
+  }
 }

@@ -172,6 +172,7 @@ void AudioSynth::render(float* out, int frames) {
     now_.master += (tgt.master - now_.master) * k * 0.5f;
     now_.fire += (tgt.fire - now_.fire) * k * 0.1f;
     now_.tracks += (tgt.tracks - now_.tracks) * k * 0.3f;
+    now_.rotor += (tgt.rotor - now_.rotor) * k * 0.3f;
     now_.turbo += (tgt.turbo - now_.turbo) * k * 0.5f;
     now_.exhaustPitch = tgt.exhaustPitch;
     now_.cylinders = tgt.cylinders;
@@ -335,6 +336,20 @@ void AudioSynth::render(float* out, int frames) {
       const float tGain = now_.tracks * 0.42f;
       L += (tk0 + tk1) * tGain;
       R += (tk0 + tk1) * tGain;
+    }
+
+    // ---- A rotor: the thud of each blade going by, and the whine of the turbine over it.
+    if (now_.rotor > 0.005f) {
+      rotorPhase_ += 22.0 / double(kRateF);
+      if (rotorPhase_ >= 1.0) {
+        rotorPhase_ -= 1.0;
+        rotorEnv_ = 1.0f;
+      }
+      rotorEnv_ *= 0.9988f;
+      const float thud = rotorF_.bandpass(n1 * rotorEnv_ + rotorEnv_ * 0.5f, fc(180), 0.7f);
+      const float s0 = (thud * 1.1f + n2 * 0.015f) * now_.rotor * 0.6f;
+      L += s0;
+      R += s0;
     }
 
     // ---- The wreck burning: a low roar with crackles.

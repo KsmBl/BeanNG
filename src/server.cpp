@@ -622,10 +622,41 @@ int main(int argc, char** argv) {
       if (k == slot || (tick + u32(k)) % sendEvery(len(duel->players[k].soldier.p - viewerAt(slot))) == 0) told |= u8(1 << k);
     }
     w.put(told);
+    // Which cars are under a tarpaulin, and on which one it is going up.
+    u8 tarps = 0, tarpsBusy = 0;
+    for (int k = 0; k < Duel::kCars; k++) {
+      if (duel->cars[size_t(k)].netOn) tarps |= u8(1 << k);
+      if (duel->cars[size_t(k)].netClock > 0) tarpsBusy |= u8(1 << k);
+    }
+    w.put(tarps);
+    w.put(tarpsBusy);
+    // The helicopters: every time while anything happens to them, and now and then in any case.
+    u8 heliMask = 0;
+    for (int h = 0; h < Duel::kHelis; h++) {
+      const Heli& H = duel->helis[h];
+      if (H.power > 0 || !H.onGround || duel->heliPilot(h) >= 0 || (tick + u32(h)) % 30 == 0) heliMask |= u8(1 << h);
+    }
+    w.put(heliMask);
+    for (int h = 0; h < Duel::kHelis; h++) {
+      if (!(heliMask & (1 << h))) continue;
+      const Heli& H = duel->helis[h];
+      w.putV3(H.p);
+      putCmV3(w, H.v);
+      w.put(packAngle(H.yaw));
+      w.put(packAngle(H.pitch));
+      w.put(packAngle(H.roll));
+      w.put(packShare(H.power));
+      w.put(u8((H.dead ? 1 : 0) | (H.crashing ? 2 : 0) | (H.onGround ? 4 : 0) | (H.gunClock > 0 ? 8 : 0)));
+      w.put(u8(H.engine));
+      w.put(u8(H.rotor));
+      w.put(u8(H.tail));
+      w.put(u16(H.ammo));
+    }
     for (int k = 0; k < Duel::kMaxPlayers; k++) {
       if (!clients[k].used) continue;
       w.put(i8(duel->players[k].vehicle));
       w.put(u8(duel->players[k].seat));
+      w.put(i8(duel->players[k].heli));
     }
     for (int k = 0; k < Duel::kMaxPlayers; k++) {
       if (!(told & (1 << k))) continue;

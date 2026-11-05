@@ -108,6 +108,7 @@ Jede Runde entscheidet sich ein Bot für eine andere Taktik als zuletzt und nimm
 | Plünderer | Fährt mit wenig Gepäck von Kiste zu Kiste und greift danach mit dem Gefundenen an |
 | Spion | Fährt zur gegnerischen Basis, zapft dort zu Fuß den Rechner an und jagt dann mit dessen Standortangaben |
 | Lenkrakete | Nimmt den Raketenpanzer und lenkt die Raketen aus großer Entfernung ins Ziel |
+| Helikopter | Steigt auf, kreist um den Gegner und schießt mit der Gatling, von Panzern hält er mehr Abstand. Bei Schäden landet er zum Reparieren, ohne Munition steigt er auf einen Panzer um |
 
 Hinterhalt und Scharfschütze warten nur begrenzt, Plünderer und Flanke geben ihren Plan ebenfalls irgendwann auf; danach greifen sie an. Verstecke wählt ein Bot nah an der Straße, weil jeder Meter durchs Gras eine sichtbare Spur hinterlässt. Stößt er selbst auf frische Spuren eines Gegners, folgt er ihnen. Er plündert, wenn ihm etwas fehlt: Medikit, Munition oder Waffen. Fehlen Panzergranaten, fährt er zu den alten Wracks. Nach einem Treffer weicht er aus, nutzt Nebel und repariert. Ist der Panzer nicht mehr zu retten, steigt er aus und holt sich einen anderen.
 
@@ -167,6 +168,8 @@ Das ganze Spiel geht mit Tastatur und Maus oder allein mit dem Controller, vom V
 | Kamera, Abstand | C, Mausrad | Y, Steuerkreuz hoch, runter |
 | Chat | Enter | Back kurz tippen: Schnellnachrichten oder Bildschirmtastatur |
 | Punktestand zeigen | TAB halten | Back halten |
+| Ducken | Strg halten | rechten Stick klicken |
+| Helikopter: steigen, sinken | Leertaste, Strg | A, B halten |
 | Menü | ESC | Start |
 | Im Menü wählen, ändern, bestätigen, zurück | Pfeile, ENTER, ESC | Steuerkreuz oder linker Stick, A, B |
 | Im Replay: Sicht wechseln, Tempo | TAB, `[` `]` | X, LB RB |

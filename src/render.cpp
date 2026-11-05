@@ -2205,19 +2205,21 @@ struct Renderer::Impl {
         case EV_MUZZLE: {
           // A flash lights up what is near it; a shot a kilometre away is no reason for the whole picture to go white.
           flash = std::max(flash, .35f * e.strength / (1.f + float(len(e.p - lastCamEye)) / 15.f));
-          for (int i = 0; i < 26; i++) {
+          // The very smallest strength: seen from right beside the barrels, where the real thing would fill the picture.
+          const bool faint = e.strength < .05f;
+          for (int i = 0; i < (faint ? 3 : 26); i++) {
             Particle q;
             const V3 d = norm(e.v + V3{rnd(-.35f, .35f), rnd(-.35f, .35f), rnd(-.35f, .35f)});
-            q.p = e.p + d * rnd(0.f, 1.2f);
+            q.p = e.p + d * rnd(0.f, faint ? .3f : 1.2f);
             q.v = d * rnd(4.f, 22.f);
             q.maxLife = q.life = rnd(.05f, .16f);
-            q.size = rnd(.3f, .8f);
+            q.size = faint ? rnd(.04f, .1f) : rnd(.3f, .8f);
             q.r = 1.f; q.g = rnd(.6f, .9f); q.b = .3f; q.a = 1.f;
             q.gravity = 0.f;
             q.drag = 5.f;
             particles.push_back(q);
           }
-          for (int i = 0; i < 26; i++) {
+          for (int i = 0; i < (faint ? 0 : 26); i++) {
             Particle q;
             const V3 d = norm(e.v * (rnd(0, 1) < .5f ? 1.0 : 0.15) + V3{rnd(-.6f, .6f), rnd(-.6f, .6f), rnd(-.3f, .6f)});
             q.p = e.p;
@@ -2228,6 +2230,25 @@ struct Renderer::Impl {
             q.r = g; q.g = g; q.b = g * .96f; q.a = .5f;
             q.gravity = -.4f;
             q.drag = 2.5f;
+            particles.push_back(q);
+          }
+          break;
+        }
+        case EV_TRAIL: {
+          // A thin line of grey along where the shot went, gone again within the second.
+          const V3 along = e.v - e.p;
+          const float length = float(len(along));
+          const int count = std::clamp(int(length / 2.5f), 1, 50);
+          for (int i = 0; i < count; i++) {
+            Particle q;
+            q.p = e.p + along * (double(i) + double(rnd(0.f, 1.f))) * (1.0 / double(count));
+            q.v = V3{rnd(-.25f, .25f), rnd(-.25f, .25f), rnd(.05f, .4f)};
+            q.maxLife = q.life = rnd(.5f, 1.f);
+            q.size = rnd(.16f, .26f) + float(len(q.p - lastCamEye)) * .0012f;
+            const float g = rnd(.62f, .78f);
+            q.r = g; q.g = g; q.b = g; q.a = .42f;
+            q.gravity = 0.f;
+            q.drag = .6f;
             particles.push_back(q);
           }
           break;
@@ -2614,9 +2635,13 @@ struct Renderer::Impl {
       static const char* kNames[5] = {"Kampfmesser", "Pistole", "Sturmgewehr", "Scharfschützengewehr", "Raketenwerfer"};
       const float wx = cx0, wy = cy0 - 58 * u;
       rrect(wx, wy, cw, 50 * u, 14 * u, card);
-      snprintf(buf, sizeof buf, "%d  %s", s.foot.weapon + 1, kNames[std::clamp(s.foot.weapon, 0, 4)]);
+      if (s.foot.heliOn) snprintf(buf, sizeof buf, "Gatling");
+      else snprintf(buf, sizeof buf, "%d  %s", s.foot.weapon + 1, kNames[std::clamp(s.foot.weapon, 0, 4)]);
       label(wx + 16 * u, wy + 20 * u, buf, 15 * u, white);
-      if (s.foot.ammo >= 0) {
+      if (s.foot.heliOn) {
+        snprintf(buf, sizeof buf, "%d", s.foot.heliAmmo);
+        labelRight(wx + cw - 16 * u, wy + 20 * u, buf, 18 * u, s.foot.heliAmmo == 0 ? red : white);
+      } else if (s.foot.ammo >= 0) {
         snprintf(buf, sizeof buf, "%d", s.foot.ammo);
         labelRight(wx + cw - 16 * u, wy + 20 * u, buf, 18 * u, s.foot.ammo == 0 ? red : white);
       }

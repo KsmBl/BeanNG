@@ -120,6 +120,40 @@ void Duel::build() {
     }
     sim.endObj();
   }
+  // The tarpaulins, out of sight until someone puts one up.
+  for (int i = 0; i < kCars; i++) {
+    sim.beginObj(OBJ_PROP, false);
+    tarpFirst[i] = u32(sim.pos.size());
+    for (int k = 0; k < kTarpNodes; k++) {
+      const V3 at = kTarpRest + V3{(k & 1) ? 3.0 : -3.0, (k & 2) ? 2.0 : -2.0, (k & 4) ? 3.0 : 0.0};
+      sim.addNode(at, 1.0, NF_FIXED);
+      sim.rest[tarpFirst[i] + u32(k)] = at;
+    }
+    sim.endObj();
+  }
+  // The helicopters: eight nodes to each of the three parts, far out of sight at rest.
+  for (int i = 0; i < kHelis; i++) {
+    sim.beginObj(OBJ_PROP, false);
+    heliFirst[i] = u32(sim.pos.size());
+    const Heli still;
+    for (int k = 0; k < kHeliNodes; k++) sim.addNode(V3{}, 1.0, NF_FIXED);
+    Heli atRest = still;
+    atRest.p = kHeliRest;
+    poseHeli(sim, heliFirst[i], atRest);
+    for (int k = 0; k < kHeliNodes; k++) sim.rest[heliFirst[i] + u32(k)] = sim.pos[heliFirst[i] + u32(k)];
+    sim.endObj();
+    // Beside where each one starts, between the command centre and the first row of tanks.
+    const World::Base& base = world.base(teamOf(i));
+    const double cx = std::cos(base.facing), sx = std::sin(base.facing);
+    static constexpr double kAlong[3] = {-22.0, 22.0, -40.0};
+    const double ahead = -2.0, along = kAlong[i / 2];
+    Heli& h = helisStart[i];
+    h = Heli{};
+    h.p = base.centre + V3{cx * ahead - sx * along, sx * ahead + cx * along, 0};
+    h.p.z = world.height(h.p.x, h.p.y);
+    h.yaw = base.facing;
+    helis[i] = h;
+  }
   // Crates: a couple in every house, one beside each wreck.
   const auto addCrate = [&](V3 at, bool wreck) {
     Crate c;
@@ -566,7 +600,7 @@ void Duel::stepDrone(int p, const Intent& in, double dt) {
   if (in.drone) {
     if (pl.droneLive) {
       pl.droneLive = false;  // back to the hand, without being any use again
-    } else if (pl.drones > 0 && pl.vehicle < 0 && phase == PLAYING) {
+    } else if (pl.drones > 0 && pl.vehicle < 0 && pl.heli < 0 && phase == PLAYING) {
       pl.drones--;
       pl.droneLive = true;
       pl.droneBattery = kDroneBattery;
@@ -616,6 +650,366 @@ void Duel::poseNet(Sim& sim, u32 first, const Tank& t, bool on) {
   for (u32 n = 0; n < 8; n++) {
     const V3 r = sim.rest[first + n] - rest0;
     sim.pos[first + n] = on ? now + t.fwd * r.x + t.left * r.y + t.up * r.z : sim.rest[first + n] + V3{0, 0, -400};
+  }
+}
+
+const V3 Duel::kTarpRest{0, 0, -420};
+const V3 Duel::kHeliRest{0, 0, -440};
+
+void Duel::poseHeli(Sim& sim, u32 first, const Heli& h) {
+  static constexpr V3 kMid[4] = {V3{0, 0, 1.5}, V3{0, 0, 3.2}, V3{-6.7, 0.25, 2.7}, V3{Heli::kMuzzleAhead - 0.4, 0, Heli::kMuzzleHigh}};
+  static constexpr V3 kHalf[4] = {V3{4, 2, 2}, V3{1, 1, 0.5}, V3{0.5, 0.5, 0.5}, V3{0.5, 0.25, 0.25}};
+  const V3 f = h.fwd(), l = h.left(), u = h.up();
+  const double cs = std::cos(h.spin), ss = std::sin(h.spin), ct = std::cos(h.tailSpin), st = std::sin(h.tailSpin);
+  const double cg = std::cos(h.gunSpin), sg = std::sin(h.gunSpin);
+  for (int part = 0; part < 4; part++)
+    for (int k = 0; k < 8; k++) {
+      V3 q{(k & 1) ? kHalf[part].x : -kHalf[part].x, (k & 2) ? kHalf[part].y : -kHalf[part].y, (k & 4) ? kHalf[part].z : -kHalf[part].z};
+      if (part == 1) q = V3{q.x * cs - q.y * ss, q.x * ss + q.y * cs, q.z};
+      if (part == 2) q = V3{q.x * ct + q.z * st, q.y, -q.x * st + q.z * ct};
+      if (part == 3) q = V3{q.x, q.y * cg - q.z * sg, q.y * sg + q.z * cg};
+      q += kMid[part];
+      sim.pos[first + u32(part * 8 + k)] = h.p + f * q.x + l * q.y + u * q.z;
+    }
+}
+
+int Duel::heliToRepair(V3 p) const {
+  for (int h = 0; h < kHelis; h++) {
+    const Heli& H = helis[h];
+    const bool hurt = H.crashing || H.engine < Heli::kEngineHits || H.rotor < Heli::kRotorHits || H.tail < Heli::kTailHits;
+    if (!H.dead && H.onGround && hurt && len(p - H.p) < Heli::kBoardReach + 0.5) return h;
+  }
+  return -1;
+}
+
+int Duel::nearestHeli(V3 p) const {
+  for (int h = 0; h < kHelis; h++)
+    if (!helis[h].dead && !helis[h].crashing && heliPilot(h) < 0 && helis[h].onGround && len(p - helis[h].p) < Heli::kBoardReach) return h;
+  return -1;
+}
+
+void Duel::explodeHeli(int h) {
+  Heli& H = helis[h];
+  if (H.dead) return;
+  H.dead = true;
+  H.crashing = true;
+  H.onGround = false;
+  const V3 mid = H.at(0, 0, 1.3);
+  for (int i = 0; i < kMaxPlayers; i++) {
+    Player& pl = players[i];
+    if (pl.heli != h) continue;
+    // Inside what goes up, one goes up with it.
+    creditHurt(i, H.hitBy);
+    pl.soldier.hp = 0;
+    pl.soldier.p = H.p;
+    pl.lastBlow = V3{0, 0, 6};
+    pl.heli = -1;
+  }
+  sim.blastBy = H.hitBy;
+  sim.explode(mid, 3000.0, 12.0);
+  for (int k = 0; k < 4; k++) sim.event(EV_FIRE, mid, V3{}, 1.f);
+}
+
+void Duel::leaveHeli(int p) {
+  Player& pl = players[p];
+  const Heli& H = helis[pl.heli];
+  pl.fallFromHeli = !H.onGround;
+  pl.soldier.p = H.p + H.left() * 2.6 + V3{0, 0, 0.2};
+  pl.soldier.v = H.v;
+  pl.soldier.grounded = false;
+  pl.heli = -1;
+}
+
+// A hit on a part that matters. Sooner or later that brings it down; a shell, a rocket or a mine does not take that long.
+bool Duel::bulletInHeli(int h, V3 from, V3 to, const Bullet& b) {
+  Heli& H = helis[h];
+  if (H.dead) return false;
+  const int pilot = heliPilot(h);
+  if (b.kind < WP_RPG && b.owner == pilot) return false;
+  const V3 mid = H.at(-0.5, 0, 1.6);
+  const V3 seg = to - from;
+  const double dl2 = std::max(len2(seg), 1e-9);
+  const auto closest = [&](V3 c) {
+    const V3 q = from + seg * clampd(dot(c - from, seg) / dl2, 0, 1);
+    return len(q - c);
+  };
+  if (closest(mid) > 12.0) return false;
+  const auto note = [&](V3 where) {
+    if (b.kind >= WP_RPG) return;
+    H.hitBy = b.owner;
+    noteHit(-1, b.owner, from);
+    if (pilot >= 0) noteHit(pilot, -1, from);
+    sim.event(EV_SPARK, where, H.up(), 0.5f);
+  };
+  const int force = b.kind == WP_SNIPER ? 3 : 1;
+  const V3 engine = H.at(-0.5, 0, 2.2), tailRotor = H.at(-6.7, 0.25, 2.7), cockpit = H.at(1.6, 0, 1.75);
+  if (closest(engine) < 0.85) {
+    if (b.kind < WP_RPG) {
+      note(engine);
+      H.engine = std::max(0, H.engine - force);
+      if (H.engine == 0 && !H.crashing) H.crashing = true;
+    }
+    return true;
+  }
+  if (closest(tailRotor) < 1.0) {
+    if (b.kind < WP_RPG) {
+      note(tailRotor);
+      H.tail = std::max(0, H.tail - force);
+      if (H.tail == 0 && !H.crashing) H.crashing = true;
+    }
+    return true;
+  }
+  // The rotor is a disc to a bullet: wherever it goes through, it may find a blade.
+  const V3 hub = H.at(0, 0, 3.2), up = H.up();
+  const double da = dot(from - hub, up), db = dot(to - hub, up);
+  if (da * db < 0) {
+    const V3 through = from + seg * (da / (da - db));
+    if (len(through - hub) < 5.4) {
+      if (b.kind < WP_RPG) {
+        note(through);
+        H.rotor = std::max(0, H.rotor - force);
+        if (H.rotor == 0 && !H.crashing) H.crashing = true;
+      }
+      return true;
+    }
+  }
+  if (closest(cockpit) < 0.95) {
+    if (b.kind < WP_RPG) {
+      note(cockpit);
+      if (pilot >= 0) {
+        players[pilot].soldier.hp -= kWeapons[b.kind].damage * 0.8;
+        creditHurt(pilot, b.owner);
+        sim.event(EV_BLOOD, cockpit, seg * 0.0, 0.7f);
+      }
+    }
+    return true;
+  }
+  // The skin stops it and nothing comes of that.
+  for (const V3 c : {H.at(2.6, 0, 1.05), H.at(1.4, 0, 1.15), H.at(0.2, 0, 1.25), H.at(-1.3, 0, 1.5), H.at(-3.0, 0, 1.85), H.at(-5.2, 0, 2.1)}) {
+    if (closest(c) < (c.z - H.p.z < 1.6 ? 0.95 : 0.4)) {
+      note(c);
+      return true;
+    }
+  }
+  return false;
+}
+
+// The flying, and nothing else: the same here as on the machine of whoever is flying it, who sees the answer at once.
+bool Duel::flyHeli(Heli& H, const World& world, const WalkInput* in, double dt) {
+  const bool sound = H.engine > 0 && H.rotor > 0 && H.tail > 0 && !H.crashing;
+  const bool flying = in && sound;
+  H.power = clampd(H.power + (flying ? dt / 3.0 : -dt / 6.0), 0.0, 1.0);
+  H.spin = std::fmod(H.spin + H.power * 42.0 * dt, 2.0 * PI);
+  H.tailSpin = std::fmod(H.tailSpin + H.power * 80.0 * dt, 2.0 * PI);
+  H.gunClock = std::max(0.0, H.gunClock - dt);
+  double wantPitch = 0, wantRoll = 0;
+  const bool lift = flying && H.power > 0.7;
+  const double groundHere = world.height(H.p.x, H.p.y);
+  if (flying) {
+    // Turns to where the pilot looks, and goes where the sticks say from there.
+    const double heading = std::atan2(-std::sin(in->yaw), -std::cos(in->yaw));
+    H.yaw += clampd(std::remainder(heading - H.yaw, 2.0 * PI) * 2.0, -1.4, 1.4) * H.power * dt;
+    const V3 ahead{std::cos(H.yaw), std::sin(H.yaw), 0}, side{-std::sin(H.yaw), std::cos(H.yaw), 0};
+    if (lift) {
+      const double top = in->sprint ? 62.0 : 40.0;
+      const V3 want = (ahead * in->forward + side * in->strafe) * top;
+      V3 dv{want.x - H.v.x, want.y - H.v.y, 0};
+      const double most = 12.0 * dt, dl = len(dv);
+      if (dl > most) dv = dv * (most / dl);
+      H.v += dv;
+      // Coming down it slows by itself towards the ground, so that holding the key is a landing and not a crash.
+      const double above = H.p.z - groundHere;
+      const double wantUp = (in->jump ? 12.0 : 0.0) - (in->crouch ? clampd(above * 0.6, 3.0, 9.0) : 0.0);
+      H.v.z += clampd(wantUp - H.v.z, -8.0 * dt, 8.0 * dt);
+    }
+    wantPitch = -0.28 * in->forward * (in->sprint ? 1.25 : 1.0);
+    wantRoll = -0.32 * in->strafe;
+  }
+  if (!lift && !H.onGround) {
+    // Nothing holds it up any more. And without its tail rotor it goes round as well.
+    H.v.z -= 9.81 * (1.0 - std::min(H.power / 0.7, 1.0) * (H.crashing ? 0.35 : 1.0)) * dt;
+    H.v.x *= 1.0 - 0.2 * dt;
+    H.v.y *= 1.0 - 0.2 * dt;
+    if (H.tail == 0) H.yaw += 2.8 * dt;
+    wantPitch = H.crashing ? 0.35 : 0.1;
+    wantRoll = H.crashing ? 0.5 * std::sin(H.spin * 0.05 + H.yaw) : 0.0;
+  }
+  H.pitch += (wantPitch - H.pitch) * clampd(dt * 2.5, 0, 1);
+  H.roll += (wantRoll - H.roll) * clampd(dt * 2.5, 0, 1);
+  if (H.onGround && !(lift && H.v.z > 0)) {
+    H.v = V3{};
+    H.pitch = H.roll = 0;
+    H.p.z = groundHere;
+    return false;
+  }
+  H.onGround = false;
+  H.p += H.v * dt;
+  const double speed = len(H.v);
+  const double ground = world.height(H.p.x, H.p.y);
+  H.p.z = std::min(H.p.z, ground + 220.0);
+  H.p.x = clampd(H.p.x, -World::kHalf + 30.0, World::kHalf - 30.0);
+  H.p.y = clampd(H.p.y, -World::kHalf + 30.0, World::kHalf - 30.0);
+  if (H.p.z > ground) return false;
+  // Gently enough, and with everything still working, that is a landing. Anything else is the end of it.
+  const bool crash = H.crashing || speed > 11.0 || H.v.z < -7.0 || world.isWater(H.p.x, H.p.y, ground);
+  H.p.z = ground;
+  if (crash) return true;
+  H.onGround = true;
+  H.v = V3{};
+  return false;
+}
+
+void Duel::stepHeli(int h, const Intent in[kMaxPlayers], double dt) {
+  Heli& H = helis[h];
+  H.smokeClock -= dt;
+  if (H.dead) {
+    // What is left comes down, and burns where it lands.
+    H.burn += dt;
+    H.power = std::max(0.0, H.power - dt / 2.0);
+    H.spin += H.power * 30.0 * dt;
+    if (!H.onGround) {
+      H.v.z -= 9.81 * dt;
+      H.p += H.v * dt;
+      H.pitch += 0.5 * dt;
+      H.roll += 0.8 * dt;
+      const double ground = world.height(H.p.x, H.p.y);
+      if (H.p.z <= ground) {
+        H.p.z = ground;
+        H.v = V3{};
+        H.onGround = true;
+      }
+    }
+    if (H.smokeClock <= 0 && H.burn < 75.0) {
+      H.smokeClock = 0.08;
+      sim.event(EV_FIRE, H.at(0, 0, 1.0), V3{}, float(clampd(1.0 - H.burn / 75.0, 0.2, 1.0)));
+    }
+    return;
+  }
+  const int pilot = heliPilot(h);
+  const bool hasPilot = pilot >= 0 && phase == PLAYING;
+  if (flyHeli(H, world, hasPilot ? &in[pilot].walk : nullptr, dt)) {
+    explodeHeli(h);
+    return;
+  }
+  if (hasPilot) {
+    const Intent& I = in[pilot];
+    // The gun: towards what the pilot has in the sights, as long as that is somewhere in front.
+    const double cy = std::cos(I.walk.yaw), sy = std::sin(I.walk.yaw), cp = std::cos(I.pitch), sp = std::sin(I.pitch);
+    const V3 look{-cy * cp, -sy * cp, -sp};
+    const V3 eye = H.p + V3{0, 0, Heli::kCameraUp} - look * Heli::kCameraBack;
+    const V3 muzzle = H.at(Heli::kMuzzleAhead, 0, Heli::kMuzzleHigh);
+    if (I.fireHeld && H.gunClock <= 0 && H.ammo > 0 && H.power > 0.3) {
+      // What lies under the crosshair, as the pilot's own machine has worked it out from wherever the camera is.
+      V3 dir = norm((len2(I.c.aimPoint) > 1.0 ? I.c.aimPoint : eye + look * 500.0) - muzzle);
+      if (dot(dir, H.fwd()) > 0.35) {
+        randState = randState * 1664525u + 1013904223u;
+        const double a = double(randState >> 16) / 65535.0 * 2.0 * PI;
+        randState = randState * 1664525u + 1013904223u;
+        const double r = double(randState >> 16) / 65535.0 * 0.012;
+        dir = norm(dir + V3{std::cos(a) * r, std::sin(a) * r, std::cos(a + 1.3) * r});
+        Bullet b;
+        b.p = muzzle + dir * 0.4;
+        b.v = dir * kWeapons[WP_AR].speed + H.v;
+        b.owner = pilot;
+        b.kind = WP_AR;
+        b.lag = I.lag;
+        b.trail = true;
+        b.trailFrom = b.p;
+        bullets.push_back(b);
+        H.ammo--;
+        H.gunClock = Heli::kGunInterval;
+        sim.event(EV_MUZZLE, b.p, dir, muzzleSize(WP_AR));
+        // Its own tracer right from the barrel: what flies on from there is seen only every thirty metres.
+        sim.event(EV_TRACER, b.p, b.v, 1.f);
+      }
+    }
+  }
+  if (H.engine == 0 && H.smokeClock <= 0) {
+    H.smokeClock = 0.03;
+    sim.event(EV_SMOKE, H.at(-0.4, 0, 2.6), V3{}, 0.5f);
+  }
+  // Whoever gets into a turning rotor, or under what comes down on them, does not get up again.
+  const V3 hub = H.at(0, 0, 3.2), tailRotor = H.at(-6.7, 0.25, 2.7), upNow = H.up();
+  const double fast = len(H.v);
+  for (int i = 0; i < kMaxPlayers; i++) {
+    Player& pl = players[i];
+    if (!pl.present || pl.vehicle >= 0 || pl.heli >= 0 || pl.soldier.hp <= 0) continue;
+    const V3 feet = pl.soldier.p;
+    const double tall = Soldier::kHeight * (1.0 - 0.32 * pl.soldier.crouch);
+    const double overHead = hub.z - feet.z;
+    // A rotor running down with nobody at the controls is high enough up to walk under.
+    const bool blades = pilot >= 0 && H.power > 0.25 && overHead > -0.3 && overHead < tall + 1.6 && std::hypot(hub.x - feet.x, hub.y - feet.y) < 5.4 + Soldier::kRadius;
+    const bool tailBlades = pilot >= 0 && H.power > 0.25 && tailRotor.z - feet.z > -0.3 && tailRotor.z - feet.z < tall + 0.9 && std::hypot(tailRotor.x - feet.x, tailRotor.y - feet.y) < 1.2;
+    const V3 belly = H.at(-0.5, 0, 1.0);
+    const bool squashed = fast > 2.5 && len(belly - (feet + V3{0, 0, tall * 0.5})) < 1.9;
+    if (!blades && !tailBlades && !squashed) continue;
+    creditHurt(i, pilot);
+    noteHit(i, pilot, hub);
+    pl.soldier.hp = 0;
+    pl.lastBlow = norm(feet - hub + upNow * 1.5) * 12.0;
+    for (int k = 0; k < 3; k++) sim.event(EV_BLOOD, feet + V3{0, 0, tall * 0.6}, pl.lastBlow * 0.3, 1.f);
+  }
+  const auto vehicleContact = [&](V3 q, const VehicleFrame& f, double margin) {
+    const V3 r = q - f.cog;
+    return std::fabs(dot(r, f.fwd)) < f.halfLength + margin && std::fabs(dot(r, f.left)) < f.halfWidth + margin && std::fabs(dot(r, f.up)) < f.height * 0.5 + margin;
+  };
+  const V3 points[4] = {H.at(0, 0, 1.3), H.at(2.8, 0, 1.0), H.at(-3.5, 0, 2.0), H.at(-6.6, 0, 2.3)};
+  if (H.onGround) {
+    // Standing there, it is what drives into it that decides.
+    for (int v = 0; v < kVehicles; v++) {
+      const VehicleFrame& f = frames[v];
+      if (std::fabs(f.speed) < 2.0) continue;
+      for (const V3& q : points)
+        if (vehicleContact(q, f, 0.2)) {
+          const int driver = seatHolder(v, 0);
+          if (driver >= 0) H.hitBy = driver;
+          explodeHeli(h);
+          return;
+        }
+    }
+    return;
+  }
+  const double ground = world.height(H.p.x, H.p.y);
+  Contact c;
+  bool struck = world.contact(H.at(0, 0, 1.5), c);
+  if (!struck && H.p.z - ground < 18.0) {
+    struck = world.contact(H.at(3.0, 0, 1.0), c) || world.contact(H.at(-6.5, 0, 2.0), c) || world.contact(hub, c);
+    for (const V3& t : world.trees())
+      if (!struck && H.p.z - t.z < 11.0 && std::hypot(t.x - H.p.x, t.y - H.p.y) < 4.5) struck = true;
+    for (const World::House& s : world.houses()) {
+      const V3 m = World::houseInside(s, World::kHouseLength * 0.5, World::kHouseDepth * 0.5, 0);
+      if (!struck && H.p.z - world.height(m.x, m.y) < 3.5 && std::hypot(m.x - H.p.x, m.y - H.p.y) < 8.0) struck = true;
+    }
+    // Vehicles, old wrecks and the other helicopters: with its body, or with the rotor, which reaches further.
+    for (int v = 0; v < kVehicles && !struck; v++) {
+      const VehicleFrame& f = frames[v];
+      for (const V3& q : points)
+        if (vehicleContact(q, f, 0.3)) struck = true;
+      const V3 r = hub - f.cog;
+      const double outside = std::hypot(std::max(std::fabs(dot(r, f.fwd)) - f.halfLength, 0.0), std::max(std::fabs(dot(r, f.left)) - f.halfWidth, 0.0));
+      if (H.power > 0.25 && outside < 5.4 && r.z > -f.height * 0.5 && r.z < f.height * 0.5 + 0.3) struck = true;
+    }
+    for (int k = 0; k < kWrecks && !struck; k++)
+      if (len(H.at(0, 0, 1.3) - (wreckSpawn[k] + V3{0, 0, 1.2})) < 5.5) struck = true;
+    for (int o = 0; o < kHelis && !struck; o++)
+      if (o != h && !helis[o].dead && len(H.at(0, 0, 1.5) - helis[o].at(0, 0, 1.5)) < 6.0) {
+        struck = true;
+        explodeHeli(o);
+      }
+  }
+  if (struck) explodeHeli(h);
+}
+
+void Duel::poseTarp(Sim& sim, int car, bool on) const {
+  const VehicleFrame& f = frames[kTanks + car];
+  // The sheet is made for a car of 2.3 by 1 metres each way from the middle, and 1.62 high.
+  const double sx = tarpSize[car].x / 2.3, sy = tarpSize[car].y / 1.0, sz = tarpSize[car].z / 1.62;
+  const V3 up = f.up.z > 0.3 ? f.up : V3{0, 0, 1};
+  const double drop = (f.cog.z - world.height(f.cog.x, f.cog.y)) / up.z;
+  const V3 base = f.cog - up * drop;
+  for (u32 n = 0; n < kTarpNodes; n++) {
+    const V3 r = sim.rest[tarpFirst[car] + n] - kTarpRest;
+    sim.pos[tarpFirst[car] + n] = on ? base + f.fwd * (r.x * sx) + f.left * (r.y * sy) + up * (r.z * sz) : sim.rest[tarpFirst[car] + n];
   }
 }
 
@@ -1115,6 +1509,14 @@ void Duel::stepBullets(double dt) {
     b.p += b.v * dt;
     if (b.kind == WP_SNIPER) sim.event(EV_TRACER, b.p, b.v, 2.f);  // bright enough to follow all the way, every few metres
     else if (((b.kind == WP_RPG || b.kind == kKindStrike) && int(b.age * 200.0) % 4 == 0) || (b.kind != WP_RPG && int(b.age * 200.0) % 8 == 0)) sim.event(EV_TRACER, b.p, b.v, 1.f);
+    if (b.trail && b.age < 1.0) {
+      b.trailClock += dt;
+      if (b.trailClock >= 0.125) {
+        sim.event(EV_TRAIL, b.trailFrom, b.p, 1.f);
+        b.trailFrom = b.p;
+        b.trailClock = 0;
+      }
+    }
     bool inCar = false;
     bool stop = b.age > (b.kind == kKindStrike ? 20.0 : 6.0);
     V3 at = b.p;
@@ -1135,7 +1537,7 @@ void Duel::stepBullets(double dt) {
     for (int q = 0; q < kMaxPlayers && !stop; q++) {
       // Not oneself, and in the same uniform not either: nobody is out to shoot their own side in the back.
       if (!players[q].present || teamOf(q) == teamOf(b.owner)) continue;
-      if (players[q].vehicle < 0 && b.kind != kKindStrike) {
+      if (players[q].vehicle < 0 && players[q].heli < 0 && b.kind != kKindStrike) {
         const V3 foot = soldierAt(q, b.lag);
         const double t = clampd(dot(V3{foot.x - from.x, foot.y - from.y, 0}, V3{seg.x, seg.y, 0}) / std::max(seg.x * seg.x + seg.y * seg.y, 1e-9), 0, 1);
         V3 near = from + seg * t;
@@ -1187,6 +1589,13 @@ void Duel::stepBullets(double dt) {
         }
       }
     }
+    // A helicopter in the way.
+    if (!stop)
+      for (int h = 0; h < kHelis && !stop; h++)
+        if (bulletInHeli(h, from, b.p, b)) {
+          stop = true;
+          at = b.p;
+        }
     // Vehicles stop it.
     if (!stop)
       for (int v = 0; v < kVehicles && !stop; v++) {
@@ -1242,6 +1651,7 @@ void Duel::stepBullets(double dt) {
       }
       else if (b.age < 6.0) sim.event(EV_SPARK, at, b.v * -0.01, 0.3f);
       sim.blastBy = -1;  // for all those that set nothing off
+      if (b.trail && b.age < 1.0) sim.event(EV_TRAIL, b.trailFrom, at, 1.f);
       bullets[i] = bullets.back();
       bullets.pop_back();
       continue;
@@ -1456,12 +1866,21 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
   // What a shell can run into besides the ground and the vehicles.
   Tank::people.clear();
   for (const Player& pl : players)
-    if (pl.present && pl.vehicle < 0 && pl.soldier.hp > 0) Tank::people.push_back({pl.soldier.p, pl.soldier.prone > 0.5});
+    if (pl.present && pl.vehicle < 0 && pl.heli < 0 && pl.soldier.hp > 0) Tank::people.push_back({pl.soldier.p, pl.soldier.prone > 0.5});
+  Tank::flyers.clear();
+  for (const Heli& H : helis)
+    if (!H.dead) Tank::flyers.push_back(H.at(-0.5, 0, 1.6));
   // Blasts reach those on foot.
   for (; blastsDone < sim.blastLog.size(); blastsDone++) {
-    const Sim::BlastRecord& b = sim.blastLog[blastsDone];
+    const Sim::BlastRecord b = sim.blastLog[blastsDone];
+    // A shell going off anywhere near is the end of a helicopter, and its pilot; a bullet's dust is not.
+    for (int h = 0; h < kHelis; h++) {
+      if (helis[h].dead || (b.impulse < 800.0 && !b.shell) || len(helis[h].at(-0.5, 0, 1.6) - b.c) > std::max(4.5, b.radius * 0.25)) continue;
+      if (b.by >= 0) helis[h].hitBy = b.by;
+      explodeHeli(h);
+    }
     for (Player& pl : players) {
-      if (pl.vehicle >= 0) continue;
+      if (pl.vehicle >= 0 || pl.heli >= 0) continue;
       const double d = len(pl.soldier.p + V3{0, 0, 0.9} - b.c);
       const double kill = b.radius * 0.55;
       if (d < kill) {
@@ -1546,13 +1965,31 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
         if (!car.netOn && car.netClock <= 0 && std::fabs(frames[pl.vehicle].speed) < 1.0) car.netClock = 3.0;
       }
     }
-    stepDrone(i, in[i], kDt);
-    if (pl.vehicle < 0 && phase == PLAYING && !pl.droneLive) {
+    if (pl.heli >= 0 && (helis[pl.heli].dead || s.hp <= 0)) pl.heli = -1;
+    if (pl.heli < 0) stepDrone(i, in[i], kDt);
+    if (pl.vehicle < 0 && pl.heli < 0 && phase == PLAYING && !pl.droneLive) {
       fireWeapon(i, in[i]);
       if (in[i].placeFoot) placeMine(i, 0);
       if (in[i].placeTank) placeMine(i, 1);
     }
-    if (in[i].use) {
+    // In the air one is only where the helicopter is, and getting out is a long way down.
+    if (pl.heli >= 0) {
+      const Heli& H = helis[pl.heli];
+      s.p = H.p + V3{0, 0, 1.0};
+      s.v = H.v;
+      s.yaw = in[i].walk.yaw;
+      s.pitch = in[i].pitch;
+      s.crouch = 0;
+      s.grounded = H.onGround;
+      // Counted like steps of walking: what the pilot's own machine needs to know what is still to come.
+      pl.walkDebt += kDt;
+      while (pl.walkDebt >= kWalkDt) {
+        pl.walkDebt -= kWalkDt;
+        if (pl.walkedSinceInput < 255) pl.walkedSinceInput++;
+      }
+      if (in[i].use) leaveHeli(i);
+      if (pl.heli >= 0) continue;
+    } else if (in[i].use) {
       if (pl.vehicle >= 0) {
         leaveVehicle(i);
       } else if (phase == PLAYING) {
@@ -1565,7 +2002,14 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
           moveMarker(sim, crates[size_t(c)].marker, V3{0, 0, kMarkerDepth});
         } else {
           const int v = nearestVehicle(s.p, 2.5);
-          if (v >= 0) boardVehicle(i, v);
+          const int h = nearestHeli(s.p);
+          if (v >= 0) {
+            boardVehicle(i, v);
+          } else if (h >= 0) {
+            pl.heli = h;
+            pl.fallFromHeli = false;
+            continue;
+          }
         }
       }
     }
@@ -1616,12 +2060,34 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
     // Repairs are done on foot, beside the thing, and it has to hold still for them.
     if (in[i].repair && pl.repairClock <= 0 && pl.items[IT_REPAIR] > 0 && phase == PLAYING) {
       const int v = nearestToRepair(s.p);
+      const int h = v < 0 ? heliToRepair(s.p) : -1;
       if (v >= 0) {
         pl.repairing = v;
         pl.repairClock = kRepairTime;
+      } else if (h >= 0) {
+        pl.repairing = kVehicles + h;
+        pl.repairClock = kRepairTime;
       }
     }
-    if (pl.repairClock > 0) {
+    // A helicopter on the ground the same way: three parts as good as new would be asking too much.
+    if (pl.repairClock > 0 && pl.repairing >= kVehicles) {
+      Heli& H = helis[pl.repairing - kVehicles];
+      if (H.dead || !H.onGround || len(s.p - H.p) > Heli::kBoardReach + 1.5) {
+        pl.repairClock = 0;
+      } else {
+        pl.repairClock -= kDt;
+        if (pl.repairClock <= 0) {
+          pl.repairClock = 0;
+          pl.items[IT_REPAIR]--;
+          const auto mend = [](int have, int full) { return std::max(have, int(std::ceil(full * 0.6))); };
+          H.engine = mend(H.engine, Heli::kEngineHits);
+          H.rotor = mend(H.rotor, Heli::kRotorHits);
+          H.tail = mend(H.tail, Heli::kTailHits);
+          H.crashing = false;
+          sim.event(EV_SPARK, H.at(0, 0, 2.0), V3{0, 0, 1}, 0.5f);
+        }
+      }
+    } else if (pl.repairClock > 0) {
       const VehicleFrame& f = frames[pl.repairing];
       const V3 q = s.p - f.cog;
       const double off = std::hypot(std::max(std::fabs(dot(q, f.fwd)) - f.halfLength, 0.0), std::max(std::fabs(dot(q, f.left)) - f.halfWidth, 0.0));
@@ -1657,6 +2123,16 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       if (wi.crouch) wi.sprint = wi.jump = false;
       const double fallingAt = s.v.z;
       walk(s, wi, kWalkDt);
+      // No parachute: the ground decides.
+      if (pl.fallFromHeli && s.grounded) {
+        pl.fallFromHeli = false;
+        const double hurt = std::max(-fallingAt - 7.0, 0.0) * 14.0;
+        if (hurt > 0) {
+          s.hp -= hurt;
+          pl.lastBlow = V3{0, 0, -fallingAt * 0.2};
+          sim.event(EV_BLOOD, s.p + V3{0, 0, 0.6}, V3{0, 0, 1}, float(clampd(hurt / 100.0, 0.2, 1.0)));
+        }
+      }
       if (pl.walkedSinceInput < 255) pl.walkedSinceInput++;
     }
     s.pitch = in[i].pitch;
@@ -1687,6 +2163,7 @@ void Duel::restart() {
   }
   for (int i = 0; i < kWrecks; i++) wrecks[i] = wrecksStart[i];
   cars = carsStart;
+  for (int h = 0; h < kHelis; h++) helis[h] = helisStart[h];
   winner = -1;
   phaseClock = 0;
   for (int i = 0; i < kMaxPlayers; i++) hurtBy[i] = -1;
@@ -1720,6 +2197,8 @@ void Duel::placePlayers() {
     p.ready = false;
     p.repairClock = 0;
     p.repairing = -1;
+    p.heli = -1;
+    p.fallFromHeli = false;
     p.lastBlow = V3{};
     p.droneLive = false;
     p.drones = 0;
@@ -1787,6 +2266,13 @@ void Duel::step(const Intent in[kMaxPlayers]) {
   }
   if (anyDead) in = calm;
   stepPlayers(in);
+  for (int h = 0; h < kHelis; h++) {
+    heliDebt[h] += kDt;
+    while (heliDebt[h] >= kWalkDt) {
+      heliDebt[h] -= kWalkDt;
+      stepHeli(h, in, kWalkDt);
+    }
+  }
   sim.forces(kDt);
   Controls still;
   still.brake = 1;

@@ -330,6 +330,7 @@ struct SoundDriver {
       f.tracks = float(clampd(f.speed / 2.0, 0, 1));
       f.skid = 0;
     }
+    f.rotor = s.heliNoise;
     synth.setFeed(f);
     metalClock -= dt;
     glassClock -= dt;
@@ -479,6 +480,11 @@ static void preferDiscreteGpu() {
 // Command line, the window and the sound outlive a session with one vehicle.
 static std::string shotDir, wavPath;
 static int scriptMode = 0;
+static bool gScriptCrouch = false;
+static int watchLater = 0;
+static bool gScriptCamOn = false;
+static V3 gScriptEye, gScriptAt;
+static bool scriptGun = false;
 static size_t treeIndex = 0;
 static double treeRun = 30.0, treeSpeed = 60.0;
 static V3 gSpawnBase{-90, 0, 0};
@@ -579,6 +585,7 @@ struct Game {
   int netState = NET_OFF;
   std::string netError;
   std::string names[Duel::kMaxPlayers];
+  std::atomic<bool> gunCamera{false};  // flying, with the camera beside the gun or in the cockpit
   Duel::Score scores[Duel::kMaxPlayers];
   int phase = Duel::WAITING;
   double phaseClock = 0;
@@ -946,6 +953,8 @@ struct Game {
       u32 node = 0;
       V3 p, v;
       float a = 0, b = 0, c = 0;
+      int heli = -1;  // out of this helicopter's gun, from this far past its muzzle
+      V3 rel;
     };
     std::deque<Later> later;
     // Scenery comes thirty times a second at most, so it slides from one word to the next.
@@ -960,6 +969,17 @@ struct Game {
     int weaponShown[Duel::kMaxPlayers] = {};
     V3 blowShown[Duel::kMaxPlayers];
     bool ghillieShown[Duel::kMaxPlayers] = {};
+    double heliHeardAt[Duel::kHelis] = {};
+    // One's own, ahead of the server the way walking is: flown here at once, and put right as the answers come.
+    Heli heliPred;
+    int heliPredOf = -1;
+    double heliErrShown = 0;
+    double heliStepDebt = 0;
+    V3 heliOffset;
+    std::deque<WalkStep> heliSteps;
+    Heli heliShown[Duel::kHelis];
+    double gunRate[Duel::kHelis] = {};
+    bool gunToldScript = false;
     struct DroneSeen {
       bool live = false;
       V3 p, v, shown;
@@ -1136,7 +1156,7 @@ struct Game {
         for (char ch : saying) w.put(ch);
         sock->send(w.data(), w.size(), server);
       }
-      if (state == NET_IN && phaseNow == Duel::PLAYING && !droneShown[mySlot].live) {
+      if (state == NET_IN && phaseNow == Duel::PLAYING && !droneShown[mySlot].live && duel.players[mySlot].heli < 0) {
         if (vehicleNow >= 0 && vehicleNow < Duel::kTanks) {
           const Tank& t = duel.tanks[vehicleNow];
           bool otherGunner = false;
@@ -1381,6 +1401,46 @@ struct Game {
           r.get(readyMask);
           r.get(wantedMask);
           r.get(toldMask);
+          u8 tarpMask = 0, tarpBusy = 0;
+          r.get(tarpMask);
+          r.get(tarpBusy);
+          for (int k = 0; k < Duel::kCars; k++) {
+            duel.cars[size_t(k)].netOn = tarpMask & (1 << k);
+            duel.cars[size_t(k)].netClock = tarpBusy & (1 << k) ? 1.0 : 0.0;
+          }
+          u8 heliMask = 0;
+          r.get(heliMask);
+          for (int h = 0; h < Duel::kHelis; h++) {
+            if (!(heliMask & (1 << h))) continue;
+            Heli& H = duel.helis[h];
+            H.p = r.getV3();
+            H.v = net::getCmV3(r);
+            i16 hy = 0, hp2 = 0, hr = 0;
+            u8 power = 0, heliFlags = 0, en = 0, ro = 0, ta = 0;
+            u16 rounds = 0;
+            r.get(hy);
+            r.get(hp2);
+            r.get(hr);
+            r.get(power);
+            r.get(heliFlags);
+            r.get(en);
+            r.get(ro);
+            r.get(ta);
+            r.get(rounds);
+            H.yaw = hy / 32767.0 * PI;
+            H.pitch = hp2 / 32767.0 * PI;
+            H.roll = hr / 32767.0 * PI;
+            H.power = power / 255.0;
+            H.dead = heliFlags & 1;
+            H.crashing = heliFlags & 2;
+            H.onGround = heliFlags & 4;
+            H.firing = heliFlags & 8;
+            H.engine = en;
+            H.rotor = ro;
+            H.tail = ta;
+            H.ammo = rounds;
+            heliHeardAt[h] = now;
+          }
           wantedNow = wantedMask;
           for (int i = 0; i < Duel::kMaxPlayers; i++) {
             vehicles[i] = -1;
@@ -1388,6 +1448,9 @@ struct Game {
             if (!(mask & (1 << i))) continue;
             r.get(vehicles[i]);
             r.get(seats[i]);
+            i8 flying = -1;
+            r.get(flying);
+            duel.players[i].heli = flying;
           }
           for (int i = 0; i < Duel::kMaxPlayers; i++) {
             if (!(toldMask & (1 << i))) continue;
@@ -1506,7 +1569,7 @@ struct Game {
             u8 evKind = 0;
             r.get(strength);
             r.get(evKind);
-            if (!r.ok() || evKind > EV_SMOKE) break;
+            if (!r.ok() || evKind > EV_TRAIL) break;
             if (evKind == EV_MUZZLE && shotsAhead > 0 && !replaying) {
               const V3 mine = vehicleNow >= 0 ? duel.frames[vehicleNow].cog : me.p;
               if (len(p - mine) < 15.0) {
@@ -1521,6 +1584,15 @@ struct Game {
             ev.p = p;
             ev.v = v;
             ev.a = strength;
+            // What comes out of a helicopter's gun comes out of the gun as it is drawn, wherever the helicopter is by then.
+            if (evKind == EV_MUZZLE || evKind == EV_TRAIL || evKind == EV_TRACER)
+              for (int h = 0; h < Duel::kHelis; h++) {
+                const V3 rel = p - duel.helis[h].at(Heli::kMuzzleAhead, 0, Heli::kMuzzleHigh);
+                if (!duel.helis[h].dead && duel.helis[h].firing && len2(rel) < 12.0 * 12.0) {
+                  ev.heli = h;
+                  ev.rel = rel;
+                }
+              }
             later.push_back(ev);
           }
         } else if (kind == net::P_CHATLOG) {
@@ -1747,7 +1819,18 @@ struct Game {
       while (!later.empty() && double(later.front().tick) <= viewTime) {
         const Later& l = later.front();
         if (l.what == Later::BLAST) sim.explode(l.p, l.a, l.b, l.c);
-        else if (l.what == Later::EVENT) sim.event(EventKind(l.kind), l.p, l.v, l.a);
+        else if (l.what == Later::EVENT) {
+          V3 from = l.p;
+          if (l.heli >= 0) {
+            const Heli& seen = heliShown[l.heli];
+            const double ahead = dot(l.rel, seen.fwd());
+            // Never behind the muzzle, should the helicopter have turned meanwhile.
+            from = seen.at(Heli::kMuzzleAhead, 0, Heli::kMuzzleHigh) + seen.fwd() * std::max(ahead, 0.3);
+          }
+          // Right beside the barrels the flash would fill the picture: from there, only a flicker of it.
+          const bool atLens = l.heli >= 0 && l.heli == duel.players[mySlot].heli && gunCamera.load();
+          if (!(atLens && l.kind == EV_TRACER)) sim.event(EventKind(l.kind), from, l.v, atLens && l.kind == EV_MUZZLE ? l.a * 0.12f : l.a);
+        }
         else if (len2(sim.pos[l.node] - l.p) > 8.0 * 8.0) sim.pos[l.node] = l.p;
         else sliding[l.node] = l.p;
         later.pop_front();
@@ -2001,8 +2084,9 @@ struct Game {
       // On foot one's own legs answer at once.
       duel.players[mySlot].vehicle = vehicleNow;
       const bool playingNow = (state == NET_IN || replaying) && (phaseNow == Duel::PLAYING || phaseNow == Duel::CHOOSING || phaseNow == Duel::FINISHED);
-      const bool canWalk = state == NET_IN && phaseNow == Duel::PLAYING && !droneShown[mySlot].live;
-      if (vehicleNow >= 0 || replaying) {
+      const int myHeli = duel.players[mySlot].heli;
+      const bool canWalk = state == NET_IN && phaseNow == Duel::PLAYING && !droneShown[mySlot].live && myHeli < 0;
+      if (vehicleNow >= 0 || replaying || myHeli >= 0) {
         me = shownSoldier[mySlot];
         walkTrue = me;
         walkOffset = V3{};
@@ -2056,6 +2140,123 @@ struct Game {
         me = duel.players[mySlot].soldier;
       }
       for (int t = 0; t < Duel::kTanks; t++) Duel::poseNet(sim, duel.netFirst[t], duel.tanks[t], duel.tanks[t].netOn);
+      for (int t = 0; t < Duel::kCars; t++) duel.poseTarp(sim, t, duel.cars[size_t(t)].netOn);
+      const bool flyingOwn = myHeli >= 0 && !replaying && state == NET_IN;
+      if (flyingOwn) {
+        if (heliPredOf != myHeli) {
+          heliPredOf = myHeli;
+          heliPred = duel.helis[myHeli];
+          heliSteps.clear();
+          heliStepDebt = 0;
+          heliOffset = V3{};
+        }
+        WalkInput hi;
+        hi.forward = in.c.throttle - in.c.brake;
+        hi.strafe = in.c.steer;
+        hi.yaw = in.yaw;
+        hi.jump = in.c.handbrake > 0.5;
+        hi.sprint = in.sprint;
+        hi.crouch = in.crouch;
+        const WalkInput* flown = phaseNow == Duel::PLAYING ? &hi : nullptr;
+        heliStepDebt = std::min(heliStepDebt + dtShown, 0.1);
+        while (heliStepDebt >= Duel::kWalkDt) {
+          heliStepDebt -= Duel::kWalkDt;
+          Duel::flyHeli(heliPred, world, flown, Duel::kWalkDt);
+          heliSteps.push_back({out.seq + 1, hi});
+        }
+        while (heliSteps.size() > 100) heliSteps.pop_front();
+        if (freshAnswer) {
+          freshAnswer = false;
+          while (!heliSteps.empty() && int32_t(heliSteps.front().seq - ackedInput) <= 0) heliSteps.pop_front();
+          for (int k = 0; k < ackedSteps && !heliSteps.empty(); k++) heliSteps.pop_front();
+          Heli answer = duel.helis[myHeli];
+          for (const WalkStep& step : heliSteps) Duel::flyHeli(answer, world, phaseNow == Duel::PLAYING ? &step.in : nullptr, Duel::kWalkDt);
+          const V3 err = heliPred.p - answer.p;
+          logWalkErr = std::max(logWalkErr, len(err));
+          if (scriptMode == 80 && len(err) > heliErrShown) {
+            heliErrShown = len(err);
+            printf("groesster Vorhersagefehler bisher: %.2f m\n", heliErrShown);
+          }
+          heliOffset = len(err + heliOffset) > 15.0 ? V3{} : heliOffset + err;
+          heliPred = answer;
+        }
+        heliOffset = heliOffset * std::exp(-dtShown * 10.0);
+      } else {
+        heliPredOf = -1;
+      }
+      // The helicopters, smoothed like the drones; only the rotors turn by themselves here.
+      {
+        float noise = 0;
+        const V3 earAt = me.p;
+        for (int h = 0; h < Duel::kHelis; h++) {
+          const Heli& from = duel.helis[h];
+          Heli& shown = heliShown[h];
+          const V3 target = from.p + from.v * std::clamp(now - heliHeardAt[h], 0.0, 0.1);
+          const double spin = shown.spin, tailSpin = shown.tailSpin, gunSpin = shown.gunSpin;
+          const bool jump = len(target - shown.p) > 30.0 || shown.p.x == 0.0;
+          const V3 was = shown.p;
+          shown = from;
+          shown.p = jump ? target : was + (target - was) * clampd(dt * 18.0, 0, 1);
+          shown.spin = std::fmod(spin + from.power * 42.0 * dtShown, 2.0 * PI);
+          shown.tailSpin = std::fmod(tailSpin + from.power * 80.0 * dtShown, 2.0 * PI);
+          // The barrels: up to speed in a moment, and they run on a little after the last shot. Slow enough to be seen.
+          const bool firingNow = from.firing || (flyingOwn && h == myHeli && in.fireHeld && from.ammo > 0 && from.power > 0.3);
+          gunRate[h] += ((firingNow ? 24.0 : 0.0) - gunRate[h]) * clampd(dtShown * (firingNow ? 10.0 : 2.0), 0, 1);
+          if (scriptMode == 80 && firingNow && gunRate[h] > 20.0 && !gunToldScript) {
+            gunToldScript = true;
+            printf("Rohre drehen: %.1f rad/s\n", gunRate[h]);
+          }
+          shown.gunSpin = std::fmod(gunSpin + gunRate[h] * dtShown, 2.0 * PI);
+          if (flyingOwn && h == myHeli) {
+            shown.p = heliPred.p + heliOffset + heliPred.v * heliStepDebt;
+            shown.v = heliPred.v;
+            shown.yaw = heliPred.yaw;
+            shown.pitch = heliPred.pitch;
+            shown.roll = heliPred.roll;
+            shown.power = heliPred.power;
+          }
+          Duel::poseHeli(sim, duel.heliFirst[h], shown);
+          if (!from.dead) noise = std::max(noise, float(from.power * clampd(1.0 - len(shown.p - earAt) / 700.0, 0.0, 1.0)));
+        }
+        std::lock_guard<std::mutex> lock(snapMutex);
+        snap.heliNoise = noise;
+        snap.foot.heliOn = myHeli >= 0 && (state == NET_IN || replaying);
+        snap.foot.heliInstance = Duel::kVehicles + Duel::kMaxPlayers + Duel::kWrecks + std::max(myHeli, 0);
+        if (myHeli < 0) snap.heliParts.clear();
+        if (myHeli >= 0) {
+          const Heli& seat = heliShown[myHeli];
+          snap.foot.heliP = seat.p;
+          snap.foot.heliFwd = seat.fwd();
+          snap.foot.heliLeft = seat.left();
+          snap.foot.heliUp = seat.up();
+          snap.foot.heliAmmo = duel.helis[myHeli].ammo;
+          // The same picture as for any vehicle: from above, nose up, each part in the colour of its state.
+          const Heli& state = duel.helis[myHeli];
+          const float engineHurt = 1.f - float(state.engine) / float(Heli::kEngineHits);
+          const float rotorHurt = 1.f - float(state.rotor) / float(Heli::kRotorHits);
+          const float tailHurt = 1.f - float(state.tail) / float(Heli::kTailHits);
+          const float pilotHurt = 1.f - std::clamp(float(duel.players[mySlot].soldier.hp) / 100.f, 0.f, 1.f);
+          snap.heliParts.clear();
+          const auto part = [&](float x, float y, float w, float h, float hurt) {
+            PartState p;
+            p.label = nullptr;
+            p.x = x;
+            p.y = y;
+            p.w = w;
+            p.h = h;
+            p.damage = hurt;
+            snap.heliParts.push_back(p);
+          };
+          part(46, 0, 8, 22, 1.f - float(state.ammo) / float(Heli::kGunAmmo));  // the gatling: how much is left in it
+          part(36, 18, 28, 56, pilotHurt);                                      // the cabin: the one sitting in it
+          part(10, 78, 80, 10, 0);                                              // wings
+          part(32, 72, 36, 40, engineHurt);                                     // the engines
+          part(44, 112, 12, 96, 0);                                             // the boom
+          part(24, 206, 52, 9, tailHurt);                                       // the tail rotor
+          part(0, 58, 100, 5, rotorHurt);                                       // the main rotor, over everything
+          part(47.5f, 10, 5, 100, rotorHurt);
+        }
+      }
       // Drones, a little smoothed: what comes from the server would show on a bad line.
       for (int i = 0; i < Duel::kMaxPlayers; i++) {
         DroneSeen& ds = droneShown[i];
@@ -2140,7 +2341,7 @@ struct Game {
           }
           continue;
         }
-        const bool hidden = (state != NET_IN && !replaying) || !playingNow || (isMe ? duel.players[i].vehicle >= 0 : drawnVehicle[i] >= 0) || (isMe && in.scoped);
+        const bool hidden = (state != NET_IN && !replaying) || !playingNow || (isMe ? duel.players[i].vehicle >= 0 : drawnVehicle[i] >= 0) || (isMe && in.scoped) || duel.players[i].heli >= 0;
         Duel::poseSoldier(sim, duel.soldierFirst[i], isMe ? me : drawnSoldier[i], hidden, i == mySlot && !replaying ? in.weapon : weaponShown[i], i == mySlot && !replaying && in.aiming && !in.scoped, ghillieShown[i]);
       }
 
@@ -2253,7 +2454,12 @@ struct Game {
         snprintf(msg, sizeof msg, "%s", alert.c_str());
       } else if (state == NET_IN) {
         const Tank* mine = vehicleNow >= 0 && vehicleNow < Duel::kTanks ? &duel.tanks[vehicleNow] : nullptr;
-        if (watching >= 0) snprintf(msg, sizeof msg, "Gefallen  ·  Du siehst %s  ·  Linksklick wechselt", names[watching].c_str());
+        if (duel.players[mySlot].heli >= 0) {
+          const Heli& H = duel.helis[duel.players[mySlot].heli];
+          if (H.crashing) snprintf(msg, sizeof msg, "ABSTURZ");
+          else if (H.onGround) snprintf(msg, sizeof msg, "Leertaste steigt  ·  E: aussteigen");
+        }
+        else if (watching >= 0) snprintf(msg, sizeof msg, "Gefallen  ·  Du siehst %s  ·  Linksklick wechselt", names[watching].c_str());
         else if (phaseNow == Duel::WAITING) snprintf(msg, sizeof msg, "Warte auf Spieler  ·  %d von %d da", hereNow, wantedNow);
         else if (phaseNow == Duel::CHOOSING && in.ready) snprintf(msg, sizeof msg, "Warte auf den Gegner  ·  %.0f s", std::max(0.0, Duel::kChooseTime - double(clockNow)));
         else if (phaseNow == Duel::FINISHED) {
@@ -2276,6 +2482,8 @@ struct Game {
         else if (duel.players[mySlot].tapClock > 0) snprintf(msg, sizeof msg, "Hauptcomputer wird angezapft  ·  %.0f s", duel.players[mySlot].tapClock);
         else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && !duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "E: Hauptcomputer anzapfen");
         else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "Angezapft  ·  Q: Standort des Gegners abfragen, K zeigt ihn");
+        else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.nearestVehicle(me.p, 2.5) < 0 && carrying[IT_REPAIR] > 0 && duel.heliToRepair(me.p) >= 0) snprintf(msg, sizeof msg, duel.nearestHeli(me.p) >= 0 ? "E: einsteigen  ·  Q: Reparaturset  ·  Helikopter" : "Q: Reparaturset  ·  Helikopter");
+        else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.nearestVehicle(me.p, 2.5) < 0 && duel.nearestHeli(me.p) >= 0) snprintf(msg, sizeof msg, "E: einsteigen  ·  Helikopter");
         else if (phaseNow == Duel::PLAYING && duel.nearCrate(me.p + V3{0, 0, 0.3}) >= 0) {
           char what[64];
           snprintf(msg, sizeof msg, "E: nehmen  ·  %s", Duel::crateLabel(duel.crates[size_t(duel.nearCrate(me.p + V3{0, 0, 0.3}))], what, sizeof what));
@@ -2289,7 +2497,7 @@ struct Game {
       }
       if (gPadHints.load()) {
         // The same words, with the buttons of the controller in them.
-        static const char* const kSwap[][2] = {{"E: ", "X: "}, {"Q: ", "RB: "}, {"K zeigt", "LB zeigt"}, {"TAB wechselt", "X wechselt"}, {"Linksklick wechselt", "X wechselt"}, {"[ ] Tempo", "LB RB Tempo"}, {"Maus lenkt", "Rechter Stick lenkt"}, {"Feuer ", "RT "}};
+        static const char* const kSwap[][2] = {{"E: ", "X: "}, {"Q: ", "RB: "}, {"K zeigt", "LB zeigt"}, {"Leertaste steigt", "A steigt"}, {"TAB wechselt", "X wechselt"}, {"Linksklick wechselt", "X wechselt"}, {"[ ] Tempo", "LB RB Tempo"}, {"Maus lenkt", "Rechter Stick lenkt"}, {"Feuer ", "RT "}};
         std::string said = msg;
         for (const auto& swap : kSwap) {
           const size_t at = said.find(swap[0]);
@@ -2427,6 +2635,11 @@ struct Game {
         snap.watchDist = inside < 0 ? 4.0 : (inside < Duel::kTanks ? 12.0 : 7.5);
         // What the camera follows does not smear in the motion blur.
         snap.selfInstance = inside >= 0 ? inside : Duel::kVehicles + watching;
+        // A helicopter the camera hangs on stands still in the picture, the way a figure on foot does.
+        if (inside < 0 && duel.players[watching].heli >= 0) {
+          snap.selfInstance = Duel::kVehicles + Duel::kMaxPlayers + Duel::kWrecks + duel.players[watching].heli;
+          snap.selfOnFoot = true;
+        }
       }
       if (state == NET_IN) {
         // The figures of the server: this machine only mirrors the world and has no physics of its own.
@@ -2617,6 +2830,43 @@ static void runGame() {
     G.rig.linkInstance.resize(G.rig.links.size(), k);
     G.rig.parkedNodes.push_back({G.duel.wreckFirst[i], G.duel.tankNodes});
     G.rig.parkedExtra.push_back({0, 0});
+  }
+  // The helicopters, each part moved by its own eight nodes.
+  {
+    CarMesh heli;
+    if (!heli.load("assets/heli.mesh")) {
+      fprintf(stderr, "assets/heli.mesh fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n");
+      return;
+    }
+    for (int i = 0; i < Duel::kHelis; i++) {
+      const int k = Duel::kVehicles + Duel::kMaxPlayers + Duel::kWrecks + i;
+      G.mesh.addParked(heli, k, Duel::kHeliRest, 0.0, origin, {});
+      const char* const names[4] = {"body", "rotor", "tail", "gun"};
+      for (int part = 0; part < 4; part++) {
+        std::vector<u32> nodes;
+        for (u32 n = 0; n < 8; n++) nodes.push_back(G.duel.heliFirst[i] + u32(part) * 8 + n);
+        G.rig.groups.push_back({std::to_string(k) + ":" + names[part], nodes});
+      }
+      G.rig.parkedNodes.push_back({G.duel.heliFirst[i], u32(Duel::kHeliNodes)});
+      G.rig.parkedExtra.push_back({0, 0});
+    }
+  }
+  // The tarpaulins for the cars, stretched by eight nodes each.
+  {
+    CarMesh tarp;
+    if (!tarp.load("assets/tarp.mesh")) {
+      fprintf(stderr, "assets/tarp.mesh fehlt. Starte das Spiel mit ./run.sh, das erzeugt die Modelle.\n");
+      return;
+    }
+    for (int i = 0; i < Duel::kCars; i++) {
+      const int k = Duel::kVehicles + Duel::kMaxPlayers + Duel::kWrecks + Duel::kHelis + i;
+      G.mesh.addParked(tarp, k, Duel::kTarpRest, 0.0, origin, {});
+      std::vector<u32> nodes;
+      for (u32 n = 0; n < Duel::kTarpNodes; n++) nodes.push_back(G.duel.tarpFirst[i] + n);
+      G.rig.groups.push_back({std::to_string(k) + ":net", nodes});
+      G.rig.parkedNodes.push_back({G.duel.tarpFirst[i], u32(Duel::kTarpNodes)});
+      G.rig.parkedExtra.push_back({0, 0});
+    }
   }
   G.mesh.bind(G.simStart.rest, G.rig.groups, origin);
   // Blood on the ground: flat discs, each a little wider than the last.
@@ -4349,11 +4599,12 @@ static void runGame() {
       G.input.yaw = rig.yaw;
       G.input.pitch = rig.pitch;
       G.input.sprint = sprint;
+      G.input.crouch = panelKind == 0 && !chatting && !osk.open && (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL] || padCrouch || gScriptCrouch || (view.foot.heliOn && gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_EAST)));
       G.input.weapon = weaponPick;
       G.input.scoped = scoped;
       G.input.scopeView = scopeView;
       G.input.aiming = aimBlend > 0.5;
-      G.input.fireHeld = padFire || (panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK));
+      G.input.fireHeld = scriptGun || padFire || (panelKind == 0 && !mapOpen && !chatting && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK));
       if (sendC.requestGear != 99) c.requestGear = sendC.requestGear;
       G.input.ready = pickReady;
       for (int i = 0; i < IT_COUNT; i++) G.input.items[i] = pickItems[i];
@@ -4369,7 +4620,7 @@ static void runGame() {
         // Whatever is under the crosshair is what the gun lays on.
         const V3 f = norm(cam.target - cam.eye);
         // From beyond whatever one is sitting in, or just past one's own shoulder.
-        const double clear = onFoot ? 2.6 : 14.0;
+        const double clear = view.foot.heliOn ? (rig.mode == CAM_HOOD ? 2.0 : (rig.mode == CAM_DRIVER ? 3.0 : 28.0)) : (onFoot ? 2.6 : 14.0);
         // Exactly what the crosshair lies on: the shot starts from elsewhere than the camera, so close by it only goes
         // to the right place if that place is known.
         c.aimPoint = Duel::aimEnd(G.world, view.pos, G.simStart.blocks, aimFrames.data(), int(aimFrames.size()), myVehicle, aimFoes, cam.eye, f, clear);
@@ -4447,7 +4698,7 @@ static void runGame() {
       view.netDelay = G.snap.netDelay;
       view.netKb = G.snap.netKb;
       view.scorch = G.snap.scorch;
-      view.parts = G.snap.parts;
+      view.parts = G.snap.heliParts.empty() ? G.snap.parts : G.snap.heliParts;
       view.craters = G.snap.craters;
       view.conventional = G.snap.conventional;
       view.boost = G.snap.boost;
@@ -4486,12 +4737,13 @@ static void runGame() {
       view.tankTracks = G.snap.tankTracks;
       view.groundMarks = G.snap.groundMarks;
       view.groundBoxes = G.snap.groundBoxes;
-      view.selfInstance = G.snap.selfInstance;
+      view.selfInstance = G.snap.foot.heliOn ? G.snap.foot.heliInstance : G.snap.selfInstance;
       aimFrames = G.sightFrames;
       aimFoes = G.sightFoes;
-      view.selfOnFoot = G.snap.selfOnFoot;
+      view.selfOnFoot = G.snap.selfOnFoot || G.snap.foot.heliOn;
       view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
+      view.heliNoise = G.snap.heliNoise;
       view.board = G.snap.board;
       view.mates = G.snap.mates;
       view.boardWins[0] = G.snap.boardWins[0];
@@ -4686,6 +4938,7 @@ static void runGame() {
     hud.map.meYaw = std::atan2(view.carFwd.y, view.carFwd.x);
     hud.cameraName = kCamNames[rig.mode];
     hud.showBoard = boardOn;
+    G.gunCamera = rig.mode == CAM_HOOD || rig.mode == CAM_DRIVER;
     feel.update(view, dt);
     rig.update(view, dt, cam, G.world, feel, gSet.shake);
     cam.fovY += gSet.fov * PI / 180.0;
@@ -4707,6 +4960,25 @@ static void runGame() {
       cam.up = {0, 0, 1};
       cam.inside = false;
       cam.fovY = 62.0 * PI / 180.0;
+    } else if (view.foot.heliOn && !mapOpen) {
+      const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
+      const auto onBoard = [&](double ahead, double side, double high) { return view.foot.heliP + view.foot.heliFwd * ahead + view.foot.heliLeft * side + view.foot.heliUp * high; };
+      if (rig.mode == CAM_HOOD) {
+        // Right beside the gatling, looking along it: what is in the crosshair is what gets hit.
+        cam.eye = onBoard(3.45, 0.62, 0.46);
+        cam.fovY = 74.0 * PI / 180.0 + gSet.fov * PI / 180.0;
+      } else if (rig.mode == CAM_DRIVER) {
+        // Under the glass of the front seat.
+        cam.eye = onBoard(3.15, 0, 1.47);
+        cam.fovY = 74.0 * PI / 180.0 + gSet.fov * PI / 180.0;
+      } else {
+        // Well above and behind it, so that it hangs below the crosshair instead of in front of it.
+        cam.eye = view.foot.heliP + V3{0, 0, Heli::kCameraUp} + back * Heli::kCameraBack;
+        cam.fovY = 68.0 * PI / 180.0 + gSet.fov * PI / 180.0;
+      }
+      cam.target = cam.eye - back * 50.0;
+      cam.up = {0, 0, 1};
+      cam.inside = false;
     } else if (view.foot.droneLive && !mapOpen) {
       // Through the drone's camera, looking where it is told to.
       const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
@@ -4740,6 +5012,13 @@ static void runGame() {
       cam.up = {0, 0, 1};
       cam.inside = false;
       cam.fovY = 66.0 * PI / 180.0 + gSet.fov * PI / 180.0;
+    }
+    if (gScriptCamOn) {
+      cam.eye = gScriptEye;
+      cam.target = gScriptAt;
+      cam.up = {0, 0, 1};
+      cam.inside = false;
+      cam.fovY = 50.0 * PI / 180.0;
     }
     {
       // A shot gone means the ammunition went down with the same weapon in hand.
@@ -4905,7 +5184,7 @@ static void runGame() {
       cam.fovY = 55.0 * PI / 180.0;
     }
     hud.motionBlur = gSet.motionBlur;
-    hud.damageView = gSet.damageView && inTank;
+    hud.damageView = gSet.damageView && (inTank || view.foot.heliOn);
     hud.stats = gSet.stats;
     hud.farShadows = gSet.farShadows;
     if (scriptMode == 69) {

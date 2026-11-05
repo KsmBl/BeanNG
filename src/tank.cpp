@@ -681,6 +681,7 @@ void Tank::updateShells(Sim& sim, double dt) {
       // The 105 mm: a high-explosive round, about the 2.3 kg of filler of a HESH shell.
       sim.blastDir = norm(s.v);
       sim.blastBy = s.by;
+      sim.blastIsShell = true;
       sim.explode(at, spec().blastImpulse, spec().blastRadius);
       shells[i] = shells.back();
       shells.pop_back();
@@ -720,6 +721,14 @@ bool Tank::pathHit(const Sim& sim, V3 a, V3 b, bool skipOwn, V3& at, const Tank*
         at = a + d * t;
         return true;
       }
+    }
+  }
+  for (const V3& c : flyers) {
+    const V3 r = c - a;
+    const V3 q = a + d * clampd(dot(r, d) / dl2, 0, 1);
+    if (len2(q - c) < kFlyerRadius * kFlyerRadius) {
+      at = q;
+      return true;
     }
   }
   // Someone on foot stops a shell too, and it goes off right there. Otherwise only the ground beside them would.

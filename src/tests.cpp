@@ -2778,6 +2778,7 @@ int main(int argc, char** argv) {
     const bool idle = argc > 4 && !strcmp(argv[4], "ford");  // and the other side just standing there, out of sight until one is close
     // What a guided missile does to the tank bot 0 is in: square on the nose, again and again, as long as it sits in one.
     const bool struck = argc > 4 && !strcmp(argv[4], "hit");
+    const bool airOnly = argc > 4 && !strcmp(argv[4], "air");  // only helicopters: do they get up, and do they find anyone
     const int rounds = argc > 5 ? atoi(argv[5]) : 2;
     double nextStrike = 40.0;
     int strikes = 0;
@@ -2788,6 +2789,7 @@ int main(int argc, char** argv) {
     std::vector<Bot> bots;
     for (int i = 0; i < count; i++) {
       bots.push_back(Bot(u32(i + 1)));
+      if (airOnly && i % 2 == 0) bots.back().forceTactic(Bot::AIR);
       d->players[i].present = true;
     }
     Duel::Intent in[Duel::kMaxPlayers];
@@ -2848,8 +2850,177 @@ int main(int argc, char** argv) {
       }
       if (d->matchId > startMatch + rounds * 2) break;
     }
-    for (int i = 0; i < count; i++) printf("Bot %d: Kills %d, Tode %d, Spuren gefolgt %d, Kisten %d, Rechner %d, Rettungen %d\n", i, int(d->scores[i].kills), int(d->scores[i].deaths), bots[size_t(i)].followedTracks(), bots[size_t(i)].cratesTaken(), bots[size_t(i)].computersTapped(), bots[size_t(i)].timesRescued());
+    for (int i = 0; i < count; i++) printf("Bot %d: Kills %d, Tode %d, Spuren gefolgt %d, Kisten %d, Rechner %d, Rettungen %d, Fluege %d\n", i, int(d->scores[i].kills), int(d->scores[i].deaths), bots[size_t(i)].followedTracks(), bots[size_t(i)].cratesTaken(), bots[size_t(i)].computersTapped(), bots[size_t(i)].timesRescued(), bots[size_t(i)].flights());
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "heli")) {
+    // Up, along, down again; then what brings it down: bullets on the parts that matter, and a shell of any size.
+    auto* d = new Duel();
+    d->playersWanted = 2;
+    d->build();
+    d->players[0].present = d->players[1].present = true;
+    Duel::Intent in[Duel::kMaxPlayers];
+    const auto run = [&](double seconds) {
+      for (double t = 0; t < seconds; t += Duel::kDt) {
+        d->step(in);
+        std::vector<SimEvent> ev;
+        d->drainEvents(ev);
+      }
+    };
+    const auto begin = [&] {
+      in[0] = in[1] = Duel::Intent{};
+      u8 none[IT_COUNT] = {};
+      while (d->phase != Duel::CHOOSING) run(0.1);
+      d->choose(0, none, true);
+      d->choose(1, none, true);
+      while (d->phase != Duel::PLAYING) run(0.05);
+      // Next to it, and in.
+      d->players[0].soldier.p = d->helis[0].p + V3{2, 0, 0};
+      in[0].use = true;
+      run(Duel::kDt * 0.5);
+      in[0].use = false;
+      printf("eingestiegen %d, Hubschrauber %d\n", int(d->players[0].heli == 0), 0);
+    };
+    Heli& H = d->helis[0];
+    const auto say = [&](const char* what) {
+      printf("%-22s z ueber Boden %6.1f v %5.1f Leistung %.2f Motor %d Rotor %d Heck %d Muni %3d Absturz %d tot %d Pilot Leben %.0f\n", what, H.p.z - d->world.height(H.p.x, H.p.y), len(H.v), H.power, H.engine, H.rotor, H.tail, H.ammo, int(H.crashing), int(H.dead), d->players[0].soldier.hp);
+    };
+    const auto face = [&] {
+      in[0].walk.yaw = H.yaw + PI;
+      in[0].pitch = 0.05;
+    };
+    begin();
+    face();
+    run(2.5);
+    say("Rotor laeuft an");
+    in[0].walk.jump = true;
+    run(8.0);
+    in[0].walk.jump = false;
+    say("gestiegen");
+    in[0].walk.forward = 1;
+    in[0].fireHeld = true;
+    run(5.0);
+    in[0].fireHeld = false;
+    in[0].walk.forward = 0;
+    say("vorwaerts, Feuer");
+    run(6.0);
+    say("schwebt");
+    in[0].walk.crouch = true;
+    for (double t = 0; t < 40 && !H.onGround; t += 0.1) run(0.1);
+    in[0].walk.crouch = false;
+    say("gelandet");
+    // A rifle at the engine, from nearby, while it hovers.
+    const auto shootAt = [&](V3 target, int shots) {
+      for (int k = 0; k < shots && !H.dead; k++) {
+        const V3 from = target + H.left() * 30.0;
+        Duel::Bullet b;
+        b.p = from;
+        b.v = norm(target - from) * kWeapons[WP_AR].speed;
+        b.owner = 1;
+        b.kind = WP_AR;
+        d->bullets.push_back(b);
+        run(0.15);
+      }
+    };
+    in[0].walk.jump = true;
+    run(5.0);
+    in[0].walk.jump = false;
+    run(4.0);
+    say("wieder oben");
+    shootAt(H.at(-0.4, 0, 2.4), 5);
+    say("5 Schuss Motor");
+    shootAt(H.at(-0.4, 0, 2.4), 1);
+    say("6. Schuss Motor");
+    for (double t = 0; t < 30 && !H.dead; t += 0.1) run(0.1);
+    say("abgestuerzt");
+    printf("Kills Schuetze %d, Tode Pilot %d\n", int(d->scores[1].kills), int(d->scores[0].deaths));
+    // Round again: down on the ground, a kit puts it right; whoever walks into the rotor or under it does not get away.
+    d->restart();
+    d->phase = Duel::CHOOSING;
+    begin();
+    face();
+    d->helis[0].engine = 0;
+    d->helis[0].crashing = true;
+    say("Motor kaputt am Boden");
+    in[0].use = true;
+    run(Duel::kDt * 0.5);
+    in[0].use = false;
+    d->players[0].items[IT_REPAIR] = 1;
+    d->players[0].soldier.p = H.p + V3{3, 0, 0};
+    in[0].repair = true;
+    run(Duel::kDt * 0.5);
+    in[0].repair = false;
+    run(6.5);
+    say("repariert");
+    printf("Sets uebrig %d, wieder einsteigbar %d\n", int(d->players[0].items[IT_REPAIR]), int(d->nearestHeli(d->players[0].soldier.p) == 0));
+    d->players[0].soldier.p = H.p + V3{3, 0, 0};
+    in[0].use = true;
+    run(Duel::kDt * 0.5);
+    in[0].use = false;
+    in[0].walk.jump = true;
+    run(3.8);
+    in[0].walk.jump = false;
+    H.v = V3{};
+    H.p.z = d->world.height(H.p.x, H.p.y);
+    H.onGround = true;
+    d->players[1].soldier.p = V3{H.p.x + 3.0, H.p.y, d->world.height(H.p.x + 3.0, H.p.y)};
+    d->players[1].soldier.v = V3{};
+    d->players[1].soldier.crouch = 1.0;
+    in[1].walk.crouch = true;
+    run(0.05);
+    printf("Geduckt unter dem laufenden Rotor: Leben %.0f\n", d->players[1].soldier.hp);
+    in[1].walk.crouch = false;
+    run(0.5);
+    say("am Boden, Rotor laeuft");
+    printf("Gegner unter dem Rotor auf Kopfhoehe: Leben %.0f, Kills Pilot %d, Hubschrauber z %.1f\n", d->players[1].soldier.hp, int(d->scores[0].kills), H.p.z - d->world.height(H.p.x, H.p.y));
+    d->players[1].soldier.hp = 100;
+    // And a vehicle in the way.
+    d->restart();
+    d->phase = Duel::CHOOSING;
+    begin();
+    face();
+    in[0].walk.jump = true;
+    run(4.2);
+    in[0].walk.jump = false;
+    in[0].walk.forward = 1;
+    H.p = d->frames[0].cog + V3{0, -30, -1.0};
+    H.v = V3{};
+    H.yaw = PI * 0.5;
+    in[0].walk.yaw = H.yaw + PI;
+    for (double t = 0; t < 6 && !H.dead; t += 0.05) run(0.05);
+    say("gegen einen Panzer");
+    // Round again: a small shell, right on it, and that is all it takes.
+    d->restart();
+    d->phase = Duel::CHOOSING;
+    begin();
+    face();
+    in[0].walk.jump = true;
+    run(7.0);
+    in[0].walk.jump = false;
+    say("oben");
+    d->sim.blastBy = 1;
+    d->sim.blastIsShell = true;
+    d->sim.explode(H.at(0, 0, 1.3), 170.0, 4.0);
+    run(0.05);
+    say("leichte Granate");
+    run(8.0);
+    say("Wrack unten");
+    printf("Kills Schuetze %d, Tode Pilot %d\n", int(d->scores[1].kills), int(d->scores[0].deaths));
+    // Round again: out in the air, without a parachute.
+    d->restart();
+    d->phase = Duel::CHOOSING;
+    begin();
+    face();
+    in[0].walk.jump = true;
+    run(7.0);
+    in[0].walk.jump = false;
+    say("oben");
+    in[0].use = true;
+    run(Duel::kDt * 0.5);
+    in[0].use = false;
+    run(8.0);
+    printf("Abgesprungen: Leben %.0f, Tode %d\n", d->players[0].soldier.hp, int(d->scores[0].deaths));
     return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "bridge")) {

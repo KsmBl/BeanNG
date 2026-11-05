@@ -93,7 +93,7 @@ struct Obj {
 // Beam tags of trees: their breaking is heard and seen differently from steel.
 constexpr u8 kTagWood = 200, kTagBranch = 201;
 
-enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH, EV_ROCK, EV_IMPACT, EV_BLOOD, EV_SMOKE };
+enum EventKind : u8 { EV_SPARK, EV_DUST, EV_GLASS, EV_CRUNCH, EV_TIRE_SMOKE, EV_BLAST, EV_FIRE, EV_MUZZLE, EV_TRACER, EV_WOOD, EV_BRANCH, EV_ROCK, EV_IMPACT, EV_BLOOD, EV_SMOKE, EV_TRAIL };  // a trail: v is where it ends
 struct SimEvent {
   V3 p, v;
   float strength;
@@ -144,11 +144,13 @@ class Sim {
   V3 blastDir, lastBlastDir;
   // And whose it was, set the same way: for the score, and for a bot to know who is after it. -1 for nobody.
   int blastBy = -1, lastBlastBy = -1;
+  bool blastIsShell = false;  // from a tank's gun, however small: that is the end of anything that flies
   // For the duel server: what went off, for the players' machines to set off as well.
   struct BlastRecord {
     V3 c;
     double impulse, radius, hole;
     int by = -1;
+    bool shell = false;
   };
   bool logBlasts = false;
   std::vector<BlastRecord> blastLog;

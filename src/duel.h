@@ -85,6 +85,35 @@ inline constexpr WeaponInfo kWeapons[WP_COUNT] = {
 // How big a shot looks and sounds.
 inline float muzzleSize(int weapon) { return weapon == WP_RPG ? 0.5f : (weapon == WP_SNIPER ? 1.0f : (weapon == WP_AR ? 0.14f : 0.1f)); }
 
+// A helicopter is not a soft body like the rest: it flies by a few numbers, and is drawn from three rigid parts.
+struct Heli {
+  V3 p, v;  // p is on the ground between the skids
+  double yaw = 0, pitch = 0, roll = 0;
+  double power = 0;           // the rotor's speed, 0..1
+  double spin = 0, tailSpin = 0;
+  double gunSpin = 0;   // the barrels: only ever turned on the machines that draw them
+  bool firing = false;  // and whether they have reason to
+  // Those are what a bullet can harm; the armour of a helicopter is no armour at all.
+  int engine = kEngineHits, rotor = kRotorHits, tail = kTailHits;
+  int ammo = kGunAmmo;
+  bool crashing = false, dead = false, onGround = true;
+  double gunClock = 0, burn = 0, smokeClock = 0;
+  int hitBy = -1;
+  static constexpr int kEngineHits = 6, kRotorHits = 6, kTailHits = 4, kGunAmmo = 200;
+  static constexpr double kMuzzleAhead = 4.05, kMuzzleHigh = 0.58;
+  static constexpr double kBoardReach = 5.5, kGunInterval = 0.05, kCameraBack = 17.0, kCameraUp = 5.5;
+  V3 fwd() const {
+    const double cy = std::cos(yaw), sy = std::sin(yaw), cp = std::cos(pitch), sp = std::sin(pitch);
+    return V3{cy * cp, sy * cp, sp};
+  }
+  V3 left() const {
+    const double cy = std::cos(yaw), sy = std::sin(yaw), cr = std::cos(roll), sr = std::sin(roll), cp = std::cos(pitch), sp = std::sin(pitch);
+    return V3{-sy * cr + (-cy * sp) * sr, cy * cr + (-sy * sp) * sr, cp * sr};
+  }
+  V3 up() const { return cross(fwd(), left()); }
+  V3 at(double ahead, double side, double high) const { return p + fwd() * ahead + left() * side + up() * high; }
+};
+
 class Duel {
  public:
   static constexpr double kDt = 1.0 / 2000.0;
@@ -138,6 +167,8 @@ class Duel {
     double shotClock = 0;
     double repairClock = 0;  // working on a vehicle from outside, which takes a kit and being there
     int repairing = -1;
+    int heli = -1;              // which helicopter they are flying
+    bool fallFromHeli = false;  // stepped out in the air, and there is no parachute
     u32 lastInput = 0;  // the input the soldier has last been moved by, for the player's prediction
     u8 walkedSinceInput = 0;  // and how many steps of walking it has been since that one came in
   };
@@ -194,6 +225,10 @@ class Duel {
     int kind = WP_PISTOL;
     double age = 0, lag = 0;
     int by = -1;  // whose it is, for what flies with nobody as its owner
+    // A thin line of smoke behind it, handed out in lengths as it flies: the gatling's. For the first second only.
+    bool trail = false;
+    V3 trailFrom;
+    double trailClock = 0;
   };
   std::vector<Bullet> bullets;
   // Rockets ordered by a strike code, on their way. They come one after the other, each somewhere near the point.
@@ -233,6 +268,22 @@ class Duel {
   // A net for every tank and wreck: eight nodes that carry it, underground unless it is on.
   u32 netFirst[kTanks + kWrecks] = {};
   static void poseNet(Sim& sim, u32 first, const Tank& t, bool on);
+  // A helicopter in each yard.
+  static constexpr int kHelis = kMaxPlayers, kHeliNodes = 32;  // one for each place to start from
+  double heliDebt[kHelis] = {};
+  // Returns true if it has just hit the ground in a way it does not survive. No pilot, or none who may fly yet: null.
+  static bool flyHeli(Heli& H, const World& world, const WalkInput* in, double dt);
+  int heliToRepair(V3 p) const;
+  static const V3 kHeliRest;  // where its nodes lie for the mesh to be bound
+  Heli helis[kHelis], helisStart[kHelis];
+  u32 heliFirst[kHelis] = {};
+  static void poseHeli(Sim& sim, u32 first, const Heli& h);
+  int heliPilot(int h) const {
+    for (int i = 0; i < kMaxPlayers; i++)
+      if (players[i].present && players[i].heli == h && players[i].soldier.hp > 0) return i;
+    return -1;
+  }
+  int nearestHeli(V3 p) const;
   // A tarpaulin for every car, stretched to fit it: what it measures, from the ground, is worked out when it is built.
   static constexpr int kTarpNodes = 8;
   static const V3 kTarpRest;  // where the sheet lies out of sight, and the mesh is bound
@@ -363,6 +414,10 @@ class Duel {
   // A bullet going into a car does not take it apart: it goes through whatever lies on its way. True if it hit a part.
   bool bulletInCar(int k, V3 from, V3 dir, int kind, int owner);
   void creditHurt(int victim, int by);
+  void stepHeli(int h, const Intent in[kMaxPlayers], double dt);
+  bool bulletInHeli(int h, V3 from, V3 to, const Bullet& b);
+  void explodeHeli(int h);
+  void leaveHeli(int p);
   void countDeaths();
   bool deathCounted[kMaxPlayers] = {};
   void placeMine(int p, int kind);

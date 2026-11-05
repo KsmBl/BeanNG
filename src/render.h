@@ -84,6 +84,8 @@ struct Snapshot {
     bool alive = true, me = false;
   };
   std::vector<BoardRow> board;
+  float heliNoise = 0;  // how loud a rotor is from here, 0..1
+  std::vector<PartState> heliParts;
   // One's own side, for the name and health over each of them.
   struct Mate {
     V3 at;
@@ -125,6 +127,10 @@ struct Snapshot {
     };
     std::vector<Fix> fixes;
     double prone = 0, crouch = 0;
+    // Flying: where, and what one has left.
+    bool heliOn = false, heliWatch = false;
+    V3 heliP, heliFwd{1, 0, 0}, heliLeft{0, 1, 0}, heliUp{0, 0, 1};
+    int heliAmmo = 0, heliInstance = 0;
     V3 wind;
     V3 p;
   } foot;
