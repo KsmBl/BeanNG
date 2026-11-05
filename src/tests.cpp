@@ -3260,7 +3260,7 @@ int main(int argc, char** argv) {
     d->sim.blastWeapon = KW_GUN105;
     d->sim.explode(d->frames[v].cog + d->frames[v].up * 1.5, 2200.0, 15.0);
     run(0.2);
-    printf("Im Panzer %d, Schaden %.2f | Marker: Schuetze %d, sein Kamerad %d, Insasse %d, dessen Kamerad %d | getroffen: Insasse %d\n", int(d->players[1].vehicle == v), d->tanks[v].damage, int(d->players[0].hitsLanded), int(d->players[2].hitsLanded), int(d->players[1].hitsLanded), int(d->players[3].hitsLanded), int(d->players[1].hitsTaken));
+    printf("Im Panzer %d, Schaden %.2f | Marker: Schuetze %d, sein Kamerad %d, Insasse %d, dessen Kamerad %d | getroffen: Insasse %d, Art %d\n", int(d->players[1].vehicle == v), d->tanks[v].damage, int(d->players[0].hitsLanded), int(d->players[2].hitsLanded), int(d->players[1].hitsLanded), int(d->players[3].hitsLanded), int(d->players[1].hitsTaken), int(d->players[0].lastHitKind));
     return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "eigen")) {

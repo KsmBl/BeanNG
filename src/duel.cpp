@@ -816,7 +816,7 @@ bool Duel::bulletInHeli(int h, V3 from, V3 to, const Bullet& b) {
     if (b.kind >= WP_RPG) return;
     H.hitBy = b.owner;
     H.hitWeapon = (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling));
-    noteHit(-1, b.owner, from);
+    noteHit(-1, b.owner, from, HIT_ARMOUR);
     if (pilot >= 0) noteHit(pilot, -1, from);
     sim.event(EV_SPARK, where, H.up(), 0.5f);
   };
@@ -1025,7 +1025,7 @@ void Duel::stepHeli(int h, const Intent in[kMaxPlayers], double dt) {
     const bool squashed = fast > 2.5 && len(belly - (feet + V3{0, 0, tall * 0.5})) < 1.9;
     if (!blades && !tailBlades && !squashed) continue;
     creditHurt(i, pilot, false, Shot{}, KW_ROTOR);
-    noteHit(i, pilot, hub);
+    noteHit(i, pilot, hub, HIT_CRITICAL);
     pl.soldier.hp = 0;
     pl.lastBlow = norm(feet - hub + upNow * 1.5) * 12.0;
     for (int k = 0; k < 3; k++) sim.event(EV_BLOOD, feet + V3{0, 0, tall * 0.6}, pl.lastBlow * 0.3, 1.f);
@@ -1450,7 +1450,7 @@ void Duel::fireWeapon(int p, const Intent& in) {
       other.hp -= kWeapons[w].damage;
       creditHurt(foe, p, false, Shot{}, KW_KNIFE);
       players[foe].lastBlow = norm(target - s.p + V3{0, 0, 0.3}) * 2.0;
-      noteHit(foe, p, s.p);
+      noteHit(foe, p, s.p, players[foe].soldier.hp <= 0 ? HIT_CRITICAL : HIT_SOFT);
       sim.event(EV_BLOOD, target + V3{0, 0, 1.1}, norm(target - s.p) * 2.0, 0.7f);
     }
     return;
@@ -1651,7 +1651,7 @@ void Duel::stepBullets(double dt) {
         if (pl.droneLive && len2(pl.droneP - (from + seg * clampd(dot(pl.droneP - from, seg) / std::max(len2(seg), 1e-9), 0, 1))) < 0.7 * 0.7) {
           pl.droneLive = false;
           sim.event(EV_SPARK, pl.droneP, V3{0, 0, 1}, 1.f);
-          noteHit(-1, b.owner, from);
+          noteHit(-1, b.owner, from, HIT_ARMOUR);
           stop = true;
           at = pl.droneP;
         }
@@ -1687,7 +1687,7 @@ void Duel::stepBullets(double dt) {
             players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 - 0.55 * players[q].soldier.crouch ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
             creditHurt(q, b.owner, false, Shot{}, (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling)));
             players[q].lastBlow = norm(b.v) * (b.kind == WP_SNIPER ? 11.0 : 2.5);
-            noteHit(q, b.owner, from);
+            noteHit(q, b.owner, from, players[q].soldier.hp <= 0 || (near.z - foot.z) > 1.5 - 0.55 * target.crouch ? HIT_CRITICAL : HIT_SOFT);
             sim.event(EV_BLOOD, near, b.v * 0.02, b.kind == WP_SNIPER ? 1.f : 0.45f);
           }
         }
@@ -1729,7 +1729,7 @@ void Duel::stepBullets(double dt) {
         if (tanks[v].bulletHit(sim, from + moved, b.p + moved, force)) {
           stop = true;
           at = b.p;
-          noteHit(-1, b.owner, from);
+          noteHit(-1, b.owner, from, tanks[v].destroyed ? HIT_CRITICAL : HIT_ARMOUR);
           tanks[v].hitBy = b.owner;
           tanks[v].hitWeapon = (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling));
           for (int who = 0; who < kMaxPlayers; who++)
@@ -1854,12 +1854,15 @@ void Duel::countDeaths() {
   }
 }
 
-void Duel::noteHit(int victim, int attacker, V3 from) {
+void Duel::noteHit(int victim, int attacker, V3 from, u8 kind) {
   if (victim >= 0) {
     players[victim].hitsTaken++;
     players[victim].hurtFrom = from;
   }
-  if (attacker >= 0 && attacker != victim) players[attacker].hitsLanded++;
+  if (attacker >= 0 && attacker != victim) {
+    players[attacker].hitsLanded++;
+    players[attacker].lastHitKind = kind;
+  }
 }
 
 void Duel::startSmoke(V3 at) {
@@ -2566,9 +2569,14 @@ void Duel::step(const Intent in[kMaxPlayers]) {
       for (int who = 0; who < kMaxPlayers; who++)
         if (players[who].vehicle == v) noteHit(who, -1, sim.lastBlast);
       const int by = tanks[v].hitBy;
-      if (stepsSinceBlast <= 4 && by >= 0 && players[by].present && teamOf(by) != teamOf(crew)) noteHit(-1, by, sim.lastBlast);
+      if (stepsSinceBlast <= 4 && by >= 0 && players[by].present && teamOf(by) != teamOf(crew)) noteHit(-1, by, sim.lastBlast, tanks[v].destroyed ? HIT_CRITICAL : HIT_ARMOUR);
     }
     tankDamageSeen[v] = tanks[v].damage;
+    // A shell of its own that has glanced off something: that is worth knowing too.
+    if (tanks[v].bounces != tankBouncesSeen[v]) {
+      if (tanks[v].bounces > tankBouncesSeen[v] && tanks[v].gunner >= 0) noteHit(-1, tanks[v].gunner, frames[v].cog, HIT_RICOCHET);
+      tankBouncesSeen[v] = tanks[v].bounces;
+    }
   }
   const bool blast = sim.blastCount != blastSeen;
   blastSeen = sim.blastCount;

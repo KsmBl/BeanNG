@@ -69,6 +69,8 @@ struct VehicleFrame {
 
 enum WeaponKind : u8 { WP_KNIFE, WP_PISTOL, WP_AR, WP_SNIPER, WP_RPG, WP_COUNT };
 // The found sights travel with the weapons one has, in the same byte.
+// What a hit landed on, for how it looks and sounds to whoever fired.
+enum HitKind : u8 { HIT_SOFT, HIT_ARMOUR, HIT_RICOCHET, HIT_CRITICAL };
 inline constexpr int kHasThermal = 1 << 6, kHasWeak = 1 << 7;
 struct WeaponInfo {
   const char* name;
@@ -160,6 +162,7 @@ class Duel {
     V3 lastBlow;  // the last thing to hit them, for how they fall
     // For the screen: how many hits this player has landed, how many they have taken, and from where the last came.
     u16 hitsLanded = 0, hitsTaken = 0;
+    u8 lastHitKind = 0;  // of the hit landed last
     V3 hurtFrom;
     // The enemy's main computer: a few seconds at it, and from then on it says roughly where each of them is.
     bool tapped = false;
@@ -472,8 +475,9 @@ private:
   bool deathCounted[kMaxPlayers] = {};
   void placeMine(int p, int kind);
   u32 bridgeFallsSeen = 0;
-  void noteHit(int victim, int attacker, V3 from);
+  void noteHit(int victim, int attacker, V3 from, u8 kind = HIT_SOFT);
   double tankDamageSeen[kTanks] = {};
+  u16 tankBouncesSeen[kTanks] = {};
   u32 blastCountNoted = 0;
   int stepsSinceBlast = 1000;
   void callStrike(int p, V3 at);

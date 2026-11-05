@@ -3066,13 +3066,19 @@ struct Renderer::Impl {
     // A hit landed: a cross in the crosshair.
     if (o.hitMark > 0) {
       const float cx = W * .5f, cy = H * .5f, a = std::min(o.hitMark * 2.f, 1.f);
-      const Col c{1, .92f, .85f, a};
+      // White on flesh, amber on plate, a pale short one for a shell that glanced off, big and red for what counted.
+      static const Col kInk[4] = {{1, .92f, .85f, 1}, {1, .72f, .2f, 1}, {.6f, .75f, .95f, 1}, {1, .22f, .16f, 1}};
+      Col c = kInk[std::clamp(o.hitKind, 0, 3)];
+      c.a = a;
+      const int dots = o.hitKind == 2 ? 4 : (o.hitKind == 3 ? 11 : 7);
+      const float from = o.hitKind == 3 ? 10.f : 9.f, dotSize = o.hitKind == 3 ? 3.f : 2.2f;
       for (float sx : {-1.f, 1.f})
         for (float sy : {-1.f, 1.f})
-          for (int k = 0; k < 7; k++) {
-            const float d = (9.f + float(k) * 1.6f) * u;
-            rrect(cx + sx * d - 1.1f * u, cy + sy * d - 1.1f * u, 2.2f * u, 2.2f * u, 0, c);
+          for (int k = 0; k < dots; k++) {
+            const float d = (from + float(k) * 1.6f) * u;
+            rrect(cx + sx * d - dotSize * .5f * u, cy + sy * d - dotSize * .5f * u, dotSize * u, dotSize * u, 0, c);
           }
+      if (o.hitKind == 2) labelMid(cx, cy + 34 * u, "Abpraller", 13 * u, c);
     }
     // What can be heard: a pale mark around the middle, on the side it comes from, stronger the louder it is.
     for (const HudOptions::Heard& h : o.heard) {

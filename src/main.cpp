@@ -1591,6 +1591,7 @@ struct Game {
           r.get(stepsSinceAck);
           r.get(onGround);
           r.get(duel.players[mySlot].hitsLanded);
+          r.get(duel.players[mySlot].lastHitKind);
           r.get(duel.players[mySlot].hitsTaken);
           i8 killerSaid = -1;
           u8 missileSaid = 0;
@@ -2662,6 +2663,7 @@ struct Game {
         snap.foot.wind = duel.wind;
         const Duel::Player& who = duel.players[mySlot];
         snap.foot.hitsLanded = who.hitsLanded;
+        snap.foot.hitKind = who.lastHitKind;
         snap.foot.hitsTaken = who.hitsTaken;
         snap.foot.hurtFrom = who.hurtFrom;
         snap.foot.ammo = in.weapon == WP_KNIFE ? -1 : (in.weapon == WP_SNIPER ? who.sniperAmmo : (in.weapon == WP_RPG ? who.rpgAmmo : who.smallAmmo));
@@ -5686,7 +5688,14 @@ static void runGame() {
       if (view.foot.hitsLanded != landedSeen) {
         if (view.foot.hitsLanded > landedSeen) {
           hud.hitMark = 1.f;
-          sound->synth.trigger(Sfx::Crack, 0.25f, 0.f, 0.5f);
+          hud.hitKind = view.foot.hitKind;
+          // Soft is a tick, plate rings, a glancing shell whines off, and what really counted is heard as such.
+          if (view.foot.hitKind == HIT_ARMOUR) sound->synth.trigger(Sfx::Clunk, 0.55f, 0.f, 0.6f);
+          else if (view.foot.hitKind == HIT_RICOCHET) sound->synth.trigger(Sfx::Metal, 0.12f, 0.f, 0.7f);
+          else if (view.foot.hitKind == HIT_CRITICAL) {
+            sound->synth.trigger(Sfx::Crack, 0.7f, 0.f, 0.7f);
+            sound->synth.trigger(Sfx::Thump, 0.6f, 0.f, 0.6f);
+          } else sound->synth.trigger(Sfx::Crack, 0.25f, 0.f, 0.5f);
         }
         landedSeen = view.foot.hitsLanded;
       }

@@ -683,6 +683,7 @@ int main(int argc, char** argv) {
     w.put(duel->players[slot].walkedSinceInput);
     w.put(u8(duel->players[slot].soldier.grounded ? 1 : 0));
     w.put(duel->players[slot].hitsLanded);
+    w.put(duel->players[slot].lastHitKind);
     w.put(duel->players[slot].hitsTaken);
     // Who it was, for the kill cam of whoever has just gone down.
     const int killer = duel->players[slot].soldier.hp <= 0 ? duel->killerOf(slot) : -1;
