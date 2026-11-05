@@ -3397,7 +3397,9 @@ static void runGame() {
     const double pitchUp = lookHigh ? -1.4 : -0.30, pitchDown = view.missileLive ? 1.5 : 1.2;
     rig.pitch = clampd(rig.pitch, pitchUp, pitchDown);
     // Nothing to do on foot before or after the match itself: one waits where one stands.
-    if (!onFoot || weaponPick != WP_SNIPER || view.foot.heliOn) scoped = false;
+    // Only for someone alive with the rifle in hand: after death the view belongs to whoever is being watched, or to the kill cam.
+    const bool scopeAllowed = onFoot && weaponPick == WP_SNIPER && !view.foot.heliOn && view.foot.hp > 0 && G.duel.players[slot].soldier.hp > 0 && !killPlaying;
+    if (!scopeAllowed) scoped = false;
     // Through the scope: plain, or with whichever of the found sights one has.
     const bool hasThermal = view.foot.has & kHasThermal, hasWeak = view.foot.has & kHasWeak;
     if ((scopeView == SV_THERMAL && !hasThermal) || (scopeView == SV_WEAK && !hasWeak)) scopeView = SV_PLAIN;
@@ -4049,7 +4051,7 @@ static void runGame() {
             if (view.watchOn) G.teamWatch++;
             else edges.fire = true;
           }
-          if (e.button.button == SDL_BUTTON_RIGHT && onFoot && weaponPick == WP_SNIPER && !view.foot.heliOn) scoped = !scoped;
+          if (e.button.button == SDL_BUTTON_RIGHT && scopeAllowed) scoped = !scoped;
           break;
         case SDL_EVENT_MOUSE_MOTION: {
           const double sens = (rig.mode == CAM_HOOD ? 0.0009 : 0.0028) * gSet.mouse / (scoped ? scopeZoom * 0.5 : 1.0) * lerpd(1.0, inTank ? 0.3 : 0.55, aimBlend);
@@ -4158,7 +4160,7 @@ static void runGame() {
         padFire = fireNow;
         const bool aimNow = lt > 0.4;
         const bool scopeWeapon = onFoot && weaponPick == WP_SNIPER;
-        if (aimNow && !padScopeHeld && scopeWeapon && !view.foot.heliOn) scoped = !scoped;
+        if (aimNow && !padScopeHeld && scopeWeapon && scopeAllowed) scoped = !scoped;
         padScopeHeld = aimNow;
         padAim = aimNow && !scopeWeapon;
       } else {
@@ -4473,6 +4475,45 @@ static void runGame() {
             wantShot = true;
             arrived88 = 1e9;
           }
+        }
+      }
+    }
+    if (scriptMode == 90 && netState == Game::NET_IN) {
+      // The big rifle in hand; once dead, a right click as if to look through it again.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickItems[IT_SNIPER] = 1;
+        pickItems[IT_SNIPER_AMMO] = 1;
+        pickReady = true;
+      }
+      panelKind = PANEL_NONE;
+      static double deadSince = -1, aliveTold = -1;
+      const bool alive90 = G.duel.players[slot].soldier.hp > 0;
+      if (inMatch && alive90) {
+        weaponPick = WP_SNIPER;
+        if (aliveTold < 0 && tNow > 2.0) {
+          SDL_Event ev{};
+          ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+          ev.button.button = SDL_BUTTON_RIGHT;
+          SDL_PushEvent(&ev);
+          aliveTold = tNow;
+        } else if (aliveTold > 0 && tNow > aliveTold + 1.0 && aliveTold < 1e8) {
+          printf("Lebend: Zielfernrohr %d\n", int(scoped));
+          fflush(stdout);
+          aliveTold = 1e9;
+          scoped = false;
+        }
+      }
+      if (inMatch && !alive90) {
+        if (deadSince < 0) {
+          deadSince = tNow;
+          SDL_Event ev{};
+          ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+          ev.button.button = SDL_BUTTON_RIGHT;
+          SDL_PushEvent(&ev);
+        } else if (tNow > deadSince + 1.0 && deadSince < 1e8) {
+          printf("Tot: Zielfernrohr %d, Kill-Cam %d, Leben im Bild %.0f\n", int(scoped), int(killPlaying), view.foot.hp);
+          fflush(stdout);
+          deadSince = 1e9;
         }
       }
     }
