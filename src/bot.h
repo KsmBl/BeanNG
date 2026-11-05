@@ -119,6 +119,7 @@ class Bot {
 
   // The plan for this round.
   double burstClock_ = 0;
+  bool stormInBuggy_ = false;
   Tactic tactic_ = STORM, lastTactic_ = kTacticCount;
   bool picked_ = false;
   double tacticClock_ = 0, tacticLimit_ = 1e9;

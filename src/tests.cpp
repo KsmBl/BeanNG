@@ -3015,6 +3015,7 @@ int main(int argc, char** argv) {
       bots.push_back(Bot(u32(i + 1)));
       if (airOnly && i % 2 == 0) bots.back().forceTactic(Bot::AIR);
       if (raidOnly && i % 2 == 0) bots.back().forceTactic(Bot::RAID);
+      if (argc > 4 && !strcmp(argv[4], "storm")) bots.back().forceTactic(Bot::STORM);
       d->players[i].present = true;
     }
     Duel::Intent in[Duel::kMaxPlayers];

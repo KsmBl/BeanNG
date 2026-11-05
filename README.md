@@ -125,7 +125,7 @@ Jede Runde entscheidet sich ein Bot für eine andere Taktik als zuletzt und nimm
 
 | Taktik | Was der Bot macht |
 |---|---|
-| Sturm | Nimmt einen Panzer mit 105 mm, sucht den Gegner und greift direkt an |
+| Sturm | Nimmt einen Panzer mit 105 mm, sucht den Gegner und greift direkt an. Etwa jeder dritte Sturm kommt im Kettenbuggy. |
 | Flanke | Fährt im schnellen Panzer in weitem Bogen und schießt von der Seite, wo die Panzerung dünner ist |
 | Hinterhalt | Versteckt sich im schweren Panzer an einer Straße oder Brücke, zieht das Tarnnetz über und schießt erst aus der Nähe. Ist er entdeckt, wechselt er den Platz oder greift an |
 | Scharfschütze | Sucht in Kisten nach dem Gewehr, legt sich im Ghillie-Anzug auf eine Anhöhe und zielt bei Panzern auf die Ketten |

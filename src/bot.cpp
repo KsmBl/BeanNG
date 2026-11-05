@@ -133,6 +133,8 @@ void Bot::pickTactic(const Duel& d, int me) {
     roll -= kWeight[t];
   }
   if (forced_ < kTacticCount) tactic_ = forced_;
+  // One rush in three comes at speed.
+  stormInBuggy_ = tactic_ == STORM && chance(0, 1) < 0.35;
   picked_ = true;
   tacticClock_ = 0;
   // How long each way of playing gets, before it goes looking for them after all.
@@ -179,6 +181,7 @@ void Bot::think(Duel& d, int me) {
     fresh.lastTactic_ = lastTactic_;
     fresh.picked_ = picked_;
     fresh.tacticLimit_ = tacticLimit_;
+    fresh.stormInBuggy_ = stormInBuggy_;
     fresh.cratesWanted_ = cratesWanted_;
     fresh.flankSide_ = flankSide_;
     fresh.tracksFollowed_ = tracksFollowed_;
@@ -783,7 +786,7 @@ void Bot::chooseTank(const Duel& d, int me, V3 from) {
   if (wantVehicle_ >= 0 && wantClock_ > 70.0) givenUp_[wantVehicle_] = true;
   if (wantVehicle_ >= 0 && wantVehicle_ < Duel::kTanks && goodTank(d, wantVehicle_)) return;
   wantVehicle_ = -1;
-  const bool wantBuggy = tactic_ == RAID;
+  const bool wantBuggy = tactic_ == RAID || (tactic_ == STORM && stormInBuggy_);
   const TurretKind wantTurret = wantBuggy ? TK_MG : (tactic_ == MISSILE ? TK_MISSILE : TK_STANDARD);
   const HullKind wantHull = tactic_ == FLANK || tactic_ == SPY || tactic_ == SCAVENGE || tactic_ == SNIPER ? HK_FAST : (tactic_ == AMBUSH ? HK_HEAVY : ((me & 1) ? HK_HEAVY : HK_MEDIUM));
   double best = 1200.0 * 1200.0 * 40.0;
@@ -803,6 +806,7 @@ void Bot::chooseTank(const Duel& d, int me, V3 from) {
   // Both of ours are gone or in use: then it is a tank like everyone else's.
   if (wantVehicle_ < 0 && tactic_ == RAID) {
     tactic_ = STORM;
+    stormInBuggy_ = false;
   }
   if (wantVehicle_ != wasWanted) {
     wantClock_ = 0;
