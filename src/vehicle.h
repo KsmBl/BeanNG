@@ -217,6 +217,9 @@ class Vehicle {
   double boost = 0;  // turbo pressure, 0..1
   Tuning tune;
   bool absActive = false, espActive = false, tcsActive = false;
+  // Under a tarpaulin, which it loses by moving off; and the driver putting it up.
+  bool netOn = false;
+  double netClock = 0;
   void update(Sim& sim, const Controls& in, double dt);
   // Makes this a vehicle standing at other indices of the same sim layout.
   void shiftIndices(long nodes, long beams, long objects);

@@ -2933,7 +2933,7 @@ static void runGame() {
       if (f.items[IT_REPAIR] > 0) tool("Reparaturset", std::to_string(f.items[IT_REPAIR]), footOnly, "Bringt ein Fahrzeug wieder zum Laufen: 6 Sekunden, zu Fuß daneben, und es muss stillstehen.", [&] { edges.repair = true; });
       if (inTank) tool("Nebelwerfer", std::to_string(f.launcher), f.launcher > 0 ? nullptr : "leer", "Der Werfer auf dem Turm: eine Wolke vor den Panzer, die eine halbe Minute lang die Sicht versperrt.", [&] { edges.smoke = true; });
       else if (f.items[IT_SMOKE] > 0) tool("Nebelgranate", std::to_string(f.items[IT_SMOKE]), onFoot ? nullptr : "nur zu Fuß", "Eine Wolke, die eine halbe Minute lang die Sicht versperrt, gut gegen Scharfschützen.", [&] { edges.smoke = true; });
-      if (f.items[IT_NET] > 0) tool("Tarnnetz", std::to_string(f.items[IT_NET]), inTank ? nullptr : "nur im Panzer", "Über den stehenden Panzer gezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.", [&] { edges.net = true; });
+      if (f.items[IT_NET] > 0) tool("Tarnnetz", std::to_string(f.items[IT_NET]), onFoot ? "nur im Fahrzeug" : nullptr, "Über den stehenden Panzer oder das Auto gezogen, dauert 3 Sekunden. Beim Losfahren bleibt es zurück.", [&] { edges.net = true; });
       if (f.droneLive) tool("Drohne zurückholen", "", nullptr, "Holt die Drohne aus der Luft. Sie ist danach verbraucht.", [&] { edges.drone = true; });
       else if (f.drones > 0) tool("Drohne", std::to_string(f.drones), footOnly, "Steigt von deinem Standort auf. Du fliegst sie selbst, Feuer markiert den Gegner.", [&] { edges.drone = true; });
       if (f.codes > 0) tool("Bombencode", std::to_string(f.codes), nullptr, "Die Karte geht auf, dort wählst du das Ziel: vier Raketen, ziemlich ungenau.", [&] {

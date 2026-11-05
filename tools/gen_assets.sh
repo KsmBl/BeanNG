@@ -27,6 +27,9 @@ fi
 if [[ ! -f assets/hummer.mesh || tools/gen_hummer.py -nt assets/hummer.mesh ]]; then
   python3 tools/gen_hummer.py assets/hummer.mesh
 fi
+if [[ ! -f assets/tarp.mesh || tools/gen_tarp.py -nt assets/tarp.mesh ]]; then
+  python3 tools/gen_tarp.py assets/tarp.mesh
+fi
 if [[ ! -f assets/ui.atlas || tools/gen_ui.py -nt assets/ui.atlas ]]; then
   python3 tools/gen_ui.py assets/ui.atlas
 fi

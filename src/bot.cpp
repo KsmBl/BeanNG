@@ -316,7 +316,8 @@ bool Bot::canSee(const Duel& d, V3 from, V3 to, int foe) const {
   double range = other.vehicle >= 0 ? kSightTank : kSightFoot;
   // What moves catches the eye. What stands still among the bushes does not, from so far.
   if (other.vehicle >= 0 && std::fabs(d.frames[other.vehicle].speed) < 0.5) range *= 0.7;
-  if (other.vehicle >= 0 && other.vehicle < Duel::kTanks && d.tanks[other.vehicle].netOn) range = kSightHidden * 2.0;
+  if (other.vehicle >= 0 && (other.vehicle < Duel::kTanks ? d.tanks[other.vehicle].netOn : d.cars[size_t(other.vehicle - Duel::kTanks)].netOn)) range = kSightHidden * 2.0;
+  if (other.vehicle < 0 && other.soldier.crouch > 0.5) range *= 0.8;
   if (other.vehicle < 0 && other.items[IT_GHILLIE] > 0) range = kSightHidden;
   if (other.vehicle < 0 && other.soldier.prone > 0.5) range *= 0.6;
   if (dist > range) return false;

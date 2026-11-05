@@ -233,6 +233,12 @@ class Duel {
   // A net for every tank and wreck: eight nodes that carry it, underground unless it is on.
   u32 netFirst[kTanks + kWrecks] = {};
   static void poseNet(Sim& sim, u32 first, const Tank& t, bool on);
+  // A tarpaulin for every car, stretched to fit it: what it measures, from the ground, is worked out when it is built.
+  static constexpr int kTarpNodes = 8;
+  static const V3 kTarpRest;  // where the sheet lies out of sight, and the mesh is bound
+  u32 tarpFirst[kCars] = {};
+  V3 tarpSize[kCars];
+  void poseTarp(Sim& sim, int car, bool on) const;
   CarRig wreckRigs[kWrecks];
   struct Crate {
     V3 p;

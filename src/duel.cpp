@@ -179,6 +179,20 @@ void Duel::build() {
   for (int i = 0; i < kTanks; i++) tanksStart[i] = tanks[i];
   for (int i = 0; i < kWrecks; i++) wrecksStart[i] = wrecks[i];
   carsStart = cars;
+  updateFrames();
+  // What each car measures, for its tarpaulin: half its length and width, and its height from the ground.
+  for (int k = 0; k < kCars; k++) {
+    const VehicleFrame& f = frames[kTanks + k];
+    double hl = 0, hw = 0, top = 0;
+    const double ground = world.height(f.cog.x, f.cog.y);
+    for (u32 n : sim.objs[cars[size_t(k)].obj].nodes) {
+      const V3 q = sim.pos[n] - f.cog;
+      hl = std::max(hl, std::fabs(dot(q, f.fwd)));
+      hw = std::max(hw, std::fabs(dot(q, f.left)));
+      top = std::max(top, sim.pos[n].z - ground);
+    }
+    tarpSize[k] = V3{hl, hw, top + 0.05};
+  }
   for (const Crate& c : crates) moveMarker(sim, c.marker, c.p);
   for (int k = 0; k < kCars; k++)
     for (const NodeGroup& g : rigs[kTanks + k].groups) {
@@ -1523,9 +1537,14 @@ void Duel::stepPlayers(const Intent in[kMaxPlayers]) {
       pl.medkits--;
       s.hp = std::min(s.hp + kMedkitHeal, 100.0);
     }
-    if (in[i].net && phase == PLAYING && pl.vehicle >= 0 && pl.vehicle < kTanks && pl.items[IT_NET] > 0) {
-      Tank& t = tanks[pl.vehicle];
-      if (!t.netOn && t.netClock <= 0 && std::fabs(t.speed) < 1.0) t.netClock = 3.0;
+    if (in[i].net && phase == PLAYING && pl.vehicle >= 0 && pl.items[IT_NET] > 0) {
+      if (pl.vehicle < kTanks) {
+        Tank& t = tanks[pl.vehicle];
+        if (!t.netOn && t.netClock <= 0 && std::fabs(t.speed) < 1.0) t.netClock = 3.0;
+      } else {
+        Vehicle& car = cars[size_t(pl.vehicle - kTanks)];
+        if (!car.netOn && car.netClock <= 0 && std::fabs(frames[pl.vehicle].speed) < 1.0) car.netClock = 3.0;
+      }
     }
     stepDrone(i, in[i], kDt);
     if (pl.vehicle < 0 && phase == PLAYING && !pl.droneLive) {
@@ -1821,6 +1840,25 @@ void Duel::step(const Intent in[kMaxPlayers]) {
       }
     }
     if (t.netOn && std::fabs(t.speed) > 1.5) t.netOn = false;
+  }
+  // The same for a car, and a tarpaulin.
+  for (int k = 0; k < kCars; k++) {
+    Vehicle& car = cars[size_t(k)];
+    const double carSpeed = std::fabs(frames[kTanks + k].speed);
+    if (car.netClock > 0) {
+      if (carSpeed > 1.5) {
+        car.netClock = 0;
+      } else {
+        car.netClock -= kDt;
+        if (car.netClock <= 0) {
+          car.netClock = 0;
+          car.netOn = true;
+          for (Player& pl : players)
+            if (pl.vehicle == kTanks + k && pl.items[IT_NET] > 0) pl.items[IT_NET]--;
+        }
+      }
+    }
+    if (car.netOn && (carSpeed > 1.5 || car.exploded)) car.netOn = false;
   }
   // A tank that has just lost armour: whoever sits in it feels it, the one on the other side gets the credit.
   for (int v = 0; v < kTanks; v++) {
