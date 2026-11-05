@@ -5435,6 +5435,8 @@ static void runGame() {
       view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
       view.heliNoise = G.snap.heliNoise;
+      view.drivenEngines = G.snap.drivenEngines;
+      view.buggy = G.snap.buggy;
       view.board = G.snap.board;
       view.track = G.snap.track;
       view.killer = G.snap.killer;
