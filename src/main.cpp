@@ -2382,6 +2382,20 @@ struct Game {
       }
       fillSnapshot(msg);
       snap.watchOn = watching >= 0;
+      // Over the heads of one's own side. In a vehicle over that, one above the other if two sit in it.
+      snap.mates.clear();
+      if (state == NET_IN && !replaying && (phaseNow == Duel::PLAYING || phaseNow == Duel::FINISHED)) {
+        for (int k = 0; k < Duel::kMaxPlayers; k++) {
+          if (k == mySlot || names[k].empty() || Duel::teamOf(k) != Duel::teamOf(mySlot) || !duel.players[k].present || drawnSoldier[k].hp <= 0) continue;
+          const int inside = drawnVehicle[k];
+          Snapshot::Mate mate;
+          mate.at = inside >= 0 ? duel.frames[inside].cog + V3{0, 0, duel.frames[inside].height + 2.0 + duel.players[k].seat * 1.4} : drawnSoldier[k].p + V3{0, 0, Soldier::kHeight + 0.5};
+          mate.name = names[k];
+          mate.hp = float(drawnSoldier[k].hp);
+          mate.team = Duel::teamOf(k);
+          snap.mates.push_back(mate);
+        }
+      }
       // The table of the score: on each side, whoever has the most kills first.
       snap.board.clear();
       for (int k = 0; k < Duel::kMaxPlayers; k++) {
@@ -3602,6 +3616,25 @@ static void runGame() {
         if (std::fmod(tNow, 2.5) < dt) sendC.fire = true;
       }
     }
+    if (scriptMode == 77 && netState == Game::NET_IN) {
+      // What one's own side looks like over their heads, then where a tapped computer says the others are.
+      if (phase == Duel::CHOOSING && !pickReady) {
+        pickReady = true;
+        panelKind = PANEL_NONE;
+      }
+      static double wake = 0;
+      static int stage = 0;
+      if (inMatch && wake == 0) wake = tNow + 4.0;
+      if (inMatch && tNow > wake && stage < 5) {
+        switch (stage++) {
+          case 0: printf("Mitspieler: %zu\n", view.mates.size()); wantShot = true; wake = tNow + 12.0; break;
+          case 1: printf("Mitspieler spaeter: %zu\n", view.mates.size()); wantShot = true; wake = tNow + 0.5; break;
+          case 2: sendC.query = true; wake = tNow + 1.5; break;
+          case 3: mapOpen = true; wake = tNow + 1.0; break;
+          case 4: printf("Standorte: %zu, angezapft %d, Wartezeit %.0f\n", view.foot.fixes.size(), int(view.foot.tapped), view.foot.fixWait); for (const auto& f : view.foot.fixes) printf("  %s %.0f %.0f\n", f.name.c_str(), f.at.x, f.at.y); fflush(stdout); wantShot = true; break;
+        }
+      }
+    }
     if (scriptMode == 76 && gTestPad && netState == Game::NET_IN) {
       // The table of the score on the controller: held it shows, tapped it is the chat as ever.
       if (phase == Duel::CHOOSING && !pickReady) {
@@ -4450,6 +4483,7 @@ static void runGame() {
       view.selfTrack = G.snap.selfTrack;
       view.chat = G.snap.chat;
       view.board = G.snap.board;
+      view.mates = G.snap.mates;
       view.boardWins[0] = G.snap.boardWins[0];
       view.boardWins[1] = G.snap.boardWins[1];
       view.foot = G.snap.foot;

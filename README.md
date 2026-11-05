@@ -91,6 +91,8 @@ Im Spiel: **Online spielen**, Benutzername, Adresse und Port eintragen, **Verbin
 
 **Zuschauen:** Wer im Team fällt, sieht danach einem Mitspieler über die Schulter, der noch lebt. Maus oder rechter Stick drehen die Kamera, Linksklick (Controller: X) wechselt zum nächsten. Dem Gegner schaut niemand zu.
 
+**Mitspieler:** Über jedem Mitspieler stehen sein Name in der Farbe des Teams (West blau, Ost orange) und seine Leben, auch durch Wände und über Fahrzeugen. Auf der Karte sind lebende Mitspieler mit Namen in derselben Farbe zu sehen. Namen dürfen keine Leerzeichen enthalten, im Menü lassen sie sich gar nicht erst eintippen. Der Server macht aus einem Leerzeichen sonst einen Unterstrich und hängt bei doppelten Namen eine Zahl an.
+
 **Punktestand:** Solange TAB gehalten wird (Controller: Back gedrückt halten), zeigt eine Tabelle den Stand der Teams und alle Spieler mit ihren Kills und Toden. Kurz auf Back getippt öffnet wie bisher den Chat. Ein Kill zählt für den Gegner, der einen zuletzt getroffen hat, wenn das nicht länger als 30 Sekunden her ist. Wer in seinem Fahrzeug stirbt, zählt für den, der das Fahrzeug zuletzt getroffen hat. Teamkills zählen nicht als Kill, der Tod zählt aber trotzdem. Die Zahlen gelten über alle Matches eines Servers und beginnen neu, wenn jemand Neues einen Platz übernimmt.
 
 **Bots:** `beanng-server --bots 1` lässt dich gegen den Rechner antreten, `--players 4 --bots 3` ergibt zwei gegen zwei mit einem Bot an deiner Seite. Fehlen Plätze, erhöht `--bots` die Spielerzahl von selbst, und auf der Serverkonsole geht es mit `/bot add` und `/bot remove` auch mitten im Spiel. Verbindet sich ein Mensch und alle Plätze sind belegt, übernimmt er den Platz eines Bots, und zwar dort, wo der gerade steht.

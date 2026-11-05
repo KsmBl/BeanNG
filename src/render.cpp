@@ -2282,6 +2282,7 @@ struct Renderer::Impl {
 
   // ---- UI toolkit. Everything is a coloured triangle or a distance-field glyph, in pixels.
   struct Col { float r, g, b, a; };
+  static Col teamColor(int team) { return team == 0 ? Col{.45f, .72f, 1.f, 1.f} : Col{1.f, .62f, .38f, 1.f}; }
   struct Glyph { float u0, v0, u1, v1, xo, yo, w, h, adv; };
   std::unordered_map<u32, Glyph> glyphs;
   GLuint atlasTex = 0;
@@ -2915,6 +2916,13 @@ struct Renderer::Impl {
         rrect(sx - 16 * u, sy - .75f * u, 32 * u, 1.5f * u, 0, {1, .55f, .15f, 1});
         rrect(sx - .75f * u, sy - 16 * u, 1.5f * u, 32 * u, 0, {1, .55f, .15f, 1});
       }
+      // One's own side, in the colour of the team and by name.
+      for (const Snapshot::Mate& mate : s.mates) {
+        dot2(mate.at, 5 * u, teamColor(mate.team));
+        float sx, sy;
+        toMap(mate.at.x, mate.at.y, sx, sy);
+        labelMid(sx, sy - 13 * u, mate.name.c_str(), 13 * u, teamColor(mate.team));
+      }
       dot2(o.map.me, 6 * u, {.35f, .85f, .95f, 1});
       {
         float sx, sy;
@@ -3023,6 +3031,30 @@ struct Renderer::Impl {
       }
     }
 
+    // ---- One's own side: over each of them the name in the colour of the team, and how much life is left.
+    if (o.scope <= 0 && !o.map.open) {
+      const Mat4& m = camVP;
+      for (const Snapshot::Mate& mate : s.mates) {
+        const V3 p = mate.at;
+        const double qx = m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12];
+        const double qy = m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13];
+        const double qw = m.m[3] * p.x + m.m[7] * p.y + m.m[11] * p.z + m.m[15];
+        if (qw < 0.1) continue;
+        const float sx = float((qx / qw * .5 + .5) * W), sy = float((.5 - qy / qw * .5) * H);
+        const float nameW = textWidth(mate.name.c_str(), 15 * u);
+        const float boxW = std::max(nameW + 16 * u, 92 * u), boxH = 38 * u;
+        const float x0 = sx - boxW * .5f, y0 = sy - boxH;
+        rrect(x0, y0, boxW, boxH, 6 * u, {.03f, .035f, .045f, .6f});
+        labelMid(sx, y0 + 11 * u, mate.name.c_str(), 15 * u, teamColor(mate.team));
+        const float share = std::clamp(mate.hp / 100.f, 0.f, 1.f);
+        const float barW = boxW - 46 * u;
+        rrect(x0 + 8 * u, y0 + 25 * u, barW, 5 * u, 2 * u, {1, 1, 1, .2f});
+        rrect(x0 + 8 * u, y0 + 25 * u, barW * share, 5 * u, 2 * u, share > .5f ? Col{.3f, .85f, .4f, 1} : (share > .25f ? Col{.95f, .75f, .2f, 1} : Col{.95f, .25f, .2f, 1}));
+        snprintf(buf, sizeof buf, "%.0f", std::ceil(mate.hp));
+        labelMid(x0 + boxW - 19 * u, y0 + 27 * u, buf, 13 * u, white);
+      }
+    }
+
     // ---- The score, for as long as the key is held: each side with its wins, each player with kills and deaths.
     if (o.showBoard && !s.board.empty()) {
       static const char* const kTeamName[2] = {"Team West", "Team Ost"};
@@ -3042,7 +3074,7 @@ struct Renderer::Impl {
         const float cx = x0 + float(t) * (colW + gap);
         const float killX = cx + colW - 88 * u, deathX = cx + colW - 26 * u;
         const Col dim{1, 1, 1, .55f};
-        const Col side = t == 0 ? Col{.45f, .72f, 1.f, 1.f} : Col{1.f, .62f, .38f, 1.f};
+        const Col side = teamColor(t);
         label(cx + 8 * u, y0 + 52 * u, kTeamName[t], 20 * u, side);
         label(cx + 8 * u, y0 + 88 * u, "Spieler", 14 * u, dim);
         labelMid(killX, y0 + 88 * u, "Kills", 14 * u, dim);

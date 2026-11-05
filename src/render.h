@@ -84,6 +84,14 @@ struct Snapshot {
     bool alive = true, me = false;
   };
   std::vector<BoardRow> board;
+  // One's own side, for the name and health over each of them.
+  struct Mate {
+    V3 at;
+    std::string name;
+    float hp = 0;
+    int team = 0;
+  };
+  std::vector<Mate> mates;
   u32 boardWins[2] = {};
   std::string chatInput;
   bool chatOpen = false;
