@@ -1517,7 +1517,7 @@ bool Bot::toHeli(Duel& d, int me) {
   if (wantHeli_ >= 0 && (!usable(wantHeli_) || wantHeliClock_ > 60.0)) wantHeli_ = -1;
   if (wantHeli_ < 0) {
     double best = 400.0 * 400.0;
-    for (int h = 0; h < Duel::kHelis; h++) {
+    for (int h = 0; h < Duel::kFlying; h++) {
       if (!usable(h)) continue;
       const double dist = len2(flat(d.helis[h].p - s.p)) * (Duel::teamOf(h) == Duel::teamOf(me) ? 1.0 : 4.0);
       if (dist < best) best = dist, wantHeli_ = h;

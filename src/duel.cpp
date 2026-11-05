@@ -34,6 +34,23 @@ void Duel::build() {
       turnNodes(sim, first, u32(sim.pos.size()), p, base.facing);
     }
   }
+  // The buggies: tanks in all but size, beyond the helicopters. Same nodes, same beams, drawn in closer.
+  for (int side = 0; side < 2; side++) {
+    const World::Base& base = world.base(side);
+    const double cx = std::cos(base.facing), sx = std::sin(base.facing);
+    for (int k = 0; k < kBuggies / 2; k++, at++) {
+      static constexpr double kAlongBuggy[2] = {35.0, 44.0};
+      V3 p = base.centre + V3{cx * -5.0 - sx * kAlongBuggy[k], sx * -5.0 + cx * kAlongBuggy[k], 0};
+      p.z = world.height(p.x, p.y);
+      spawn[at] = p;
+      yaw[at] = base.facing;
+      tanks[at] = buildLeopard(sim, p, &rigs[at], TK_MG, HK_BUGGY);
+      tanks[at].ammo = tanks[at].spec().ammo;
+      const u32 first = sim.objs[tanks[at].hullObj].nodeStart;
+      tankFirst[at] = first;
+      turnNodes(sim, first, u32(sim.pos.size()), p, base.facing);
+    }
+  }
   tankNodes = tankFirst[1] - tankFirst[0];
   tanksEnd = u32(sim.pos.size());
   for (int side = 0; side < 2; side++) {
@@ -257,9 +274,9 @@ void Duel::updateFrames() {
     f.left = t.left;
     f.up = t.up;
     f.speed = t.speed;
-    f.halfLength = 3.6;
-    f.halfWidth = 1.75;
-    f.height = 2.6;
+    f.halfLength = 3.6 * t.hullSpec().sizeX;
+    f.halfWidth = 1.75 * t.hullSpec().sizeY;
+    f.height = t.hull == HK_BUGGY ? 2.1 : 2.6;
   }
   for (size_t i = 0; i < cars.size(); i++) {
     const Vehicle& v = cars[i];
@@ -657,7 +674,7 @@ const V3 Duel::kTarpRest{0, 0, -420};
 const V3 Duel::kHeliRest{0, 0, -440};
 
 void Duel::poseHeli(Sim& sim, u32 first, const Heli& h) {
-  static constexpr V3 kMid[4] = {V3{0, 0, 1.5}, V3{0, 0, 3.2}, V3{-6.7, 0.25, 2.7}, V3{Heli::kMuzzleAhead - 0.4, 0, Heli::kMuzzleHigh}};
+  const V3 kMid[4] = {V3{0, 0, 1.5}, V3{0, 0, 3.2}, V3{-6.7, 0.25, 2.7}, V3{Heli::kMuzzleAhead - 0.4, 0, Heli::kMuzzleHigh}};
   static constexpr V3 kHalf[4] = {V3{4, 2, 2}, V3{1, 1, 0.5}, V3{0.5, 0.5, 0.5}, V3{0.5, 0.25, 0.25}};
   const V3 f = h.fwd(), l = h.left(), u = h.up();
   const double cs = std::cos(h.spin), ss = std::sin(h.spin), ct = std::cos(h.tailSpin), st = std::sin(h.tailSpin);
@@ -739,7 +756,7 @@ bool Duel::bulletInHeli(int h, V3 from, V3 to, const Bullet& b) {
   const auto note = [&](V3 where) {
     if (b.kind >= WP_RPG) return;
     H.hitBy = b.owner;
-    H.hitWeapon = weaponOfBullet(b.kind, b.gatling);
+    H.hitWeapon = (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling));
     noteHit(-1, b.owner, from);
     if (pilot >= 0) noteHit(pilot, -1, from);
     sim.event(EV_SPARK, where, H.up(), 0.5f);
@@ -781,7 +798,7 @@ bool Duel::bulletInHeli(int h, V3 from, V3 to, const Bullet& b) {
       note(cockpit);
       if (pilot >= 0) {
         players[pilot].soldier.hp -= kWeapons[b.kind].damage * 0.8;
-        creditHurt(pilot, b.owner, false, Shot{}, weaponOfBullet(b.kind, b.gatling));
+        creditHurt(pilot, b.owner, false, Shot{}, (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling)));
         sim.event(EV_BLOOD, cockpit, seg * 0.0, 0.7f);
       }
     }
@@ -797,7 +814,6 @@ bool Duel::bulletInHeli(int h, V3 from, V3 to, const Bullet& b) {
   return false;
 }
 
-// The flying, and nothing else: the same here as on the machine of whoever is flying it, who sees the answer at once.
 bool Duel::flyHeli(Heli& H, const World& world, const WalkInput* in, double dt) {
   const bool sound = H.engine > 0 && H.rotor > 0 && H.tail > 0 && !H.crashing;
   const bool flying = in && sound;
@@ -1611,7 +1627,7 @@ void Duel::stepBullets(double dt) {
             // In the head it counts for more than in the boots.
             const double z = near.z - foot.z;
             players[q].soldier.hp -= kWeapons[b.kind].damage * (z > 1.5 - 0.55 * players[q].soldier.crouch ? 2.0 : (z < 0.7 ? 0.7 : 1.0));
-            creditHurt(q, b.owner, false, Shot{}, weaponOfBullet(b.kind, b.gatling));
+            creditHurt(q, b.owner, false, Shot{}, (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling)));
             players[q].lastBlow = norm(b.v) * (b.kind == WP_SNIPER ? 11.0 : 2.5);
             noteHit(q, b.owner, from);
             sim.event(EV_BLOOD, near, b.v * 0.02, b.kind == WP_SNIPER ? 1.f : 0.45f);
@@ -1627,12 +1643,37 @@ void Duel::stepBullets(double dt) {
       for (int v = 0; v < kTanks && !stop; v++) {
         const V3 moved = frames[v].cog - past[(pastAt - backSteps + kPastSteps * 2) % kPastSteps].tank[v];
         if (len2(b.p - frames[v].cog + moved * -1.0) > 15.0 * 15.0 && len2(from - frames[v].cog) > 15.0 * 15.0) continue;
+        if (b.mg && b.owner >= 0 && players[b.owner].vehicle == v) continue;  // past one's own cage
+        // On the buggy whoever sits there sits in the open.
+        if (tanks[v].hull == HK_BUGGY && !tanks[v].destroyed) {
+          const V3 seat = frames[v].cog + frames[v].fwd * -0.3 + frames[v].up * 0.3;
+          const V3 s0 = from + moved, sd = b.p - from;
+          const V3 q = s0 + sd * clampd(dot(seat - s0, sd) / std::max(len2(sd), 1e-9), 0, 1);
+          if (len(q - seat) < 0.42) {
+            bool hitAnyone = false;
+            for (int who = 0; who < kMaxPlayers; who++) {
+              Player& sat = players[who];
+              if (!sat.present || sat.vehicle != v || who == b.owner) continue;
+              sat.soldier.hp -= kWeapons[b.kind].damage;
+              creditHurt(who, b.owner, false, Shot{}, (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling)));
+              noteHit(who, -1, from);
+              sim.event(EV_BLOOD, seat, sd * 0.01, 0.5f);
+              hitAnyone = true;
+            }
+            if (hitAnyone) {
+              stop = true;
+              at = b.p;
+              noteHit(-1, b.owner, from);
+              continue;
+            }
+          }
+        }
         if (tanks[v].bulletHit(sim, from + moved, b.p + moved, force)) {
           stop = true;
           at = b.p;
           noteHit(-1, b.owner, from);
           tanks[v].hitBy = b.owner;
-          tanks[v].hitWeapon = weaponOfBullet(b.kind, b.gatling);
+          tanks[v].hitWeapon = (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling));
           for (int who = 0; who < kMaxPlayers; who++)
             if (players[who].vehicle == v) noteHit(who, -1, from);
         }
@@ -1661,7 +1702,7 @@ void Duel::stepBullets(double dt) {
           if (v >= kTanks && !vehicleDead(v) && b.kind < WP_RPG) {
             inCar = true;
             carHitBy[v - kTanks] = b.owner;
-            carHitWeapon[v - kTanks] = weaponOfBullet(b.kind, b.gatling);
+            carHitWeapon[v - kTanks] = (b.mg ? u8(KW_MG) : weaponOfBullet(b.kind, b.gatling));
             bulletInCar(v - kTanks, p - norm(seg) * 0.5, norm(seg), b.kind, b.owner, b.gatling);
           }
         }
@@ -2365,7 +2406,8 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     if (aimer >= 0) {
       crew.aimPoint = in[aimer].c.aimPoint;
       crew.indirect = in[aimer].c.indirect;
-      crew.fire = in[aimer].c.fire;
+      // A machine gun goes on for as long as the trigger is held.
+      crew.fire = in[aimer].c.fire || (t.kind == TK_MG && in[aimer].fireHeld);
       crew.launch = in[aimer].c.launch;
     }
     const Controls* c = &crew;
@@ -2376,6 +2418,26 @@ void Duel::step(const Intent in[kMaxPlayers]) {
         sim.wake(t.turretObj);
       }
       t.update(sim, *c, kDt);
+      if (t.mgShots > 0) {
+        t.mgShots = 0;
+        randState = randState * 1664525u + 1013904223u;
+        const double a = double(randState >> 16) / 65535.0 * 2.0 * PI;
+        randState = randState * 1664525u + 1013904223u;
+        const double r = double(randState >> 16) / 65535.0 * 0.007;
+        const V3 dir = norm(t.gunDir + V3{std::cos(a) * r, std::sin(a) * r, std::cos(a + 1.3) * r});
+        Bullet b;
+        b.p = t.muzzle;
+        b.v = dir * kWeapons[WP_AR].speed + frames[i].fwd * t.speed;
+        b.owner = aimer;
+        b.kind = WP_AR;
+        b.lag = aimer >= 0 ? in[aimer].lag : 0.0;
+        b.mg = true;
+        b.trail = true;
+        b.trailFrom = b.p;
+        bullets.push_back(b);
+        sim.event(EV_MUZZLE, b.p, dir, muzzleSize(WP_AR));
+        sim.event(EV_TRACER, b.p, b.v, 1.f);
+      }
     } else {
       // Asleep nothing reads its speed any more, and what it last said must not outlive it: someone walking up to a
       // parked tank would be run over by a number.

@@ -28,8 +28,6 @@ double engineTorque(double rpm) {
   return 3400.0 * clampd(shape, 0.4, 1.0) * 1.0;
 }
 
-V3 toWorld(V3 spawn, double x, double y, double z) { return spawn + V3{kNoseX - x, y, z}; }
-
 // Barycentric weights of a point in a tetrahedron. A force split by them keeps force and moment exact.
 void tetWeights(const V3 n[4], V3 point, double w[4]) {
   const V3 e1 = n[1] - n[0], e2 = n[2] - n[0], e3 = n[3] - n[0];
@@ -44,27 +42,32 @@ void tetWeights(const V3 n[4], V3 point, double w[4]) {
 
 const TurretSpec& turretSpec(TurretKind k) {
   //                       name               mesh                       mass power  gun   recoil  force   reload ammo speed  blast  radius life  pitch      yaw pitch missiles
-  static const TurretSpec table[TK_COUNT] = {
+  static const TurretSpec table[TK_COUNT + 1] = {
       {"105-mm-Kanone", "assets/leopard.mesh", 1.00, 1.00, 5.45, 0.34, 200e3, 4.0, 8, 1100.0, 2200.0, 15.0, 8.0, -9, 20, 40, 22, 0},
       {"Leichte Kanone", "assets/leopard_light.mesh", 0.40, 1.00, 2.90, 0.06, 12e3, 0.3, 120, 1300.0, 170.0, 4.0, 6.0, -8, 35, 70, 45, 0},
       // Slow enough that the whole map lies inside the high arc: half a minute in the air from end to end.
       {"Artillerie", "assets/leopard_arty.mesh", 1.80, 0.70, 6.40, 0.50, 260e3, 12.0, 8, 160.0, 12000.0, 30.0, 60.0, -3, 78, 14, 10, 0},
       {"Lenkraketen", "assets/leopard_missile.mesh", 0.85, 0.95, 2.20, 0.05, 8e3, 3.0, 20, 700.0, 260.0, 5.0, 6.0, -6, 20, 40, 30, 8},
+      // 400 rounds a minute. What comes out is a rifle's bullet, not a shell: the game takes it from here, see Duel::step.
+      {"MG", "assets/buggy.mesh", 0.06, 1.00, 1.35, 0.0, 0.0, 60.0 / 400.0, 800, 800.0, 0.0, 0.0, 0.0, -14, 50, 260, 170, 0},
   };
   return table[k];
 }
 
 const HullSpec& hullSpec(HullKind k) {
   // A heavy one that takes twice the hits and is in no hurry, a light one that outruns everything and does not last.
-  static const HullSpec table[HK_COUNT] = {
+  static const HullSpec table[HK_COUNT + 1] = {
       {"Mittlerer Panzer", "", 1.0, 1.0, 1.0, 1.6, 0.97},
       {"Schwerer Panzer", "_heavy", 1.45, 1.05, 0.5, 1.6, 1.36},
       {"Schneller Panzer", "_fast", 0.62, 0.95, 1.7, 2.4, 0.68},
+      // A frame of tube: short, narrow and light, geared for 150 km/h. One shell ends it; a tree bends it.
+      {"Kettenbuggy", "", 0.10, 1.0, 5.0, 3.6, 0.467, 0.30, 0.66, 0.68, 0.40, 0.11, 140.0},
   };
   return table[k];
 }
 
 std::string tankMeshFile(HullKind hull, TurretKind turret) {
+  if (hull == HK_BUGGY) return "assets/buggy.mesh";
   static const char* kTurret[TK_COUNT] = {"", "_light", "_arty", "_missile"};
   return std::string("assets/leopard") + hullSpec(hull).meshPart + kTurret[turret] + ".mesh";
 }
@@ -74,9 +77,14 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
   T.kind = kind;
   T.hull = hullKind;
   const double heft = hullSpec(hullKind).massScale;
+  const double gearMass = hullSpec(hullKind).gearMass, sizeX = hullSpec(hullKind).sizeX, sizeY = hullSpec(hullKind).sizeY, top = hullSpec(hullKind).sizeTop;
+  const auto toWorld = [&](V3 from, double x, double y, double z) { return from + V3{(kNoseX - x) * sizeX, y * sizeY, z}; };
+  const Mat mBraceG{mBrace.k * gearMass, mBrace.c * gearMass, 0, 0, 0, 0, 0};
   // Lighter means softer to go with it, for the same reason as the turret's, and the springs carry what there is.
-  const Mat mArmourH{mArmour.k * std::min(heft, 1.0), mArmour.c * std::min(heft, 1.0), mArmour.yC, mArmour.yT, mArmour.hard, mArmour.maxStrain, 0};
-  const double totalScale = (heft * 33.5 + 9.0) / 42.5;
+  // The buggy's tube gives long before plate would: that is what soaks up a crash, and it shows.
+  const double giving = hullKind == HK_BUGGY ? 0.035 : 1.0;
+  const Mat mArmourH{mArmour.k * std::min(heft, 1.0), mArmour.c * std::min(heft, 1.0), mArmour.yC * giving, mArmour.yT * giving, mArmour.hard * giving, mArmour.maxStrain, 0};
+  const double totalScale = (heft * 33.5 + 9.0 * gearMass) / 42.5;
   const TurretSpec& spec = turretSpec(kind);
   T.reloadTime = spec.reload;
   T.missiles = spec.missiles;
@@ -163,21 +171,21 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
       const double x = kWheelX[i];
       Tank::RoadWheel w;
       w.left = side == 0;
-      w.in = sim.addNode(toWorld(spawn, x, sg * 1.09, Tank::kWheelR), 190, NF_COLLIDE, 0.6f);
-      w.out = sim.addNode(toWorld(spawn, x, sg * 1.61, Tank::kWheelR), 190, NF_COLLIDE, 0.6f);
-      const u32 p0 = sim.addNode(toWorld(spawn, x - 0.40, sg * 1.04, 0.62), 110, 0);
-      const u32 p1 = sim.addNode(toWorld(spawn, x - 0.40, sg * 0.70, 0.60), 110, 0);
-      const u32 top = sim.addNode(toWorld(spawn, x, sg * 1.20, 1.18), 80, 0);
-      tie(p0, 5, mBrace);
-      tie(p1, 5, mBrace);
-      tie(top, 5, mBrace);
-      sim.addBeam(p0, p1, mBrace);
-      sim.addBeam(p0, top, mBrace);
-      sim.addBeam(w.in, w.out, mBrace);
-      sim.addBeam(w.in, p0, mBrace);
-      sim.addBeam(w.in, p1, mBrace);
-      sim.addBeam(w.out, p0, mBrace);
-      sim.addBeam(w.out, p1, mBrace);
+      w.in = sim.addNode(toWorld(spawn, x, sg * 1.09, Tank::kWheelR), 190 * gearMass, NF_COLLIDE, 0.6f);
+      w.out = sim.addNode(toWorld(spawn, x, sg * 1.61, Tank::kWheelR), 190 * gearMass, NF_COLLIDE, 0.6f);
+      const u32 p0 = sim.addNode(toWorld(spawn, x - 0.40, sg * 1.04, 0.62), 110 * gearMass, 0);
+      const u32 p1 = sim.addNode(toWorld(spawn, x - 0.40, sg * 0.70, 0.60), 110 * gearMass, 0);
+      const u32 top = sim.addNode(toWorld(spawn, x, sg * 1.20, 1.18), 80 * gearMass, 0);
+      tie(p0, 5, mBraceG);
+      tie(p1, 5, mBraceG);
+      tie(top, 5, mBraceG);
+      sim.addBeam(p0, p1, mBraceG);
+      sim.addBeam(p0, top, mBraceG);
+      sim.addBeam(w.in, w.out, mBraceG);
+      sim.addBeam(w.in, p0, mBraceG);
+      sim.addBeam(w.in, p1, mBraceG);
+      sim.addBeam(w.out, p0, mBraceG);
+      sim.addBeam(w.out, p1, mBraceG);
       const bool end = i == 0 || i == 6;  // real dampers sit on the first and last stations
       const Mat spring{2.0e5 * totalScale, (end ? 9000.0 : 3000.0) * totalScale, 0, 0, 0, 0, 0};
       constexpr double kPreload = 12.9e3 / 2.0e5;
@@ -189,11 +197,11 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
     }
     // Sprocket and idler are fixed to the hull: two nodes each, to draw them between.
     auto axle = [&](double x, double z, u32 out[2]) {
-      out[0] = sim.addNode(toWorld(spawn, x, sg * 1.09, z), 90, NF_COLLIDE, 0.5f);
-      out[1] = sim.addNode(toWorld(spawn, x, sg * 1.61, z), 90, NF_COLLIDE, 0.5f);
-      tie(out[0], 5, mBrace);
-      tie(out[1], 5, mBrace);
-      sim.addBeam(out[0], out[1], mBrace);
+      out[0] = sim.addNode(toWorld(spawn, x, sg * 1.09, z), 90 * gearMass, NF_COLLIDE, 0.5f);
+      out[1] = sim.addNode(toWorld(spawn, x, sg * 1.61, z), 90 * gearMass, NF_COLLIDE, 0.5f);
+      tie(out[0], 5, mBraceG);
+      tie(out[1], 5, mBraceG);
+      sim.addBeam(out[0], out[1], mBraceG);
     };
     axle(kSprocketX, kSprocketZ, T.sprocket[side]);
     axle(kIdlerX, kIdlerZ, T.idler[side]);
@@ -202,7 +210,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
   sim.objs[T.hullObj].armoured = true;
   T.rigidNodes_ = hull;
   for (u32 i = sim.objs[T.hullObj].nodeStart; i < sim.objs[T.hullObj].nodeStart + sim.objs[T.hullObj].nodeCount; i++)
-    if (sim.mass[i] < 200.0 && sim.mass[i] > 60.0 && std::find(hull.begin(), hull.end(), i) == hull.end()) T.rigidNodes_.push_back(i);
+    if (sim.mass[i] < 200.0 * gearMass && sim.mass[i] > 60.0 * gearMass && std::find(hull.begin(), hull.end(), i) == hull.end()) T.rigidNodes_.push_back(i);
   std::sort(T.rigidNodes_.begin(), T.rigidNodes_.end());
   T.rigidNodes_.erase(std::unique(T.rigidNodes_.begin(), T.rigidNodes_.end()), T.rigidNodes_.end());
 
@@ -210,8 +218,10 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
   T.turretObj = sim.beginObj(OBJ_CAR, true);
   sim.objs[T.turretObj].armoured = true;
   const double tcx = 2.90, tcz = 1.34;  // the ring's centre, design coordinates
-  T.turretAxis = V3{kNoseX - tcx, 0, tcz};
-  auto addTurretNode = [&](double f, double l, double z, double m) {
+  // The buggy's gun goes round on a ring on the roof of its cage, well above any hull.
+  T.turretAxis = hullKind == HK_BUGGY ? V3{0.1, 0, 1.74} : V3{kNoseX - tcx, 0, tcz};
+  auto addTurretNode = [&](double f0, double l0, double z0, double m) {
+    const double f = f0 * top, l = l0 * top, z = z0 * top;
     const u32 n = sim.addNode(spawn + T.turretAxis + V3{f, l, z}, m * turretScale, NF_COLLIDE, 0.5f);
     T.turretNodes.push_back(n);
     T.turretRest.push_back(V3{f, l, z});
@@ -232,7 +242,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
   tn.push_back(addTurretNode(-1.55, 0, 0.84, 240));
   for (size_t a = 0; a < tn.size(); a++)
     for (size_t b = a + 1; b < tn.size(); b++) sim.addBeam(tn[a], tn[b], mCastT);
-  const V3 tCentre = spawn + T.turretAxis + V3{0, 0, 0.45};
+  const V3 tCentre = spawn + T.turretAxis + V3{0, 0, 0.45 * top};
   auto tface = [&](u32 a, u32 b, u32 c) {
     const V3 n = cross(sim.pos[b] - sim.pos[a], sim.pos[c] - sim.pos[a]);
     if (dot(n, sim.pos[a] - tCentre) < 0) std::swap(b, c);
@@ -246,9 +256,10 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
     tface(u0, u1, tn[16]);
   }
   // The gun: trunnions in the front of the turret, breech behind them, 5.5 m of barrel ahead.
-  T.trunnion = V3{0.92, 0, 0.56};
+  T.trunnion = hullKind == HK_BUGGY ? V3{0, 0, 0.30} : V3{0.92, 0, 0.56};
   auto addGunNode = [&](double f, double l, double z, double m) {
-    const V3 local{f, l, z};
+    // All but the muzzle draw in with the rest; that one is where the barrel ends, on any of them.
+    const V3 local = f == spec.gunLen ? V3{f, l, z} : V3{f * top, l * top, z * top};
     const u32 n = sim.addNode(spawn + T.turretAxis + T.trunnion + local, m * turretScale, 0, 0.5f);
     T.gunNodes.push_back(n);
     T.gunRest.push_back(local);
@@ -273,7 +284,7 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
   printf("%s, %s: %.1f t\n", hullSpec(hullKind).name, spec.name, total / 1000.0);
 
   if (rig) {
-    rig->noseX = kNoseX;
+    rig->noseX = hullKind == HK_BUGGY ? 0.0 : kNoseX;  // its model has the middle at zero
     rig->carWheels = false;
     rig->scratches = false;
     rig->groups.clear();
@@ -283,7 +294,10 @@ Tank buildLeopard(Sim& sim, V3 spawn, CarRig* rig, TurretKind kind, HullKind hul
     std::vector<u32> gun = T.gunNodes;
     rig->groups.push_back({"gun", gun});
     rig->links.clear();
-    for (const Tank::RoadWheel& w : T.wheels) {
+    for (size_t i = 0; i < T.wheels.size(); i++) {
+      // Drawn in closer the wheels would overlap: on the buggy every second one shows, and that is plenty.
+      if (hullKind == HK_BUGGY && i % 7 % 2 == 1) continue;
+      const Tank::RoadWheel& w = T.wheels[i];
       rig->links.push_back({w.in, w.out, float(Tank::kWheelR - 0.035), MM_RUBBER, 0});
       rig->links.push_back({w.in, w.out, 0.235f, MM_OLIVE, 2});
     }
@@ -339,6 +353,27 @@ void Tank::dampHull(Sim& sim, double dt) {
   for (u32 n : rigidNodes_) {
     const V3 rigid = v + cross(om, sim.pos[n] - c);
     sim.force[n] -= (sim.vel[n] - rigid) * (sim.mass[n] * k);
+  }
+}
+
+// A narrow thing with its gun high up, at 150 km/h on open ground. What makes it drivable is a low centre of gravity
+// a real one would get from its engine and fuel: here a hand that pulls it back on its tracks, and over if it has gone.
+void Tank::keepUpright(Sim& sim) {
+  if (destroyed) return;
+  const double weight = 6000.0 * 9.81;
+  const double stand = clampd(left.z / 0.35, -1.0, 1.0) + (up.z < 0 ? (left.z >= 0 ? 1.0 : -1.0) : 0.0);
+  double rollRate = 0;
+  const V3 vL = (sim.vel[refFL] + sim.vel[refRL]) * 0.5, vR = (sim.vel[refFR] + sim.vel[refRR]) * 0.5;
+  rollRate = dot(vL - vR, V3{0, 0, 1});
+  const double push = weight * (stand * 0.55 + clampd(rollRate * 0.18, -0.5, 0.5));
+  const V3 down{0, 0, -push};
+  addToHull(sim, cog + left * 0.9, down);
+  addToHull(sim, cog - left * 0.9, down * -1.0);
+  if (up.z < 0.7) {
+    // Nose in the air or into the ground: the same along it.
+    const double along = weight * clampd(fwd.z / 0.5, -1.0, 1.0) * 0.35;
+    addToHull(sim, cog + fwd * 1.5, V3{0, 0, -along});
+    addToHull(sim, cog - fwd * 1.5, V3{0, 0, along});
   }
 }
 
@@ -508,7 +543,8 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   const V3 trun = ring + eF * trunnion.x + eL * trunnion.y + up * trunnion.z;
   muzzle = trun + gF * sp_.gunLen;
   gunDir = gF;
-  sight = ring + eF * 0.25 + eL * 0.45 + up * 1.15;
+  // The howitzer's casemate is a tall box: its gunner looks out over the top of it, not from inside the plates.
+  sight = kind == TK_MG ? ring - eF * 0.1 + eL * 0.2 + up * 0.46 : kind == TK_ARTILLERY ? ring + eF * 0.6 + up * 1.85 : ring + eF * 0.25 + eL * 0.45 + up * 1.15;
 
   // ---- The gun runs back in its cradle and returns.
   recoilTime += dt;
@@ -542,8 +578,12 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
   } else if (in.fire && reload <= 0 && ammo != 0 && mod[TM_GUN] > 0) {
     if (ammo > 0) ammo--;
     reload = reloadTime * lerpd(1.5, 1.0, mod[TM_GUN]);
-    recoilTime = 0;
+    if (kind != TK_MG) recoilTime = 0;
     shotsFired += 1;
+    if (kind == TK_MG) {
+      // A rifle bullet with a trail. The game's own bullets are the ones that hit soldiers: it takes this from here.
+      mgShots++;
+    } else {
     Shell s;
     s.p = muzzle + gF * 0.2;
     // With the muzzle through a wall the shell still leaves on this side of it, and goes off right there.
@@ -560,6 +600,7 @@ void Tank::updateTurret(Sim& sim, const Controls& in, double dt) {
     s.v = shot * sp_.shellSpeed + vCog;
     shells.push_back(s);
     sim.event(EV_MUZZLE, muzzle, gF, 1.f);
+    }
   }
   if (recoilTime < 0.09) {
     // The recoil system stretches the blow of about 18 kN s out over 90 milliseconds.
@@ -603,7 +644,8 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   // the power goes into heating the oil, and the engine sits on its governor at any road speed.
   const double speedRatioNow = engineOmega > 1.0 ? clampd(inputOmega / engineOmega, 0, 1) : 0;
   const double lockUp = clampd((speedRatioNow - 0.40) / 0.30, 0, 1);
-  double Tconv = clampd(0.085 * slip * std::fabs(slip) + 180.0 * lockUp * slip, -5000.0, 5000.0);
+  const double convMost = hull == HK_BUGGY ? 12000.0 : 5000.0;
+  double Tconv = clampd(0.085 * slip * std::fabs(slip) + 180.0 * lockUp * slip, -convMost, convMost);
   // Standing with the foot off: the box holds still rather than creeping off.
   if (throttleAct < 0.03 && absV < 0.7) Tconv = 0;
   const double speedRatio = engineOmega > 1.0 ? clampd(inputOmega / engineOmega, 0, 1) : 0;
@@ -620,9 +662,9 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
   // Two tracks through a steering differential: drive shared equally, and steering power moving torque
   // from one track to the other. It works at a standstill too, which is what makes a pivot turn.
   const double Tdrive = Tconv * multiply * ratio * 0.88;
-  const double B = 2.7;  // distance between the tracks
+  const double B = 2.7 * hullSpec().sizeY;  // distance between the tracks
   // As tight as the grip allows at speed, about 0.8 g; a tank has no steering lock to hold it back.
-  const double yawWant = steerAct * (absV < 5.0 ? kPivotYawRate : clampd(7.5 / absV, 0.32, kPivotYawRate));
+  const double yawWant = steerAct * (absV < 5.0 ? kPivotYawRate : clampd((hull == HK_BUGGY ? 12.0 : 7.5) / absV, hull == HK_BUGGY ? 0.26 : 0.32, kPivotYawRate));
   const double dWant = yawWant * B / kSprocketR;  // right minus left track speed
   const double dNow = trackOmega[1] - trackOmega[0];
   const double Tsteer = clampd((dWant - dNow) * 60000.0, -520000.0, 520000.0);
@@ -691,7 +733,7 @@ void Tank::updateDrive(Sim& sim, const Controls& in, double dt) {
     const double Tres = (0.022 * Fn * kSprocketR + 120.0 + brakeAct * 90000.0 + in.handbrake * 90000.0 + parked);
     const double dv = Tres * dt / kTrackInertia;
     om = std::fabs(om) <= dv ? 0.0 : om - std::copysign(dv, om);
-    trackOmega[s] = clampd(om, -110.0, 110.0);
+    trackOmega[s] = clampd(om, -hullSpec().trackLimit, hullSpec().trackLimit);
     trackPhase[s] += trackOmega[s] * kSprocketR * dt;
   }
 }
@@ -871,8 +913,9 @@ void Tank::bulletSpots(const Sim& sim, V3 ring, BulletSpot out[kBulletSpots]) co
   const double cy = std::cos(turretYaw), sy = std::sin(turretYaw);
   const V3 eF = fwd * cy + left * sy, eL = left * cy - fwd * sy;
   // On the turret, and on the hull. Ahead is towards the nose; the reference point lies about 3 m back from it.
-  const auto onTurret = [&](double f, double l, double z) { return ring + eF * f + eL * l + up * z; };
-  const auto onHull = [&](double x, double l, double z) { return O + fwd * (3.0 - x) + left * l + up * z; };
+  const double top = hullSpec().sizeTop, sizeX = hullSpec().sizeX, sizeY = hullSpec().sizeY;
+  const auto onTurret = [&](double f, double l, double z) { return ring + (eF * f + eL * l + up * z) * top; };
+  const auto onHull = [&](double x, double l, double z) { return O + fwd * ((3.0 - x) * sizeX) + left * (l * sizeY) + up * z; };
   const BulletSpot spots[kBulletSpots] = {
       {TM_SIGHT, onTurret(0.32, -0.46, 0.92), 0.2, 1.0},       // the gunner's sight head, on the turret roof
       {TM_RANGE, onTurret(-0.05, 1.44, 0.54), 0.14, 1.0},      // the rangefinder's ends, sticking out of both sides
@@ -897,6 +940,10 @@ void Tank::bulletSpots(const Sim& sim, V3 ring, BulletSpot out[kBulletSpots]) co
       {TM_TRACK_R, onHull(5.6, -1.35, -0.75), 0.24, 3.0},
   };
   std::copy(spots, spots + kBulletSpots, out);
+  // The buggy's engine stands in the open behind the seat, where a tank has its grilles.
+  if (hull == HK_BUGGY)
+    for (int i = 0; i < kBulletSpots; i++)
+      if (out[i].module == TM_RADIATOR) out[i].module = TM_ENGINE;
 }
 
 void Tank::weakPoints(const Sim& sim, std::vector<WeakPoint>& out) const {
@@ -905,7 +952,7 @@ void Tank::weakPoints(const Sim& sim, std::vector<WeakPoint>& out) const {
   const V3 O = (sim.pos[refFL] + sim.pos[refFR] + sim.pos[refRL] + sim.pos[refRR]) * 0.25;
   // What a shell hurts when it lands this close, as in damageModules: the ammunition ends the tank.
   if (mod[TM_AMMO] > 0) out.push_back({ring - up * 0.35, 1.2, 0, "Munition"});
-  if (mod[TM_ENGINE] > 0) out.push_back({O - fwd * 2.6 - up * 0.25, 1.8, 3, "Motor"});
+  if (mod[TM_ENGINE] > 0) out.push_back({O - fwd * (2.6 * hullSpec().sizeX) - up * 0.25, 1.8 * hullSpec().sizeX, 3, "Motor"});
   BulletSpot spots[kBulletSpots];
   bulletSpots(sim, ring, spots);
   bool named[TM_COUNT] = {};
@@ -931,7 +978,18 @@ bool Tank::bulletHit(Sim& sim, V3 a, V3 b, double force) {
     sim.event(EV_SPARK, s.at, up, 0.5f);
     if (mod[TM_TRACK_L] <= 0) throwTrack(sim, 0);
     if (mod[TM_TRACK_R] <= 0) throwTrack(sim, 1);
+    if (hull == HK_BUGGY) takeHit(sim, force * 0.12, s.at);
     return true;
+  }
+  if (hull == HK_BUGGY) {
+    // No armour worth the name: what goes through the frame costs it a little, wherever it goes.
+    const double t = clampd(dot(cog - a, d) / dl2, 0, 1);
+    const V3 q = a + d * t - cog;
+    if (std::fabs(dot(q, fwd)) < 2.0 && std::fabs(dot(q, left)) < 0.9 && std::fabs(dot(q, up)) < 0.7) {
+      sim.event(EV_SPARK, a + d * t, up, 0.3f);
+      takeHit(sim, force * 0.05, a + d * t);
+      return true;
+    }
   }
   return false;
 }
@@ -1020,14 +1078,15 @@ void Tank::damageModules(Sim& sim, V3 c, double impulse) {
     const double t = clampd(dot(c - a, d) / std::max(len2(d), 1e-9), 0, 1);
     return len(a + d * t - c);
   };
-  const V3 trackL = O + left * 1.35 - up * 0.75, trackR = O - left * 1.35 - up * 0.75;
+  const double sizeX = hullSpec().sizeX, trackY = kTrackY * hullSpec().sizeY;
+  const V3 trackL = O + left * trackY - up * 0.75, trackR = O - left * trackY - up * 0.75;
   const double dist[TM_COUNT] = {
-      len(O - fwd * 2.6 - up * 0.25 - c),
+      len(O - fwd * (2.6 * sizeX) - up * 0.25 - c),
       len(ring_ + up * 0.05 - c),
       toSegment(ring_ + up * 0.56, muzzle),
       len(ring_ - up * 0.35 - c),
-      toSegment(trackL + fwd * 2.7, trackL - fwd * 3.5),
-      toSegment(trackR + fwd * 2.7, trackR - fwd * 3.5),
+      toSegment(trackL + fwd * (2.7 * sizeX), trackL - fwd * (3.5 * sizeX)),
+      toSegment(trackR + fwd * (2.7 * sizeX), trackR - fwd * (3.5 * sizeX)),
   };
   static constexpr double kReach[TM_COUNT] = {1.8, 1.7, 0.9, 1.2, 1.3, 1.3};
   for (int i = 0; i < TM_COUNT; i++) {
@@ -1040,6 +1099,16 @@ void Tank::damageModules(Sim& sim, V3 c, double impulse) {
 }
 
 Tank::ArmourHit Tank::armourAt(V3 at, V3 dir) const {
+  // Nothing on the buggy turns a shell aside: it goes in wherever it meets it.
+  if (hull == HK_BUGGY) {
+    ArmourHit open;
+    open.normal = up;
+    open.factor = 1.0;
+    open.facing = 1.0;
+    (void)at;
+    (void)dir;
+    return open;
+  }
   // On the turret, if it is above the ring and within reach of it: that has its own front, wherever the hull is going.
   const V3 r = at - ring_;
   const double overRing = dot(r, up);
@@ -1107,9 +1176,9 @@ void Tank::checkDamage(Sim& sim, double dt) {
   if (jump > 7.0 && crashHold_ <= 0) {
     crashHold_ = 0.4;
     const double over = (jump - 7.0) / 13.0;
-    const V3 at = cog + norm(vSlow_ - vCog) * -3.0;
-    takeHit(sim, over * over * 0.8, at);
-    if (jump > 13.0) {
+    const V3 at = cog + norm(vSlow_ - vCog) * (-3.0 * hullSpec().sizeX);
+    takeHit(sim, over * over * 0.8 * hullSpec().crash, at);
+    if (jump > (hull == HK_BUGGY ? 26.0 : 13.0)) {
       throwTrack(sim, 0);
       throwTrack(sim, 1);
     }
@@ -1188,6 +1257,7 @@ void Tank::update(Sim& sim, const Controls& in, double dt) {
   checkDamage(sim, dt);
   if (destroyed) return;
   dampHull(sim, dt);
+  if (hull == HK_BUGGY) keepUpright(sim);
   updateWheelLift(sim, dt);
   updateTurret(sim, in, dt);
   updateDrive(sim, in, dt);
@@ -1345,18 +1415,19 @@ void Tank::trackPath(const Sim& sim, int side, std::vector<V3>& out) const {
   const V3 restUp = norm(cross(restFwd, sim.rest[refFL] + sim.rest[refRL] - sim.rest[refFR] - sim.rest[refRR]));
   const V3 restLeft = cross(restUp, restFwd);
   const double groundZ = sim.rest[idler[side][0]].z - kIdlerZ;
-  const double y = (side == 0 ? 1.0 : -1.0) * kTrackY;
-  const double noseWorldX = sim.rest[idler[side][0]].x + kIdlerX;  // where design x = 0 was built
+  const double sizeX = hullSpec().sizeX;
+  const double y = (side == 0 ? 1.0 : -1.0) * kTrackY * hullSpec().sizeY;
+  const double noseWorldX = sim.rest[idler[side][0]].x + kIdlerX * sizeX;  // where design x = 0 was built
   auto P = [&](double x, double z) {
     // Where it was built, seen from the reference nodes, which do not lie level on the hull.
-    const V3 d{(noseWorldX - x) - O0.x, y, z + groundZ - O0.z};
+    const V3 d{(noseWorldX - x * sizeX) - O0.x, y, z + groundZ - O0.z};
     return O + fwd * dot(d, restFwd) + left * dot(d, restLeft) + up * dot(d, restUp);
   };
   auto arc = [&](double cx, double cz, double r, double a0, double a1, int n) {
     // Angle measured towards the front of the tank, which is decreasing design x.
     for (int i = 0; i <= n; i++) {
       const double a = lerpd(a0, a1, double(i) / n);
-      out.push_back(P(cx - std::cos(a) * r, cz + std::sin(a) * r));
+      out.push_back(P(cx - std::cos(a) * r / sizeX, cz + std::sin(a) * r));
     }
   };
   // From the top of the sprocket, forward along the top run, over the idler and back along the ground.

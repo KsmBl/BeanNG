@@ -8,7 +8,8 @@
 #include <vector>
 #include "vehicle.h"
 
-enum TurretKind : u8 { TK_STANDARD, TK_LIGHT, TK_ARTILLERY, TK_MISSILE, TK_COUNT };
+// The machine gun stands outside the count: it is on the buggy only, and no hull in the yard has one.
+enum TurretKind : u8 { TK_STANDARD, TK_LIGHT, TK_ARTILLERY, TK_MISSILE, TK_COUNT, TK_MG = TK_COUNT };
 
 // What makes one turret different. All have the same nodes and beams: only where the muzzle lies, how heavy it
 // all is and what it fires differ, so that the hull under it notices the weight by itself.
@@ -28,7 +29,7 @@ const TurretSpec& turretSpec(TurretKind k);
 // The first six suffer from blasts. The rest, and the track pins and turret ring too, are the small places a
 // heavy bullet can reach: weak spots at logical places, each taking something particular from the tank.
 // What is under the turret: the same soft body, but it weighs and takes hits differently.
-enum HullKind : u8 { HK_MEDIUM, HK_HEAVY, HK_FAST, HK_COUNT };
+enum HullKind : u8 { HK_MEDIUM, HK_HEAVY, HK_FAST, HK_COUNT, HK_BUGGY = HK_COUNT };
 struct HullSpec {
   const char* name;
   const char* meshPart;  // what the mesh's file name has for it
@@ -36,6 +37,10 @@ struct HullSpec {
   double armour;  // what a hit does to it: below 1 it takes more of them
   double torque = 1.6;  // on top of what the engine gives: the pull of each hull, for it to feel as strong as it looks
   double gearing = 1.0;  // the whole gearbox: longer for the fast one, shorter for the heavy one, and that sets their top speeds
+  double gearMass = 1.0;  // the running gear's share of the weight, which the tanks all carry alike
+  double sizeX = 1.0, sizeY = 1.0, sizeTop = 1.0;  // the same nodes and beams, drawn in closer: its length, its width, what is on top
+  double crash = 1.0;  // what running into something does to it
+  double trackLimit = 110.0;  // rad/s at the sprocket
 };
 const HullSpec& hullSpec(HullKind k);
 std::string tankMeshFile(HullKind hull, TurretKind turret);
@@ -77,6 +82,7 @@ class Tank {
   double loadNow = 0;
   double reloadTime = 4;
   double shotsFired = 0;
+  int mgShots = 0;  // fired and not yet handed to the game as bullets
   int ammo = -1;  // rounds left; -1 never runs out, as in free driving
 
   TurretKind kind = TK_STANDARD;
@@ -233,6 +239,7 @@ class Tank {
     double radius, toughness;
   };
   static constexpr int kBulletSpots = 21;
+  void keepUpright(Sim& sim);
   void bulletSpots(const Sim& sim, V3 ring, BulletSpot out[kBulletSpots]) const;
   void aimAngles(V3 ring, const Controls& in, double& wantYaw, double& wantPitch) const;
   double yawRateNow() const;

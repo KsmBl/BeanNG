@@ -620,6 +620,7 @@ struct Game {
     Snapshot& s = snap;
     s.pos = sim.pos;
     s.tank = true;
+    s.buggy = myVehicle >= 0 && myVehicle < Duel::kTanks && duel.tanks[myVehicle].hull == HK_BUGGY;
     // The soldiers come between the vehicles and the wrecks in the mesh, and have no tracks.
     s.tankTracks.resize(Duel::kTanks + Duel::kWrecks);
     for (int i = 0; i < Duel::kTanks + Duel::kWrecks; i++) {
@@ -664,7 +665,7 @@ struct Game {
       if (t.destroyed) continue;
       for (double side : {1.0, -1.0}) {
         if (t.trackOff[side > 0 ? 0 : 1]) continue;
-        s.groundMarks.push_back({f.cog + f.left * (side * 1.35), f.left, 0.26f});
+        s.groundMarks.push_back({f.cog + f.left * (side * 1.35 * t.hullSpec().sizeY), f.left, 0.26f});
       }
     }
     for (int k = 0; k < Duel::kCars; k++) {
@@ -1167,7 +1168,7 @@ struct Game {
           const Tank& t = duel.tanks[vehicleNow];
           bool otherGunner = false;
           for (int k = 0; k < Duel::kMaxPlayers; k++) otherGunner |= k != mySlot && duel.players[k].present && duel.players[k].vehicle == vehicleNow && duel.players[k].seat == 1;
-          if (in.c.fire && !otherGunner && now >= ownGunReady && !t.destroyed && !t.missileLive && t.reload <= 0 && t.ammo != 0 && t.mod[TM_GUN] > 0) {
+          if (in.c.fire && t.kind != TK_MG && !otherGunner && now >= ownGunReady && !t.destroyed && !t.missileLive && t.reload <= 0 && t.ammo != 0 && t.mod[TM_GUN] > 0) {
             ownGunReady = now + std::max(t.reloadTime * 0.5, 0.3);
             sim.event(EV_MUZZLE, t.muzzle, t.gunDir, 1.f);
             shotsAhead++;
@@ -1654,7 +1655,7 @@ struct Game {
             const std::string& said = chatLog[i].second;
             if (who == net::kKillLine) {
               // The kill log: who, with what, whom.
-              static const char* const kWeapons[KW_COUNT] = {"", "Kampfmesser", "Pistole", "Sturmgewehr", "Scharfschützengewehr", "Raketenwerfer", "Gatling", "105-mm-Kanone", "Leichte Kanone", "Artillerie", "Panzerkanone", "Lenkrakete", "Bombencode", "Tretmine", "Panzermine", "Rotor"};
+              static const char* const kWeapons[KW_COUNT] = {"", "Kampfmesser", "Pistole", "Sturmgewehr", "Scharfschützengewehr", "Raketenwerfer", "Gatling", "105-mm-Kanone", "Leichte Kanone", "Artillerie", "Panzerkanone", "Lenkrakete", "Bombencode", "Tretmine", "Panzermine", "Rotor", "MG"};
               if (said.size() < 3) continue;
               const int killer = int(static_cast<unsigned char>(said[0])) - 1, victim = int(static_cast<unsigned char>(said[1])) - 1, weapon = static_cast<unsigned char>(said[2]);
               if (victim < 0 || victim >= Duel::kMaxPlayers) continue;
@@ -2274,6 +2275,7 @@ struct Game {
           snap.foot.heliFwd = seat.fwd();
           snap.foot.heliLeft = seat.left();
           snap.foot.heliUp = seat.up();
+          snap.foot.heliSpeed = len(seat.v);
           snap.foot.heliAmmo = duel.helis[myHeli].ammo;
           // The same picture as for any vehicle: from above, nose up, each part in the colour of its state.
           const Heli& state = duel.helis[myHeli];
@@ -2292,7 +2294,7 @@ struct Game {
             p.damage = hurt;
             snap.heliParts.push_back(p);
           };
-          part(46, 0, 8, 22, 1.f - float(state.ammo) / float(Heli::kGunAmmo));  // the gatling: how much is left in it
+          part(46, 0, 8, 22, 1.f - float(state.ammo) / float(state.fullAmmo()));  // the gatling: how much is left in it
           part(36, 18, 28, 56, pilotHurt);                                      // the cabin: the one sitting in it
           part(10, 78, 80, 10, 0);                                              // wings
           part(32, 72, 36, 40, engineHurt);                                     // the engines
@@ -2530,7 +2532,7 @@ struct Game {
         else if (duel.players[mySlot].tapClock > 0) snprintf(msg, sizeof msg, "Hauptcomputer wird angezapft  ·  %.0f s", duel.players[mySlot].tapClock);
         else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && !duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "E: Hauptcomputer anzapfen");
         else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.players[mySlot].tapped && duel.atEnemyComputer(mySlot, me.p)) snprintf(msg, sizeof msg, "Angezapft  ·  Q: Standort des Gegners abfragen, K zeigt ihn");
-        else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.nearestVehicle(me.p, 2.5) < 0 && carrying[IT_REPAIR] > 0 && duel.heliToRepair(me.p) >= 0) snprintf(msg, sizeof msg, duel.nearestHeli(me.p) >= 0 ? "E: einsteigen  ·  Q: Reparaturset  ·  Helikopter" : "Q: Reparaturset  ·  Helikopter");
+        else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.nearestVehicle(me.p, 2.5) < 0 && carrying[IT_REPAIR] > 0 && duel.heliToRepair(me.p) >= 0) snprintf(msg, sizeof msg, duel.nearestHeli(me.p) >= 0 ? "E: einsteigen  ·  Q: Reparaturset  ·  Fahrzeug" : "Q: Reparaturset  ·  Fahrzeug");
         else if (phaseNow == Duel::PLAYING && vehicleNow < 0 && duel.nearestVehicle(me.p, 2.5) < 0 && duel.nearestHeli(me.p) >= 0) snprintf(msg, sizeof msg, "E: einsteigen  ·  Helikopter");
         else if (phaseNow == Duel::PLAYING && duel.nearCrate(me.p + V3{0, 0, 0.3}) >= 0) {
           char what[64];
@@ -2838,8 +2840,7 @@ static void runGame() {
   static const char* carFiles[Duel::kCarKinds] = {"assets/xantia.mesh", "assets/one1.mesh", "assets/hummer.mesh"};
   for (int k = 0; k < Duel::kVehicles; k++) {
     const bool isTank = k < Duel::kTanks;
-    const int ofSide = k % (HK_COUNT * TK_COUNT);
-    const std::string fileName = isTank ? tankMeshFile(HullKind(ofSide / TK_COUNT), TurretKind(ofSide % TK_COUNT)) : carFiles[(k - Duel::kTanks) % Duel::kCarKinds];
+    const std::string fileName = isTank ? tankMeshFile(G.duel.tanks[k].hull, G.duel.tanks[k].kind) : carFiles[(k - Duel::kTanks) % Duel::kCarKinds];
     const char* file = fileName.c_str();
     CarMesh other;
     if (!other.load(file)) {
@@ -3201,7 +3202,7 @@ static void runGame() {
     const bool inTank = inVehicle && myVehicle < Duel::kTanks;
     // How far one can look: negative is up. A missile can be flown straight down, and the howitzer and someone on foot
     // can look up at what they are shooting at.
-    const bool lookHigh = view.missileLive || onFoot || (inTank && myVehicle % TK_COUNT == TK_ARTILLERY);
+    const bool lookHigh = view.missileLive || onFoot || (inTank && G.duel.tanks[myVehicle].kind == TK_ARTILLERY);
     const double pitchUp = lookHigh ? -1.4 : -0.30, pitchDown = view.missileLive ? 1.5 : 1.2;
     rig.pitch = clampd(rig.pitch, pitchUp, pitchDown);
     // Nothing to do on foot before or after the match itself: one waits where one stands.
@@ -4117,6 +4118,135 @@ static void runGame() {
           fflush(stdout);
           wantShot = true;
           stage = 4;
+        }
+      }
+    }
+    if (scriptMode == 86 && netState == Game::NET_IN) {
+      // Into a buggy and flat out along the road, the gun going, from each camera. Then the howitzer's own camera.
+      if (phase == Duel::CHOOSING && !pickReady) pickReady = true;
+      panelKind = PANEL_NONE;
+      static int stage = getenv("BEANNG_ARTY") ? 5 : 0;
+      static double stageAt = 0, best = 0;
+      if (inMatch) {
+        const int team = Duel::teamOf(slot);
+        const int want = Duel::kTanks - Duel::kBuggies + team * 2;
+        const Tank& B = G.duel.tanks[want];
+        const VehicleFrame& F = G.duel.frames[want];
+        const double ahead = std::atan2(F.fwd.y, F.fwd.x) + PI;
+        const double kmh = F.speed * 3.6;
+        if (stage == 0) {
+          const V3 to = F.cog - view.foot.p;
+          rig.yaw = std::atan2(-to.y, -to.x);
+          gas = 1.0;
+          if (myVehicle == want) {
+            printf("Im Buggy\n");
+            fflush(stdout);
+            wantShot = true;
+            stage = 1;
+            stageAt = tNow;
+          } else if (len(V3{to.x, to.y, 0}) < 3.5 && std::fmod(tNow, 1.0) < dt) {
+            sendC.use = true;
+          }
+        } else if (stage == 1) {
+          rig.yaw = ahead;
+          rig.pitch = 0.05;
+          gas = 1.0;
+          best = std::max(best, kmh);
+          if (tNow > stageAt + 6.0) {
+            printf("Buggy: %.0f km/h, schnellste %.0f km/h, Munition %d, Schaden %.2f\n", kmh, best, B.ammo, B.damage);
+            fflush(stdout);
+            wantShot = true;
+            stage = 2;
+            stageAt = tNow;
+          }
+        } else if (stage == 2) {
+          rig.mode = CAM_HOOD;
+          rig.yaw = ahead;
+          rig.pitch = 0.03;
+          gas = 1.0;
+          scriptGun = true;
+          best = std::max(best, kmh);
+          if (tNow > stageAt + 4.0) {
+            printf("Bordkamera: %.0f km/h, Munition %d\n", kmh, B.ammo);
+            fflush(stdout);
+            wantShot = true;
+            scriptGun = false;
+            stage = 3;
+            stageAt = tNow;
+          }
+        } else if (stage == 3) {
+          rig.mode = CAM_DRIVER;
+          rig.yaw = 0;
+          gas = 1.0;
+          if (tNow > stageAt + 1.5) {
+            wantShot = true;
+            rig.mode = CAM_CHASE;
+            sendC.use = true;
+            printf("schnellste %.0f km/h\n", best);
+            fflush(stdout);
+            stage = 4;
+            stageAt = tNow;
+          }
+        } else if (stage == 4 && tNow > stageAt + 1.0 && myVehicle < 0) {
+          // Out, and over to where the camera looks round the howitzer.
+          const int arty = Duel::tankIndex(team, TK_ARTILLERY, HK_MEDIUM);
+          printf("Artillerie-Bordkamera wird gezeigt von Panzer %d\n", arty);
+          fflush(stdout);
+          stage = 5;
+          stageAt = tNow;
+        } else if (stage == 5) {
+          const int arty = Duel::tankIndex(team, TK_ARTILLERY, HK_MEDIUM);
+          const V3 to = G.duel.frames[arty].cog - view.foot.p;
+          rig.yaw = std::atan2(-to.y, -to.x);
+          gas = 1.0;
+          if (myVehicle == arty) {
+            rig.mode = CAM_HOOD;
+            stage = 6;
+            stageAt = tNow;
+          } else if (len(V3{to.x, to.y, 0}) < 4.5 && std::fmod(tNow, 1.0) < dt) {
+            sendC.use = true;
+          }
+        } else if (stage == 6 && tNow > stageAt + 2.0) {
+          wantShot = true;
+          stage = 7;
+        }
+      }
+    }
+    if (scriptMode == 87) {
+      // The choosing, for a look at it, and each kind of row pressed once.
+      if (netState == Game::NET_IN && phase == Duel::CHOOSING && !pickReady) {
+        static int step87 = 0;
+        static double next87 = 0;
+        if (panelKind != PANEL_LOADOUT) panelKind = PANEL_LOADOUT;
+        if (tNow > next87) {
+          next87 = tNow + 0.7;
+          const auto hit = [&](int row) {
+            panelSel = row;
+            items[size_t(row)].change(1);
+            printf("Zeile %d: %s = %s, belegt %d\n", row, items[size_t(row)].label.c_str(), pickItems[kLoadoutOrder[row - 1]] ? "an" : "aus", slotsUsed(pickItems));
+            fflush(stdout);
+          };
+          switch (step87++) {
+            case 0: break;
+            case 1: wantShot = true; break;
+            case 2: hit(3); break;
+            case 3: hit(5); break;
+            case 4: wantShot = true; hit(1); break;
+            case 5: hit(1); break;
+            case 6: hit(1); wantShot = true; break;
+            case 7: pickReady = true; panelKind = PANEL_NONE; break;
+          }
+        }
+      }
+      if (inMatch) {
+        panelKind = PANEL_NONE;
+        static bool told87 = false;
+        static double since87 = 0;
+        if (since87 == 0) since87 = tNow;
+        if (!told87 && tNow > since87 + 3.0) {
+          told87 = true;
+          printf("Im Spiel: Waffen %d (1 Messer, 2 Pistole, 4 Sturm, 8 Scharf), Waffe %d, Kleinmunition %d, Munition %d\n", int(view.foot.has) & 31, weaponPick, view.foot.ammo, view.foot.ammo);
+          fflush(stdout);
         }
       }
     }
@@ -5057,7 +5187,7 @@ static void runGame() {
         // The camera flies with the missile, and where it looks is where it goes.
         const V3 back{std::cos(rig.yaw) * std::cos(rig.pitch), std::sin(rig.yaw) * std::cos(rig.pitch), std::sin(rig.pitch)};
         c.aimPoint = view.missileP - back * 2000.0;
-      } else if (hasMark && inTank && myVehicle % TK_COUNT == TK_ARTILLERY) {
+      } else if (hasMark && inTank && G.duel.tanks[myVehicle].kind == TK_ARTILLERY) {
         c.aimPoint = markPoint;
         c.indirect = true;
       } else {
@@ -5560,7 +5690,7 @@ static void runGame() {
         cam.fovY = 74.0 * PI / 180.0 + gSet.fov * PI / 180.0;
       } else {
         // Well above and behind it, so that it hangs below the crosshair instead of in front of it.
-        cam.eye = view.foot.heliP + V3{0, 0, Heli::kCameraUp} + back * Heli::kCameraBack;
+        cam.eye = view.foot.heliP + V3{0, 0, double(Heli::kCameraUp)} + back * double(Heli::kCameraBack);
         cam.fovY = 68.0 * PI / 180.0 + gSet.fov * PI / 180.0;
       }
       cam.target = cam.eye - back * 50.0;
@@ -5685,7 +5815,7 @@ static void runGame() {
         const V3 eye = view.sight;
         cam.eye = cam.eye + (eye - cam.eye) * k;
         cam.target = cam.target + ((eye - back * 50.0) - cam.target) * k;
-        const double wide = myVehicle % TK_COUNT == TK_LIGHT ? 26.0 : 18.0;
+        const double wide = G.duel.tanks[myVehicle].kind == TK_LIGHT ? 26.0 : 18.0;
         cam.fovY = lerpd(cam.fovY, wide * PI / 180.0, k);
       } else if (onFoot) {
         // Over the sights: right behind the weapon, and half as wide a view.

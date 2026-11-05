@@ -2550,7 +2550,7 @@ struct Renderer::Impl {
         if (s.reload > 0) snprintf(buf, sizeof buf, "%.1f s", s.reload);
         else if (s.tankAmmo >= 0) snprintf(buf, sizeof buf, s.tankAmmo ? "bereit · %d" : "leer", s.tankAmmo);
         else snprintf(buf, sizeof buf, "bereit");
-        row(IC_SHELL, "Kanone", s.reload > 0 ? float(1.0 - s.reload / std::max(s.reloadTime, 0.1)) : 1.f, s.reload > 0 ? amber : green, buf);
+        row(IC_SHELL, s.buggy ? "MG" : "Kanone", s.reload > 0 ? float(1.0 - s.reload / std::max(s.reloadTime, 0.1)) : 1.f, s.reload > 0 ? amber : green, buf);
         snprintf(buf, sizeof buf, "%+.0f°", s.gunPitch * 57.3);
         row(IC_TURRET, "Rohr", float((s.gunPitch * 57.3 + 9.0) / 29.0), teal, buf);
         if (s.missiles > 0 || s.missileLive) {

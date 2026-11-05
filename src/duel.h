@@ -15,7 +15,8 @@ struct ItemInfo {
   bool once = false;  // one of it is all that makes sense: a box to tick, not a number
 };
 inline constexpr ItemInfo kItems[IT_COUNT] = {
-    {"Tretmine", 2}, {"Panzermine", 5}, {"Reparaturset", 10}, {"Sturmgewehr", 2}, {"Kleinmunition (60 Schuss)", 1}, {"Nebelgranate", 1}, {"Ghillie-Anzug", 3}, {"Tarnnetz", 3},
+    {"Tretmine", 2}, {"Panzermine", 5}, {"Reparaturset", 10}, {"Sturmgewehr", 2, true}, {"Kleinmunition (60 Schuss)", 1}, {"Nebelgranate", 1}, {"Ghillie-Anzug", 3, true}, {"Tarnnetz", 3},
+    {"Pistole", 1, true}, {"Scharfschützengewehr", 5, true}, {"Scharfschützenmunition (20 Schuss)", 2},
 };
 inline constexpr int kLoadoutSlots = 20;
 inline int slotsUsed(const u8 items[IT_COUNT]) {
@@ -111,6 +112,7 @@ struct Heli {
   u8 hitWeapon = KW_NONE;
   ShellFlight hitShot;
   static constexpr int kEngineHits = 6, kRotorHits = 6, kTailHits = 4, kGunAmmo = 200;
+  int fullAmmo() const { return kGunAmmo; }
   static constexpr double kMuzzleAhead = 4.05, kMuzzleHigh = 0.58;
   static constexpr double kBoardReach = 5.5, kGunInterval = 0.05, kCameraBack = 17.0, kCameraUp = 5.5;
   V3 fwd() const {
@@ -130,7 +132,8 @@ class Duel {
   static constexpr double kDt = 1.0 / 2000.0;
   static constexpr double kEndPause = 8.0;    // seconds to look at the wreck before the next match
   static constexpr double kChooseTime = 60.0;  // whoever has not decided by then goes with what is selected
-  static constexpr int kTanks = 2 * HK_COUNT * TK_COUNT;
+  static constexpr int kBuggies = 4;  // after the tanks: two to a side
+  static constexpr int kTanks = 2 * HK_COUNT * TK_COUNT + kBuggies;
   static constexpr int kCarKinds = 3;
   static constexpr int kCars = 2 * kCarKinds;
   static constexpr double kMedkitHeal = 50.0;
@@ -239,6 +242,7 @@ class Duel {
     // A thin line of smoke behind it, handed out in lengths as it flies: the gatling's. For the first second only.
     bool trail = false;
     bool gatling = false;  // a 20 mm round: more to a car than any rifle's
+    bool mg = false;       // from a buggy's machine gun: as a rifle does, but the log says so
     V3 trailFrom;
     double trailClock = 0;
   };
@@ -281,7 +285,8 @@ class Duel {
   u32 netFirst[kTanks + kWrecks] = {};
   static void poseNet(Sim& sim, u32 first, const Tank& t, bool on);
   // A helicopter in each yard.
-  static constexpr int kHelis = kMaxPlayers, kHeliNodes = 32;  // one for each place to start from
+  // One helicopter for each place to start from, and after them two buggies for each side.
+  static constexpr int kFlying = 6, kHelis = kFlying, kHeliNodes = 32;  // three to a side, however many play
   double heliDebt[kHelis] = {};
   // Returns true if it has just hit the ground in a way it does not survive. No pilot, or none who may fly yet: null.
   static bool flyHeli(Heli& H, const World& world, const WalkInput* in, double dt);

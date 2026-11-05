@@ -2458,6 +2458,103 @@ int main(int argc, char** argv) {
     printf("Bruecke: Deck z %.1f, Wasser auf dem Deck %d, 1.3 m darueber %d, 3 m darueber %d, unter dem Deck am Fluss %d\n", br.at.z, int(d->world.isWater(br.at.x, br.at.y, br.at.z + 0.1)), int(d->world.isWater(br.at.x, br.at.y, br.at.z + 1.3)), int(d->world.isWater(br.at.x, br.at.y, br.at.z + 3.0)), int(d->world.isWater(br.at.x, br.at.y, 2.0)));
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "buggytree")) {
+    // Into a tree at any of these. It is the frame that gives, not the whole thing that goes up.
+    for (double kmh : {60.0, 100.0, 130.0, 150.0}) {
+      auto* w = new World();
+      auto* s = new Sim();
+      CarRig r;
+      w->build();
+      s->world = w;
+      V3 tr = w->trees()[3];
+      addTree(*s, *w, tr, 7);
+      // Far enough off for it to be going steadily by then: the speed is given to it all at once, which it takes for a crash of its own.
+      const double run0 = 9.0 + kmh / 3.6 * 0.5;
+      Tank t = buildLeopard(*s, V3{tr.x - run0, tr.y + 0.15, w->height(tr.x - run0, tr.y)}, &r, TK_MG, HK_BUGGY);
+      s->finalize();
+      t.settle(*s, 1.5);
+      const double v = kmh / 3.6;
+      for (u16 oi : {t.hullObj, t.turretObj})
+        for (u32 n : s->objs[oi].nodes) s->vel[n] = V3{v, 0, 0};
+      for (int k = 0; k < 2; k++) t.trackOmega[k] = v / Tank::kSprocketR;
+      t.gear = 4;
+      Controls c;
+      c.throttle = 0.2;
+      double slowest = 1e9, most = 0, bentBefore = 0;
+      V3 seen = t.cog;
+      for (int k = 0; k < 2000 * 3; k++) {
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+        if (k == 600) {
+          t.damage = 0;
+          t.trackOff[0] = t.trackOff[1] = false;
+          t.mod[TM_TRACK_L] = t.mod[TM_TRACK_R] = 1.0;
+          for (u32 bi : s->objs[t.hullObj].beamList) s->beams[bi].L0 = s->beams[bi].Lorig;
+          bentBefore = t.cog.x;
+        }
+        if (k >= 600) slowest = std::min(slowest, t.speed);
+        most = std::max(most, len(t.cog - seen));
+      }
+      s->events.clear();
+      double bent = 0;
+      for (u32 bi : s->objs[t.hullObj].beamList) bent += std::fabs(s->beams[bi].L0 - s->beams[bi].Lorig);
+      printf("%3.0f km/h: Schaden %.2f, zerstoert %d, Ketten ab %d %d, langsamste %.0f km/h, jetzt %.0f km/h, %.0f m weiter, Rahmen verbogen %.1f m, Motor %.2f, Baumfuss %.0f m vor Beginn\n", kmh, t.damage, int(t.destroyed), int(t.trackOff[0]), int(t.trackOff[1]), slowest * 3.6, t.speed * 3.6, most, bent, t.mod[TM_ENGINE], tr.x - bentBefore);
+    }
+    return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "buggy")) {
+    // Flat out on a level plane, a turn at speed, a stop; then a tree at any speed one cares to name.
+    const double treeAt = argc > 2 ? atof(argv[2]) : 0.0;
+    auto* w = new World();
+    auto* s = new Sim();
+    CarRig r;
+    w->build();
+    w->clearBoxes();
+    w->flatten();
+    w->pave();
+    s->world = w;
+    Tank t = buildLeopard(*s, V3{-600, 0, 0}, &r, TK_MG, HK_BUGGY);
+    s->finalize();
+    t.settle(*s, 3.0);
+    const u16 hullObj = t.hullObj;
+    double built = 0;
+    for (u16 oi : {t.hullObj, t.turretObj})
+      for (u32 n : s->objs[oi].nodes) built += s->mass[n];
+    printf("Eigenwert %.0f, Grenze %.0f, Masse %.1f t\n", s->maxEigenvalue(hullObj, nullptr), 4.0 / (kDt * kDt), built / 1000.0);
+    Controls c;
+    c.throttle = 1;
+    double t100 = -1, t140 = -1, top = 0;
+    const auto run = [&](double seconds, const std::function<void(double)>& each) {
+      for (int k = 0; k < int(seconds * 2000); k++) {
+        s->forces(kDt);
+        t.update(*s, c, kDt);
+        s->finish(kDt);
+        each(k * kDt);
+      }
+      s->events.clear();
+    };
+    run(treeAt > 0 ? 40.0 : 40.0, [&](double at) {
+      const double kmh = t.speed * 3.6;
+      top = std::max(top, kmh);
+      if (t100 < 0 && kmh >= 100) t100 = at;
+      if (t140 < 0 && kmh >= 140) t140 = at;
+      if (std::fmod(at, 2.0) < kDt) printf(" t %4.1f %5.1f km/h Gang %d rpm %4.0f Last %.2f Kette %5.1f km/h Radkraft Fn %.0f\n", at, kmh, t.gear, t.rpm(), t.loadNow, t.trackOmega[0] * Tank::kSprocketR * 3.6, t.wheels[3].Fn);
+    });
+    printf("0-100 %.1f s, 0-140 %.1f s, Spitze %.1f km/h, jetzt x=%.0f, z=%.2f, Dach %.2f\n", t100, t140, top, t.cog.x, t.cog.z, t.up.z);
+    c.steer = 1;
+    double fewestUp = 1, peak = 0;
+    const V3 f0 = t.fwd;
+    run(3.0, [&](double) { fewestUp = std::min(fewestUp, t.up.z); peak = std::max(peak, double(std::acos(clampd(t.up.z, -1, 1)))); });
+    printf("voll lenken 3 s: Kurs %.0f Grad, %.0f km/h, Hochachse min %.2f, groesste Neigung %.2f rad, Ketten runter %d %d\n", std::acos(clampd(dot(f0, t.fwd), -1, 1)) * 57.3, t.speed * 3.6, fewestUp, peak, int(t.trackOff[0]), int(t.trackOff[1]));
+    c.steer = 0;
+    c.throttle = 0;
+    c.brake = 1;
+    double stop = 0;
+    run(10.0, [&](double at) { if (stop == 0 && std::fabs(t.speed) < 0.5) stop = at; });
+    printf("Bremsen %.1f s\n", stop);
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "tankpull")) {
     // Every hull from a standstill on the level, and then up a slope as steep as the map has for a road.
     for (int h = 0; h < HK_COUNT; h++) {
