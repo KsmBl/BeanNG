@@ -472,6 +472,8 @@ private:
   u32 bridgeFallsSeen = 0;
   void noteHit(int victim, int attacker, V3 from);
   double tankDamageSeen[kTanks] = {};
+  u32 blastCountNoted = 0;
+  int stepsSinceBlast = 1000;
   void callStrike(int p, V3 at);
   void stepMines(double dt);
   V3 soldierAt(int p, double lag) const;

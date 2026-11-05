@@ -3183,6 +3183,37 @@ int main(int argc, char** argv) {
     printf("Fertig: %.0f s gespielt in %.0f s Rechenzeit, Stand %u:%u, Matches %u\n", t, std::chrono::duration<double>(std::chrono::steady_clock::now() - wall0).count(), d->wins[0], d->wins[1], d->matchId - startMatch);
     return 0;
   }
+  if (argc > 1 && !strcmp(argv[1], "hitcredit")) {
+    // A blast on a tank with someone in it: who gets to see it land?
+    auto* d = new Duel();
+    d->playersWanted = 4;
+    d->build();
+    for (int i = 0; i < 4; i++) d->players[i].present = true;
+    Duel::Intent in[Duel::kMaxPlayers];
+    const auto run = [&](double seconds) {
+      for (double t = 0; t < seconds; t += Duel::kDt) {
+        d->step(in);
+        std::vector<SimEvent> ev;
+        d->drainEvents(ev);
+      }
+    };
+    u8 none[IT_COUNT] = {};
+    while (d->phase != Duel::CHOOSING) run(0.1);
+    for (int i = 0; i < 4; i++) d->choose(i, none, true);
+    while (d->phase != Duel::PLAYING) run(0.05);
+    const int v = Duel::tankIndex(1, TK_STANDARD, HK_MEDIUM);
+    d->players[1].soldier.p = d->frames[v].cog + d->frames[v].left * 2.5;
+    in[1].use = true;
+    run(Duel::kDt * 0.5);
+    in[1].use = false;
+    d->sim.blastBy = 0;
+    d->sim.blastIsShell = true;
+    d->sim.blastWeapon = KW_GUN105;
+    d->sim.explode(d->frames[v].cog + d->frames[v].up * 1.5, 2200.0, 15.0);
+    run(0.2);
+    printf("Im Panzer %d, Schaden %.2f | Marker: Schuetze %d, sein Kamerad %d, Insasse %d, dessen Kamerad %d | getroffen: Insasse %d\n", int(d->players[1].vehicle == v), d->tanks[v].damage, int(d->players[0].hitsLanded), int(d->players[2].hitsLanded), int(d->players[1].hitsLanded), int(d->players[3].hitsLanded), int(d->players[1].hitsTaken));
+    return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "rearm")) {
     // A rotor over friend and foe, the green patch for a tank and a helicopter, and an intruder at a bot's computer.
     auto* d = new Duel();

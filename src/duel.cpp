@@ -2521,16 +2521,17 @@ void Duel::step(const Intent in[kMaxPlayers]) {
     }
     if (car.netOn && (carSpeed > 1.5 || car.exploded)) car.netOn = false;
   }
-  // A tank that has just lost armour: whoever sits in it feels it, the one on the other side gets the credit.
+  // A tank that has just lost armour: whoever sits in it feels it, and whoever fired, if it is a blast of theirs, sees it
+  // land. Nobody else: a crash is nobody's hit, and a mate's shot is not one's own.
+  stepsSinceBlast = sim.blastCount != blastCountNoted ? 0 : stepsSinceBlast + 1;
+  blastCountNoted = sim.blastCount;
   for (int v = 0; v < kTanks; v++) {
-    if (tanks[v].damage > tankDamageSeen[v] + 0.005) {
-      if (occupied(v)) {
-        for (int who = 0; who < kMaxPlayers; who++) {
-          if (players[who].vehicle == v) noteHit(who, -1, sim.lastBlast);
-          // Everyone on the other side gets to see it land.
-          else if (players[who].present && teamOf(who) != teamOf(seatHolder(v, 0) >= 0 ? seatHolder(v, 0) : seatHolder(v, 1))) noteHit(-1, who, sim.lastBlast);
-        }
-      }
+    if (tanks[v].damage > tankDamageSeen[v] + 0.005 && occupied(v)) {
+      const int crew = seatHolder(v, 0) >= 0 ? seatHolder(v, 0) : seatHolder(v, 1);
+      for (int who = 0; who < kMaxPlayers; who++)
+        if (players[who].vehicle == v) noteHit(who, -1, sim.lastBlast);
+      const int by = tanks[v].hitBy;
+      if (stepsSinceBlast <= 4 && by >= 0 && players[by].present && teamOf(by) != teamOf(crew)) noteHit(-1, by, sim.lastBlast);
     }
     tankDamageSeen[v] = tanks[v].damage;
   }
